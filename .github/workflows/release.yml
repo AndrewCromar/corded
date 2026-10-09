@@ -1,0 +1,95 @@
+name: Release builds
+
+# Builds self-contained programs for Linux on x86-64 and ARM64 (Raspberry Pi).
+# Every push to main or next keeps a downloadable build; a tag starting with
+# "v" also publishes a GitHub release.
+on:
+  push:
+    branches: [main, next]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    # An older Debian, so the result also runs on systems with an older C
+    # library, such as Raspberry Pi OS based on Debian 12.
+    container: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git build-essential cmake ninja-build pkg-config python3 curl zip unzip tar \
+            autoconf autoconf-archive automake libtool perl linux-libc-dev file
+
+      - uses: actions/checkout@v4
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-debian12-${{ matrix.arch }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-debian12-${{ matrix.arch }}-
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Test
+        run: ctest --preset dev
+
+      - name: Package
+        id: package
+        run: |
+          version=$(git describe --tags --always --dirty)
+          name="corded-${version}-linux-${{ matrix.arch }}"
+          cmake --install build/dev --prefix "dist/${name}" --strip
+          cp packaging/README.txt "dist/${name}/README.txt"
+          # Nothing beyond the system C library may be needed at run time.
+          for program in cordedd corded-tui corded-cli; do
+            echo "== ${program}"; ldd "dist/${name}/${program}" || true
+            if ldd "dist/${name}/${program}" | grep -E "libstdc\+\+|libsodium|libssl|libcrypto|libsqlite"; then
+              echo "${program} depends on a library that may be missing elsewhere"; exit 1
+            fi
+          done
+          "dist/${name}/cordedd" --help >/dev/null
+          tar -C dist -czf "${name}.tar.gz" "${name}"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            ${{ steps.package.outputs.name }}.tar.gz
+            ${{ steps.package.outputs.name }}.tar.gz.sha256
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apt-get install -y --no-install-recommends gh || true
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
+            --notes "Pre-alpha build. Not security audited. See the README for how to run it."
+          gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz" \
+            "${{ steps.package.outputs.name }}.tar.gz.sha256" --clobber

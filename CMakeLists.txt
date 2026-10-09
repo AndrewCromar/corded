@@ -13,6 +13,12 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(CORDED_BUILD_TESTS "Build the test suite" ON)
+option(CORDED_PORTABLE "Link the C++ runtime statically so the programs run on other machines" ON)
+
+# Programs find libcorded next to themselves, so a folder of them can be copied
+# to another machine and run from anywhere.
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
 option(CORDED_BUILD_TUI "Build the terminal client" ON)
 
 # ---- dependencies ---------------------------------------------------------
@@ -120,6 +126,23 @@ if(CORDED_BUILD_TUI)
     corded ftxui::screen ftxui::dom ftxui::component nlohmann_json::nlohmann_json
     Threads::Threads corded_warnings)
 endif()
+
+# With the C++ runtime linked in, the programs need only the system C library.
+if(CORDED_PORTABLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  foreach(target cordedd corded corded-cli)
+    target_link_options(${target} PRIVATE -static-libstdc++ -static-libgcc)
+  endforeach()
+  if(TARGET corded-tui)
+    target_link_options(corded-tui PRIVATE -static-libstdc++ -static-libgcc)
+  endif()
+endif()
+
+include(GNUInstallDirs)
+install(TARGETS cordedd corded-cli corded RUNTIME DESTINATION . LIBRARY DESTINATION .)
+if(TARGET corded-tui)
+  install(TARGETS corded-tui RUNTIME DESTINATION .)
+endif()
+install(FILES LICENSE NOTICE DESTINATION .)
 
 if(CORDED_BUILD_TESTS)
   enable_testing()
