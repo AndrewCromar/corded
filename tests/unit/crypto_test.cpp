@@ -1,0 +1,254 @@
+#include "crypto/crypto.hpp"
+
+#include "corded/common/frame.hpp"
+#include "corded/common/sig.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <map>
+#include <random>
+
+using namespace corded;
+using namespace corded::crypto;
+
+namespace {
+
+// A device with its published prekeys kept in memory.
+struct Device : PrekeySource {
+    Identity id = Identity::generate();
+    std::map<uint32_t, KeyPair> signed_keys, one_time;
+    uint32_t next_id = 1;
+
+    PeerBundle bundle(bool with_otk = true) {
+        PeerBundle b;
+        b.user_id = id.user.pk;
+        b.device_id = id.device.pk;
+        b.dh_key = id.dh.pk;
+        b.cert = id.cert;
+        KeyPair spk = generate_dh();
+        b.spk_id = next_id++;
+        signed_keys[b.spk_id] = spk;
+        b.spk = spk.pk;
+        b.spk_sig = sign(id.device.sk, signed_message(kCtxSignedPrekey, {spk.pk}));
+        if (with_otk) {
+            KeyPair otk = generate_dh();
+            b.has_otk = true;
+            b.otk_id = next_id++;
+            one_time[b.otk_id] = otk;
+            b.otk = otk.pk;
+        }
+        return b;
+    }
+    std::optional<KeyPair> signed_prekey(uint32_t i) override {
+        auto it = signed_keys.find(i);
+        return it == signed_keys.end() ? std::nullopt : std::optional(it->second);
+    }
+    std::optional<KeyPair> take_one_time(uint32_t i) override {
+        auto it = one_time.find(i);
+        if (it == one_time.end()) return std::nullopt;
+        KeyPair kp = it->second;
+        one_time.erase(it);
+        return kp;
+    }
+    // The receiving side's view of a peer before any session exists.
+    PeerSessions peer_of(const Device& other) const {
+        PeerSessions p;
+        p.user_id = other.id.user.pk;
+        p.device_id = other.id.device.pk;
+        return p;
+    }
+};
+
+Bytes B(std::string_view s) { return to_bytes(s); }
+const Bytes ctx = B("room-and-event-id");
+
+}  // namespace
+
+TEST_CASE("padding round-trips and lands on bucket sizes") {
+    REQUIRE(sodium_init() >= 0);
+    for (size_t n : {0u, 1u, 100u, 255u, 256u, 1000u, 4095u, 4096u, 10000u}) {
+        Bytes pt(n, 0x41);
+        Bytes padded = pad(pt);
+        REQUIRE(padded.size() > n);
+        bool bucket = padded.size() == 256 || padded.size() == 512 || padded.size() == 1024 ||
+                      padded.size() == 2048 || padded.size() % 4096 == 0;
+        REQUIRE(bucket);
+        REQUIRE(unpad(padded) == pt);
+    }
+    REQUIRE_FALSE(unpad(Bytes(256, 0)).has_value());
+}
+
+TEST_CASE("a conversation works in both directions") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+
+    Bytes m1 = encrypt(alice.id, a_bob, ctx, B("hello bob"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m1) == B("hello bob"));
+    REQUIRE(bob.one_time.empty());  // the one-time prekey was consumed
+
+    Bytes m2 = encrypt(bob.id, b_alice, ctx, B("hello alice"));
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, m2) == B("hello alice"));
+
+    for (int i = 0; i < 20; ++i) {
+        Bytes a = encrypt(alice.id, a_bob, ctx, B("a" + std::to_string(i)));
+        REQUIRE(decrypt(bob.id, bob, b_alice, ctx, a) == B("a" + std::to_string(i)));
+        Bytes b = encrypt(bob.id, b_alice, ctx, B("b" + std::to_string(i)));
+        REQUIRE(decrypt(alice.id, alice, a_bob, ctx, b) == B("b" + std::to_string(i)));
+    }
+}
+
+TEST_CASE("sessions start without a one-time prekey") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(false), a_bob);
+    Bytes m = encrypt(alice.id, a_bob, ctx, B("no otk"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m) == B("no otk"));
+}
+
+TEST_CASE("several messages before the first reply all decrypt") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+    std::vector<Bytes> msgs;
+    for (int i = 0; i < 5; ++i) msgs.push_back(encrypt(alice.id, a_bob, ctx, B("m" + std::to_string(i))));
+    for (int i = 0; i < 5; ++i)
+        REQUIRE(decrypt(bob.id, bob, b_alice, ctx, msgs[i]) == B("m" + std::to_string(i)));
+    REQUIRE(b_alice.sessions.size() == 1);
+}
+
+TEST_CASE("out-of-order delivery, replays and tampering") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+    Bytes first = encrypt(alice.id, a_bob, ctx, B("first"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, first).has_value());
+    Bytes reply = encrypt(bob.id, b_alice, ctx, B("reply"));
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, reply).has_value());
+
+    Bytes m0 = encrypt(alice.id, a_bob, ctx, B("zero"));
+    Bytes m1 = encrypt(alice.id, a_bob, ctx, B("one"));
+    Bytes m2 = encrypt(alice.id, a_bob, ctx, B("two"));
+
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m2) == B("two"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m0) == B("zero"));
+    // A replay must fail and must not disturb the session.
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, m2).has_value());
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, m0).has_value());
+
+    Bytes tampered = m1;
+    tampered.back() ^= 1;
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, tampered).has_value());
+    // The same ciphertext presented for a different room or event must fail.
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, B("another-context"), m1).has_value());
+    // After those failures the genuine message still decrypts.
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m1) == B("one"));
+
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, Bytes{}).has_value());
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, Bytes(10, 7)).has_value());
+}
+
+TEST_CASE("a forged bundle or certificate is rejected") {
+    Device alice, bob, mallory;
+    PeerBundle b = bob.bundle();
+    b.spk = generate_dh().pk;  // signature no longer matches
+    PeerSessions s;
+    REQUIRE_THROWS_AS(start_session(alice.id, b, s), CryptoError);
+
+    PeerBundle swapped = bob.bundle();
+    swapped.dh_key = mallory.id.dh.pk;  // not covered by bob's certificate
+    REQUIRE_THROWS_AS(start_session(alice.id, swapped, s), CryptoError);
+
+    // Mallory sends a first message claiming to be Alice.
+    PeerSessions m_bob;
+    start_session(mallory.id, bob.bundle(), m_bob);
+    Bytes forged = encrypt(mallory.id, m_bob, ctx, B("i am alice"));
+    PeerSessions b_alice = bob.peer_of(alice);
+    REQUIRE_FALSE(decrypt(bob.id, bob, b_alice, ctx, forged).has_value());
+    REQUIRE(b_alice.sessions.empty());
+}
+
+TEST_CASE("session state survives serialisation") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+    Bytes m = encrypt(alice.id, a_bob, ctx, B("one"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, m).has_value());
+    Bytes skipped = encrypt(alice.id, a_bob, ctx, B("skipped"));
+    Bytes later = encrypt(alice.id, a_bob, ctx, B("later"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, later).has_value());
+
+    a_bob = PeerSessions::parse(a_bob.serialize());
+    b_alice = PeerSessions::parse(b_alice.serialize());
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, skipped) == B("skipped"));
+    Bytes back = encrypt(bob.id, b_alice, ctx, B("back"));
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, back) == B("back"));
+}
+
+TEST_CASE("both sides starting at once still converge") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice;
+    start_session(alice.id, bob.bundle(), a_bob);
+    start_session(bob.id, alice.bundle(), b_alice);
+    Bytes from_a = encrypt(alice.id, a_bob, ctx, B("from a"));
+    Bytes from_b = encrypt(bob.id, b_alice, ctx, B("from b"));
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, from_a) == B("from a"));
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, from_b) == B("from b"));
+    for (int i = 0; i < 10; ++i) {
+        Bytes a = encrypt(alice.id, a_bob, ctx, B("a"));
+        REQUIRE(decrypt(bob.id, bob, b_alice, ctx, a) == B("a"));
+        Bytes b = encrypt(bob.id, b_alice, ctx, B("b"));
+        REQUIRE(decrypt(alice.id, alice, a_bob, ctx, b) == B("b"));
+    }
+}
+
+TEST_CASE("a compromised state stops working after the ratchet turns") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, encrypt(alice.id, a_bob, ctx, B("1"))).has_value());
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, encrypt(bob.id, b_alice, ctx, B("2"))).has_value());
+
+    PeerSessions stolen = PeerSessions::parse(b_alice.serialize());  // attacker copies Bob's state
+    // One full round trip between the real parties.
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, encrypt(alice.id, a_bob, ctx, B("3"))).has_value());
+    REQUIRE(decrypt(alice.id, alice, a_bob, ctx, encrypt(bob.id, b_alice, ctx, B("4"))).has_value());
+    Bytes secret = encrypt(alice.id, a_bob, ctx, B("after healing"));
+    REQUIRE_FALSE(decrypt(bob.id, bob, stolen, ctx, secret).has_value());
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, secret) == B("after healing"));
+}
+
+TEST_CASE("randomised conversation with loss, reordering and duplicates") {
+    Device alice, bob;
+    PeerSessions a_bob, b_alice = bob.peer_of(alice);
+    start_session(alice.id, bob.bundle(), a_bob);
+    REQUIRE(decrypt(bob.id, bob, b_alice, ctx, encrypt(alice.id, a_bob, ctx, B("init"))).has_value());
+
+    std::mt19937 rng(12345);
+    struct Pending { bool to_bob; Bytes ct, pt; };
+    std::vector<Pending> in_flight;
+    int delivered = 0;
+    for (int step = 0; step < 4000; ++step) {
+        int action = static_cast<int>(rng() % 10);
+        if (action < 5) {
+            bool from_alice = rng() % 2 == 0;
+            Bytes pt = B("msg " + std::to_string(step));
+            Bytes ct = from_alice ? encrypt(alice.id, a_bob, ctx, pt) : encrypt(bob.id, b_alice, ctx, pt);
+            if (rng() % 20 != 0) in_flight.push_back({from_alice, ct, pt});  // 5% are lost
+        } else if (!in_flight.empty()) {
+            size_t i = rng() % std::min<size_t>(in_flight.size(), 8);  // bounded reordering
+            Pending p = in_flight[i];
+            in_flight.erase(in_flight.begin() + static_cast<long>(i));
+            auto got = p.to_bob ? decrypt(bob.id, bob, b_alice, ctx, p.ct)
+                                : decrypt(alice.id, alice, a_bob, ctx, p.ct);
+            REQUIRE(got == p.pt);
+            ++delivered;
+            if (rng() % 10 == 0) {  // a duplicate must be rejected
+                auto again = p.to_bob ? decrypt(bob.id, bob, b_alice, ctx, p.ct)
+                                      : decrypt(alice.id, alice, a_bob, ctx, p.ct);
+                REQUIRE_FALSE(again.has_value());
+            }
+        }
+    }
+    REQUIRE(delivered > 1000);
+}

@@ -1,0 +1,79 @@
+// Corded wire protocol, prototype draft. Every frame on the wire is a
+// 4-byte little-endian length followed by a FlatBuffers `Frame`.
+namespace corded.wire;
+
+table KeyEntry { id: uint32; key: [ubyte]; }
+table Member { user_id: [ubyte]; username: string; }
+table Recipient { device_id: [ubyte]; ciphertext: [ubyte]; }
+table Cursor { room_id: [ubyte]; seq: uint64; }
+
+// ---- session ----
+table Hello { protocol_version: uint16; server_name: string; challenge: [ubyte]; }
+table Register {
+  username: string;
+  user_id: [ubyte];      // Ed25519 user identity public key
+  device_id: [ubyte];    // Ed25519 device signing public key
+  dh_key: [ubyte];       // X25519 device DH public key
+  cert: [ubyte];         // user identity signature over (device_id, dh_key)
+  signature: [ubyte];    // device signature over the challenge
+}
+table Authenticate { device_id: [ubyte]; signature: [ubyte]; }
+table AuthOk { user_id: [ubyte]; username: string; server_ts: uint64; }
+table Error { code: uint16; message: string; }
+table Ok {}
+
+// ---- keys ----
+table PublishPrekeys { spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte]; otks: [KeyEntry]; }
+table FetchBundle { user_id: [ubyte]; }
+table Bundle {
+  user_id: [ubyte]; device_id: [ubyte]; dh_key: [ubyte]; cert: [ubyte];
+  spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte];
+  has_otk: bool; otk_id: uint32; otk: [ubyte];
+}
+table LookupUser { username: string; }
+table UserInfo { user_id: [ubyte]; username: string; }
+
+// ---- rooms ----
+table CreateRoom { members: [Member]; }   // only user_id is read
+table RoomInfo { room_id: [ubyte]; members: [Member]; created_at: uint64; }
+table ListRooms {}
+table RoomList { rooms: [RoomInfo]; }
+
+// ---- events ----
+table SendRoomEvent { room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; }
+table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
+table RoomEvent {
+  room_id: [ubyte]; seq: uint64; event_id: [ubyte];
+  sender_user: [ubyte]; sender_device: [ubyte]; server_ts: uint64;
+  ciphertext: [ubyte];
+}
+table Sync { cursors: [Cursor]; }
+table SyncComplete {}
+
+union FrameBody {
+  Hello, Register, Authenticate, AuthOk, Error, Ok,
+  PublishPrekeys, FetchBundle, Bundle, LookupUser, UserInfo,
+  CreateRoom, RoomInfo, ListRooms, RoomList,
+  SendRoomEvent, SendOk, RoomEvent, Sync, SyncComplete
+}
+
+table Frame { request_id: uint32; body: FrameBody; }
+
+// ---- plaintext, only ever seen by clients (inside the encrypted payload) ----
+table Relation { kind: string; target: [ubyte]; key: string; }
+table Event {
+  event_id: [ubyte];
+  type: string;
+  type_version: uint16;
+  sender_user: [ubyte];
+  sender_device: [ubyte];
+  origin_ts: uint64;
+  relation: Relation;
+  state_key: string;
+  content_encoding: ubyte;   // 0 = JSON
+  content: [ubyte];
+  fallback_text: string;
+  expires_at: uint64;
+}
+
+root_type Frame;

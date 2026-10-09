@@ -1,0 +1,22 @@
+{
+  "name": "corded",
+  "version-string": "0.1.0",
+  "builtin-baseline": "1e919a139d12f92047dddeef6c942600d091e7ac",
+  "dependencies": [
+    "asio",
+    "flatbuffers",
+    "sqlite3",
+    "spdlog",
+    "nlohmann-json",
+    "ftxui",
+    "catch2"
+  ],
+  "features": {
+    "vendored-sodium": {
+      "description": "Build libsodium with vcpkg instead of using the system copy (needs autoconf-archive installed)",
+      "dependencies": [
+        "libsodium"
+      ]
+    }
+  }
+}
