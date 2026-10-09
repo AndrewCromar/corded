@@ -79,11 +79,14 @@ Talking:
 | any text | Sends a message to the open channel or chat |
 | `/open <name>` | Opens a channel or chat whose name contains the text |
 | `/chat <username>` | Starts or opens a direct message with another member |
-| `/reply <text>` | Replies to the last message you received |
-| `/thread <text>` | Replies in a thread under the last message you received |
-| `/react <emoji or text>` | Reacts to the last message you received |
-| `/edit <text>` | Changes your last message |
-| `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
+| `/reply 12 <text>` | Replies to message 12. Every message shows a number; leave it out to mean the last one you received |
+| `/thread 12 <text>` | Replies in a thread under that message |
+| `/react 12 <emoji or text>` | Reacts to that message |
+| `/edit 12 <text>` | Changes one of your own messages (no number: your last one) |
+| `/delete 12` | Removes one of your messages (others' clients erase their copy; it cannot force them to) |
+| `/servers` | Lists the servers you are in |
+| `/server switch <name or number>` | Shows another server's channels |
+| `/server join <invite link or host:port>` | Joins another server without leaving this one |
 | `/once 30s <text>` | Sends one message that disappears after the given time (`30s`, `5m`, `2h`, `1d`) |
 | `/disappear 1h` | Makes every new message in the open chat disappear after that long; `/disappear off` stops it |
 | `/group bob carol : Weekend plans` | Starts a private group chat; the part after the colon is an optional name |
@@ -110,7 +113,7 @@ the matching permission:
 | `/role new <name> [permission ...]` | Creates a role, for example `/role new mods kick_members manage_messages` |
 | `/role give <user> <role>`, `/role take <user> <role>` | Gives or takes away a role |
 | `/role delete <name>` | Deletes a role |
-| `/remove` | Deletes the last message someone else posted in the open channel |
+| `/delete 12` or `/remove` | With `manage_messages`: deletes someone else's message, by number or the latest |
 | `/invite [uses]` | Makes an invite link |
 | `/kick <user>` | Removes someone from the server; they can rejoin |
 | `/ban <user>`, `/unban <user>` | Blocks or restores someone's access |
@@ -178,8 +181,8 @@ It does:
   (`/share-history off`), so a newcomer may or may not get history. Shared messages are
   marked as such, deleted and disappearing messages are never shared, and someone who can
   share needs to be online.
-- One client can be a member of several servers at once, with the same identity on each.
-  (The core supports it; the terminal client shows one server at a time for now.)
+- One client can be a member of several servers at once, with the same identity on each,
+  and switch between them.
 - An encrypted local vault. Keys and message history are stored in an encrypted SQLite
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
@@ -197,7 +200,6 @@ It does:
 
 It does not, yet:
 
-- Switch between servers in the terminal client.
 - Categories, nicknames, role colours, transferring ownership.
 - Scale to large channels. Each message is encrypted once per member, which is fine for
   dozens of people and too slow for hundreds; sender keys are planned for that.

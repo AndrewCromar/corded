@@ -249,7 +249,7 @@ build on it.
 | C2 Channels | Built on `next` |
 | C3 Channel permission overrides | Built on `next` (private and read-only channels) |
 | C4 Client and TUI | Built on `next` (engine commands and TUI commands; no dedicated management screens) |
-| C5 Several servers per vault | Core built on `next`: one session per server sharing one identity and vault; rooms and events tagged with their server. The TUI still shows one server at a time and has no switcher yet |
+| C5 Several servers per vault | Built: one session per server sharing one identity and vault; rooms and events tagged with their server; the terminal client lists, joins and switches servers |
 | C6 Invites | Built on `next`: codes with use limits and expiry, revocation, `corded://` links carrying address, key and code |
 | C7 Moderation | Deleting others' messages is built on `next`. Pins are not. The server does not yet drop the stored ciphertext of a deleted message |
 | C8 Sender keys | Not started |

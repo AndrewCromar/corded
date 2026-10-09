@@ -31,12 +31,23 @@ struct Message {
     bool edited = false;
     bool disappearing = false;
     bool from_history = false;  // handed over by another member, not received first-hand
+    int num = 0;  // short number shown next to the message, for commands like /reply 12
+};
+
+// What the client knows about one of the servers it belongs to.
+struct ServerState {
+    std::string name, address, connection, fingerprint;
+    bool is_owner = false;
+    std::set<std::string> permissions;
+    json roles = json::array();
 };
 
 struct Room {
     std::string id, title;
     std::string kind = "direct";  // channel, direct or group
     uint64_t disappear_after = 0;  // seconds; 0 = messages are kept
+    int64_t server_id = 0;
+    int next_num = 1;
     std::vector<Message> messages;
     // target event id -> reaction key -> ids of the reaction events
     std::map<std::string, std::map<std::string, std::set<std::string>>> reactions;
@@ -121,7 +132,12 @@ public:
 
 private:
     // ------------------------------------------------------------ engine I/O
-    corded_request command(const json& cmd) {
+    corded_request command(json cmd) {
+        // Commands that are not about a particular chat go to the server on screen.
+        std::string name = cmd.value("cmd", "");
+        if (current_server_ != 0 && !cmd.contains("room_id") && !cmd.contains("server_id") &&
+            name != "connect" && name != "list_servers" && name != "status" && name != "set_history_sharing")
+            cmd["server_id"] = current_server_;
         std::string text = cmd.dump();
         corded_request req = 0;
         corded_command(engine_, text.data(), text.size(), &req);
@@ -139,11 +155,16 @@ private:
                 else if (!server_.empty()) connect_to(server_);
             }
         } else if (kind == "connection_state") {
-            connection_ = ev.value("state", "");
-            if (ev.contains("detail")) notice_ = ev.value("detail", "");
-            if (ev.contains("server")) server_shown_ = ev.value("server", "");
-            if (ev.contains("fingerprint")) server_fp_ = ev.value("fingerprint", "");
-            if (connection_ == "live") notice_.clear();
+            int64_t sid = ev.value("server_id", int64_t{0});
+            ServerState& st = servers_[sid];
+            st.connection = ev.value("state", "");
+            if (ev.contains("server")) st.address = ev.value("server", "");
+            if (ev.contains("fingerprint")) st.fingerprint = ev.value("fingerprint", "");
+            if (current_server_ == 0) current_server_ = sid;
+            if (ev.contains("detail"))
+                notice_ = (sid == current_server_ ? "" : server_label(sid) + ": ") + ev.value("detail", "");
+            else if (sid == current_server_ && st.connection == "live") notice_.clear();
+            apply_current();
         } else if (kind == "room_updated") {
             const json& r = ev.at("room");
             std::string id = r.value("room_id", "");
@@ -151,6 +172,7 @@ private:
                 Room& room = room_for(id);
                 room.title = r.value("title", "?");
                 room.kind = r.value("kind", "direct");
+                room.server_id = r.value("server_id", int64_t{0});
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
             }
             refresh_titles();  // re-sorts, so look the room up again
@@ -160,16 +182,23 @@ private:
                 command({{"cmd", "fetch_timeline"}, {"room_id", room.id}, {"limit", 500}});
             }
         } else if (kind == "server_info") {
-            server_name_ = ev.value("name", "");
-            is_owner_ = ev.value("is_owner", false);
-            permissions_.clear();
-            for (const auto& p : ev.value("my_permissions", json::array())) permissions_.insert(p.get<std::string>());
-            roles_ = ev.value("roles", json::array());
+            int64_t sid = ev.value("server_id", int64_t{0});
+            ServerState& st = servers_[sid];
+            st.name = ev.value("name", "");
+            if (ev.contains("address")) st.address = ev.value("address", "");
+            st.is_owner = ev.value("is_owner", false);
+            st.permissions.clear();
+            for (const auto& p : ev.value("my_permissions", json::array())) st.permissions.insert(p.get<std::string>());
+            st.roles = ev.value("roles", json::array());
+            if (current_server_ == 0) current_server_ = sid;
+            apply_current();
+            refresh_titles();
         } else if (kind == "room_removed") {
             if (ev.value("reason", "") == "removed") notice_ = "you were removed from a chat";
             std::string id = ev.value("room_id", "");
             rooms_.erase(std::remove_if(rooms_.begin(), rooms_.end(), [&](const Room& r) { return r.id == id; }),
                          rooms_.end());
+            visible_.clear();
             selected_ = 0;
             refresh_titles();
         } else if (kind == "event_received") {
@@ -227,6 +256,11 @@ private:
         if (req == login_request_) {
             busy_ = false;
             if (!ok) login_error_ = message;
+            return;
+        }
+        if (req == join_request_) {
+            if (!ok) notice_ = message;
+            else switch_server(ev["data"].value("server_id", int64_t{0}));
             return;
         }
         if (req == chat_request_) {
@@ -308,6 +342,7 @@ private:
             return false;
         }
         Message m;
+        m.num = room.next_num++;
         m.event_id = id;
         m.type = type;
         m.mine = d.value("mine", false);
@@ -359,31 +394,55 @@ private:
             if (r.id == id) return r;
         return rooms_.back();
     }
+    // The chat on screen: one of the current server's chats.
     Room* current() {
-        if (rooms_.empty()) return nullptr;
-        selected_ = std::clamp(selected_, 0, static_cast<int>(rooms_.size()) - 1);
-        return &rooms_[static_cast<size_t>(selected_)];
+        if (visible_.empty()) return nullptr;
+        selected_ = std::clamp(selected_, 0, static_cast<int>(visible_.size()) - 1);
+        return &rooms_[visible_[static_cast<size_t>(selected_)]];
     }
-    // Channels first, then everything else, each alphabetical. The open chat
-    // stays open even though its position may change.
+    std::string current_id() {
+        Room* r = current();
+        return r ? r->id : std::string();
+    }
+    std::string server_label(int64_t sid) {
+        auto it = servers_.find(sid);
+        if (it == servers_.end()) return "server " + std::to_string(sid);
+        return !it->second.name.empty() ? it->second.name : it->second.address;
+    }
+    // Copies the current server's details into the fields the views read.
+    void apply_current() {
+        const ServerState& st = servers_[current_server_];
+        server_name_ = st.name;
+        is_owner_ = st.is_owner;
+        permissions_ = st.permissions;
+        roles_ = st.roles;
+        connection_ = st.connection;
+        server_shown_ = st.address;
+        server_fp_ = st.fingerprint;
+    }
+    // The chat list shows the current server only: channels first, then the
+    // rest, each alphabetical. The open chat stays open if it moves.
     void refresh_titles() {
-        std::string open = (selected_ >= 0 && selected_ < static_cast<int>(rooms_.size()))
-                               ? rooms_[static_cast<size_t>(selected_)].id
-                               : "";
+        std::string open = current_id();
         std::stable_sort(rooms_.begin(), rooms_.end(), [](const Room& a, const Room& b) {
             bool ac = a.kind == "channel", bc = b.kind == "channel";
             return ac != bc ? ac : a.title < b.title;
         });
         titles_.clear();
+        visible_.clear();
         for (size_t i = 0; i < rooms_.size(); ++i) {
             const Room& r = rooms_[i];
-            if (r.id == open) selected_ = static_cast<int>(i);
+            if (current_server_ != 0 && r.server_id != current_server_) continue;
+            if (r.id == open) selected_ = static_cast<int>(visible_.size());
+            visible_.push_back(i);
             titles_.push_back(r.title + (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
     }
     void select_room(const std::string& id) {
-        for (size_t i = 0; i < rooms_.size(); ++i)
-            if (rooms_[i].id == id) selected_ = static_cast<int>(i);
+        for (const auto& r : rooms_)
+            if (r.id == id && r.server_id != current_server_ && r.server_id != 0) switch_server(r.server_id);
+        for (size_t i = 0; i < visible_.size(); ++i)
+            if (rooms_[visible_[i]].id == id) selected_ = static_cast<int>(i);
         on_room_selected();
     }
     void on_room_selected() {
@@ -391,6 +450,41 @@ private:
             r->unread = 0;
             refresh_titles();
         }
+    }
+    void switch_server(int64_t sid) {
+        if (sid == 0 || sid == current_server_) return;
+        open_by_server_[current_server_] = current_id();
+        current_server_ = sid;
+        visible_.clear();
+        selected_ = 0;
+        apply_current();
+        refresh_titles();
+        std::string remembered = open_by_server_[sid];
+        for (size_t i = 0; i < visible_.size(); ++i)
+            if (rooms_[visible_[i]].id == remembered) selected_ = static_cast<int>(i);
+        on_room_selected();
+    }
+    int unread_elsewhere() {
+        int n = 0;
+        for (const auto& r : rooms_)
+            if (r.server_id != current_server_) n += r.unread;
+        return n;
+    }
+    // Takes a leading message number off `arg` ("12 text" or "#12 text") when
+    // this chat has a message with that number, and returns the message.
+    const Message* take_target(Room& room, std::string& arg) {
+        size_t sp = arg.find(' ');
+        std::string first = arg.substr(0, sp);
+        if (!first.empty() && first[0] == '#') first.erase(0, 1);
+        if (first.empty() || first.size() > 6 || first.find_first_not_of("0123456789") != std::string::npos)
+            return nullptr;
+        int n = std::atoi(first.c_str());
+        for (const auto& m : room.messages)
+            if (m.num == n) {
+                arg = sp == std::string::npos ? "" : arg.substr(sp + 1);
+                return &m;
+            }
+        return nullptr;
     }
     void connect_to(const std::string& server) {
         auto colon = server.rfind(':');
@@ -458,6 +552,85 @@ private:
             std::string arg = space == std::string::npos ? "" : line.substr(space + 1);
             if (cmd == "/quit" || cmd == "/exit" || cmd == "/q") {
                 screen_.Exit();
+            } else if (room && (cmd == "/reply" || cmd == "/thread" || cmd == "/react" || cmd == "/edit" ||
+                                cmd == "/delete" || cmd == "/remove")) {
+                // These act on one message. Give its number ("/reply 12 agreed"), or
+                // leave it out to mean the latest: the last one received, or for
+                // /edit and /delete the last one you sent.
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                bool own_default = cmd == "/edit" || cmd == "/delete";
+                if (!target && own_default) {
+                    for (auto it = room->messages.rbegin(); it != room->messages.rend() && !target; ++it)
+                        if (it->mine && it->type == "m.text" && it->status == "ok") target = &*it;
+                } else if (!target) {
+                    target = last_from_other(*room);
+                }
+                bool needs_text = cmd != "/delete" && cmd != "/remove";
+                if (!target) notice_ = "there is no message for that yet";
+                else if (needs_text && rest.empty()) notice_ = "use: " + cmd + " [message number] <text>";
+                else if (cmd == "/edit" && !target->mine) notice_ = "you can only edit your own messages";
+                else if (cmd == "/reply")
+                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", rest}, {"reply_to", target->event_id}});
+                else if (cmd == "/thread")
+                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", rest},
+                             {"thread", target->thread_root.empty() ? target->event_id : target->thread_root}});
+                else if (cmd == "/react")
+                    command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.reaction"},
+                             {"content", {{"key", rest}}},
+                             {"relation", {{"kind", "annotation"}, {"target", target->event_id}, {"key", rest}}}});
+                else if (cmd == "/edit")
+                    command({{"cmd", "edit_event"}, {"room_id", room->id}, {"event_id", target->event_id}, {"body", rest}});
+                else  // /delete and /remove: your own message, or as a moderator someone else's
+                    command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", target->event_id}});
+            } else if (cmd == "/servers" || (cmd == "/server" && (arg.empty() || arg == "list"))) {
+                Elements rows = {text("Servers") | bold};
+                int n = 1;
+                for (const auto& [sid, st] : servers_) {
+                    int unread = 0;
+                    for (const auto& r : rooms_)
+                        if (r.server_id == sid) unread += r.unread;
+                    rows.push_back(hbox({
+                        text((sid == current_server_ ? "* " : "  ") + std::to_string(n++) + "  ") | dim,
+                        text(st.name.empty() ? "(connecting)" : st.name) | bold,
+                        text("  " + st.address + "  ") | dim,
+                        text(st.connection) | color(st.connection == "live" ? Color::Green : Color::Yellow),
+                        text(st.is_owner ? "  owner" : "") | color(Color::Magenta),
+                        text(unread ? "  " + std::to_string(unread) + " unread" : "") | color(Color::Yellow),
+                    }));
+                }
+                rows.push_back(text("/server switch <name or number>     /server join <invite link or host:port>") | dim);
+                info_box_ = vbox(std::move(rows)) | border;
+                show_info_ = true;
+            } else if (cmd == "/server") {
+                auto sp = arg.find(' ');
+                std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
+                if (sub == "switch" && !rest.empty()) {
+                    int64_t found = 0;
+                    int n = 1;
+                    for (const auto& [sid, st] : servers_) {
+                        std::string lowered = st.name, want = rest;
+                        for (auto& ch : lowered) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                        for (auto& ch : want) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                        if (!found && (want == std::to_string(n) || (!lowered.empty() && lowered.find(want) != std::string::npos)))
+                            found = sid;
+                        ++n;
+                    }
+                    if (found) switch_server(found);
+                    else notice_ = "no server matches \"" + rest + "\"; /servers lists them";
+                } else if (sub == "join" && !rest.empty()) {
+                    // An invite link, or a plain address for a server that needs no invite.
+                    if (rest.rfind("corded://", 0) == 0) {
+                        join_request_ = command({{"cmd", "connect"}, {"link", rest}});
+                    } else {
+                        auto colon = rest.rfind(':');
+                        join_request_ = command({{"cmd", "connect"},
+                                                 {"host", colon == std::string::npos ? rest : rest.substr(0, colon)},
+                                                 {"port", colon == std::string::npos ? 7443 : std::atoi(rest.substr(colon + 1).c_str())}});
+                    }
+                } else {
+                    notice_ = "/servers | /server switch <name or number> | /server join <invite link or host:port>";
+                }
             } else if (cmd == "/chat" && !arg.empty()) {
                 chat_request_ = command({{"cmd", "start_chat"}, {"username", arg}});
             } else if (cmd == "/group" && !arg.empty()) {
@@ -486,11 +659,14 @@ private:
                     return v;
                 };
                 bool found = false;
-                for (const auto& r : rooms_)
+                for (size_t vi : visible_) {
+                    const Room& r = rooms_[vi];
                     if (!found && lower(r.title).find(lower(arg)) != std::string::npos) {
-                        select_room(r.id);
+                        std::string id = r.id;
+                        select_room(id);
                         found = true;
                     }
+                }
                 if (!found) notice_ = "no chat matches \"" + arg + "\"";
             } else if (cmd == "/kick" && !arg.empty()) {
                 command({{"cmd", "kick"}, {"username", arg}});
@@ -568,15 +744,6 @@ private:
                 command({{"cmd", "leave_room"}, {"room_id", room->id}});
             } else if (cmd == "/name" && !arg.empty() && room) {
                 command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
-            } else if ((cmd == "/edit" && !arg.empty() && room) || (cmd == "/delete" && room)) {
-                const Message* mine = nullptr;
-                for (auto it = room->messages.rbegin(); it != room->messages.rend() && !mine; ++it)
-                    if (it->mine && it->type == "m.text" && it->status == "ok") mine = &*it;
-                if (!mine) notice_ = "you have no sent message here to change";
-                else if (cmd == "/edit")
-                    command({{"cmd", "edit_event"}, {"room_id", room->id}, {"event_id", mine->event_id}, {"body", arg}});
-                else
-                    command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", mine->event_id}});
             } else if (cmd == "/disappear" && !arg.empty() && room) {
                 // Every new message in this chat disappears after the given time.
                 double seconds = arg == "off" ? 0 : parse_duration(arg);
@@ -596,12 +763,6 @@ private:
                 command({{"cmd", "set_history_sharing"}, {"enabled", arg == "on"}});
                 notice_ = arg == "on" ? "you will share earlier messages with newcomers who ask"
                                       : "you will not share earlier messages with newcomers";
-            } else if (cmd == "/remove" && room) {
-                // Moderators: delete the last message someone else posted here.
-                if (const Message* m = last_from_other(*room))
-                    command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", m->event_id}});
-                else
-                    notice_ = "nothing here to remove";
             } else if (cmd == "/verify" && room) {
                 command({{"cmd", "safety_numbers"}, {"room_id", room->id}});
             } else if ((cmd == "/verified" || cmd == "/unverified") && !arg.empty() && room) {
@@ -617,26 +778,6 @@ private:
             } else if (cmd == "/connect" && !arg.empty()) {
                 server_ = arg;
                 connect_to(arg);
-            } else if (cmd == "/reply" && !arg.empty() && room) {
-                if (const Message* m = last_from_other(*room))
-                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg}, {"reply_to", m->event_id}});
-                else
-                    notice_ = "nothing to reply to yet";
-            } else if (cmd == "/thread" && !arg.empty() && room) {
-                // Continue the thread the last received message is in, or start
-                // one on that message.
-                if (const Message* m = last_from_other(*room))
-                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg},
-                             {"thread", m->thread_root.empty() ? m->event_id : m->thread_root}});
-                else
-                    notice_ = "nothing to start a thread on yet";
-            } else if (cmd == "/react" && !arg.empty() && room) {
-                if (const Message* m = last_from_other(*room))
-                    command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.reaction"},
-                             {"content", {{"key", arg}}},
-                             {"relation", {{"kind", "annotation"}, {"target", m->event_id}, {"key", arg}}}});
-                else
-                    notice_ = "nothing to react to yet";
             } else if (cmd == "/help") {
                 show_help_ = !show_help_;
             } else {
@@ -699,7 +840,8 @@ private:
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             Element body = paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
-            lines.push_back(hbox({text(indent) | dim, text(clock_time(m.ts) + " ") | dim, name, body | flex}));
+            lines.push_back(hbox({text(indent) | dim, text(std::to_string(m.num) + " ") | color(Color::GrayDark),
+                                  text(clock_time(m.ts) + " ") | dim, name, body | flex}));
             if (auto it = room->reactions.find(m.event_id); it != room->reactions.end()) {
                 std::string r = indent + "        ";
                 bool any = false;
@@ -741,6 +883,8 @@ private:
             text(server_shown_.empty() ? "" : "  " + server_shown_) | dim,
             text(server_fp_.empty() || connection_ != "live" ? "" : "  TLS, key " + server_fp_.substr(0, 8)) | dim,
             filler(),
+            text(unread_elsewhere() ? std::to_string(unread_elsewhere()) + " unread on other servers  " : "") |
+                color(Color::Yellow),
             text("end-to-end encrypted ") | dim,
         });
         Room* room = current();
@@ -765,6 +909,9 @@ private:
                               text("/name <text>       rename the open chat"),
                               text("/add <username>    add someone to the open group        /leave  leave it"),
                               text("/verify            show safety numbers for the people in this chat"),
+                              text("Messages have numbers. /reply, /thread, /react, /edit and /delete take one:"),
+                              text("   /reply 12 agreed     /react 12 +1     /delete 12      (no number = the latest)"),
+                              text("/servers           list your servers    /server switch <name>   /server join <link>"),
                               text("/reply <text>      reply to the last message you received"),
                               text("/thread <text>     reply in a thread under the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
@@ -844,7 +991,11 @@ private:
     // login
     bool creating_ = false, busy_ = false;
     std::string pass_, pass2_, login_error_;
-    corded_request login_request_ = 0, chat_request_ = 0;
+    corded_request login_request_ = 0, chat_request_ = 0, join_request_ = 0;
+    std::map<int64_t, ServerState> servers_;
+    int64_t current_server_ = 0;
+    std::map<int64_t, std::string> open_by_server_;
+    std::vector<size_t> visible_;  // positions in rooms_ of the chats listed on screen
 
     // main
     int phase_ = 0;

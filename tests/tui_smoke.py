@@ -100,6 +100,7 @@ def main():
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     clients = []
+    extra = []  # further server processes started along the way
     DOWN = "\x1b[B"
     try:
         def start(name):
@@ -143,6 +144,16 @@ def main():
         bob.type("/react +1\r")
         alice.expect("[+1]")
         print("ok  reply and reaction")
+
+        # Acting on a chosen message by its number, not just the latest.
+        bob.type("/react 1 star\r")
+        alice.expect("[star]")
+        bob.type("/reply 1 answering the very first message\r")
+        alice.expect("answering the very first message")
+        alice.expect("> alice: hello from alice")
+        bob.type("/edit 1 not mine\r")
+        bob.expect("you can only edit your own messages")
+        print("ok  commands take a message number")
 
         bob.type("/thread threaded answer\r")
         alice.expect("   | ")
@@ -221,6 +232,31 @@ def main():
         dave.expect("#general")
         print("ok  invite link made in the client lets a new person join")
 
+        # A second server: alice joins it from inside the client and switches between the two.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port2 = probe.getsockname()[1]
+        server2 = subprocess.Popen(
+            [f"{bindir}/cordedd", "--host", "127.0.0.1", "--port", str(port2), "--data", f"{tmp}/server2",
+             "--name", "SecondServer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        extra.append(server2)
+        time.sleep(0.5)
+        alice.type(f"/server join 127.0.0.1:{port2}\r")
+        alice.expect("SecondServer", timeout=30)
+        alice.type("hello second server\r")
+        alice.type("/servers\r")
+        alice.expect("Servers")
+        alice.expect("SecondServer")
+        alice.type("/server switch 1\r")
+        alice.clear()
+        alice.type("/help\r")
+        alice.pump(1.0)
+        assert "#dev" in alice.screen, "switching back did not show the first server's channels"
+        assert "hello second server" not in alice.screen, "a message from the other server is showing"
+        alice.type("/help\r")
+        alice.type("/open dev\r")
+        print("ok  one client in two servers: join, list and switch")
+
         alice.type("/channel private mods\r")
         time.sleep(1.5)
         carol.pump(0.5)
@@ -259,8 +295,9 @@ def main():
             for c in clients:
                 c.close()
         finally:
-            server.terminate()
-            server.wait()
+            for proc in extra + [server]:
+                proc.terminate()
+                proc.wait()
             shutil.rmtree(tmp, ignore_errors=True)
 
 

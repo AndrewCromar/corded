@@ -7,8 +7,8 @@ plan in [04-community-model.md](04-community-model.md), section 6.
 | Topic | Decision | Change-plan step | State |
 |---|---|---|---|
 | Leaving the client with a command | (small) | done | `/exit` built |
-| Switching between servers in the client | D-27, C5 | C5 | Core built; terminal client switcher next |
-| Acting on one specific message | (design already supports it) | C4 | Core built; terminal client needs a way to pick a message |
+| Switching between servers in the client | D-27, C5 | C5 | Built: `/servers`, `/server switch`, `/server join` |
+| Acting on one specific message | (design already supports it) | C4 | Built: messages are numbered in the terminal client and commands take a number |
 | Server scope: machine, network, internet | D-33 | C12 | Planned |
 | All server settings from the owner's client | D-34 | C16 | Planned |
 | Scheduled maintenance and restarts | D-35 | C16 | Planned |
