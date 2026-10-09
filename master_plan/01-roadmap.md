@@ -247,6 +247,26 @@ README's beta warning is replaced, and protocol version 1 is frozen.
 
 ---
 
+## Community model change plan
+
+Decision D-27 makes each server one Discord-style community. The steps to change the
+existing code are C1 to C10 in [04-community-model.md](04-community-model.md), section 6:
+
+| Step | Change |
+|---|---|
+| C1 | Owner and roles on the server |
+| C2 | Channels |
+| C3 | Channel permission overrides (private and read-only channels) |
+| C4 | Client and TUI for running a community |
+| C5 | Several servers per vault |
+| C6 | Invites in the protocol |
+| C7 | Moderation (deleting others' messages, pins) |
+| C8 | Sender keys for channels |
+| C9 | History for newcomers (depends on D-28) |
+| C10 | Categories, topics, nicknames, role colours, role mentions, ownership transfer |
+
+These cut across Stages 1 to 5; section 7 of that document says what moves in each stage.
+
 ## Feature milestones
 
 Chat features beyond plain text are built one at a time after Stage 5, in parallel with

@@ -2,6 +2,11 @@
 
 [Overview](../00-overview.md) | [Roadmap](../01-roadmap.md) | Previous: [Stage 0](stage-0-foundation.md) | Next: [Stage 2](stage-2-server-daemon.md)
 
+> **Changed by decision D-27.** Each server is now one Discord-style community with
+> channels, an owner and roles. Where this document talks about rooms, per-room roles or
+> server administrators, read [../04-community-model.md](../04-community-model.md), which
+> takes precedence. Section 7 there lists what changes in this stage.
+
 ## Goal
 
 Write the protocol down before writing the code that speaks it. The blueprint goes from

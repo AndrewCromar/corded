@@ -8,6 +8,7 @@ and how the work is staged. The other documents hang off it:
 | [01-roadmap.md](01-roadmap.md) | Every stage broken into numbered steps, with dependencies and milestones |
 | [02-decisions.md](02-decisions.md) | Decisions made, and gaps or contradictions found in the blueprint |
 | [03-feature-roadmap.md](03-feature-roadmap.md) | Chat features (threads, replies, reactions, ...) mapped onto the design |
+| [04-community-model.md](04-community-model.md) | Each server is one Discord-style community: channels, an owner, roles and permissions. Includes the change plan. **Overrides older text where they differ** |
 | [stages/](stages/) | One detailed plan per stage |
 | [Blueprint PDF](Modular%20E2EE%20Messaging%20Platform%20-%20Technical%20Architecture%20Blueprint.pdf) | The original technical blueprint this plan is built from |
 
@@ -18,8 +19,11 @@ Corded is an end-to-end-encrypted messaging platform built as three separable pa
 1. **`libcorded`, the core engine.** A headless C++20 library that owns networking, the
    wire protocol, all cryptography, and an encrypted local vault. It exposes a C ABI and
    nothing else.
-2. **`cordedd`, the server daemon.** An untrusted relay. It authenticates devices, enforces
-   room membership and rate limits, and stores and forwards ciphertext it cannot read.
+2. **`cordedd`, the server daemon.** One running server is one community, in the way a
+   Discord server is: it has channels, an owner, and roles with permissions. Someone who
+   wants two communities runs two servers. The server authenticates devices, enforces
+   roles and permissions, and stores and forwards ciphertext it cannot read. See
+   [04-community-model.md](04-community-model.md).
 3. **Frontends.** Terminal, desktop, mobile and bot applications that load `libcorded` and
    turn its event stream into an interface. The first is `corded-tui`.
 
@@ -29,8 +33,8 @@ how messages are secured and delivered. Frontends decide how they look and feel.
 ### Goals
 
 - Anyone can self-host a server on very small hardware (Raspberry Pi 4/5, $3 VPS, NAS).
-- Whoever sets up a server can make their own account its administrator, with every
-  permission the server can grant. Not even an administrator can read rooms they are not in.
+- Whoever sets up a server owns it. The owner has every permission and hands out the
+  rest through roles. A person can be a member of many servers from one client.
 - The server learns as little as possible, and that amount is written down honestly.
 - A frontend author never handles keys, sockets or ratchets.
 - Rich chat features (threads, replies, reactions, edits, attachments and more) can be
@@ -39,8 +43,8 @@ how messages are secured and delivered. Frontends decide how they look and feel.
 
 ### Non-goals for 1.0
 
-- Federation between servers. A client can connect to many servers; servers do not talk
-  to each other.
+- Federation between servers. A client can be a member of many servers; servers do not
+  talk to each other, and direct messages stay within one server.
 - Voice and video calls.
 - Anonymity against a global network observer. Corded hides content, not the fact that a
   device is talking to a server.

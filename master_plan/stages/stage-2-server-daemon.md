@@ -2,6 +2,11 @@
 
 [Overview](../00-overview.md) | [Roadmap](../01-roadmap.md) | Previous: [Stage 1](stage-1-protocol-spec.md) | Next: [Stage 3](stage-3-client-engine.md)
 
+> **Changed by decision D-27.** Each server is now one Discord-style community with
+> channels, an owner and roles. Where this document talks about rooms, per-room roles or
+> server administrators, read [../04-community-model.md](../04-community-model.md), which
+> takes precedence. Section 7 there lists what changes in this stage.
+
 ## Goal
 
 Build `cordedd`: a single static binary that authenticates devices, serves prekeys,

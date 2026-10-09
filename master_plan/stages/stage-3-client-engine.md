@@ -2,6 +2,11 @@
 
 [Overview](../00-overview.md) | [Roadmap](../01-roadmap.md) | Previous: [Stage 2](stage-2-server-daemon.md) | Next: [Stage 4](stage-4-cryptography.md)
 
+> **Changed by decision D-27.** Each server is now one Discord-style community with
+> channels, an owner and roles. Where this document talks about rooms, per-room roles or
+> server administrators, read [../04-community-model.md](../04-community-model.md), which
+> takes precedence. Section 7 there lists what changes in this stage.
+
 ## Goal
 
 Build the body of `libcorded` as a C++ library: the engine loop, the encrypted vault, the

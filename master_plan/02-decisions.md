@@ -39,7 +39,12 @@ To change a decision, edit this file in the same pull request as the change.
 | D-23 | Ratchet implementation | Write X3DH, Double Ratchet and sender keys in C++ on libsodium, or wrap an audited library | Open | 4 |
 | D-24 | Mobile push notifications | Needs its own design before any mobile release | Open | 6 |
 | D-25 | Multi-device in 1.0 | Recommended yes (feature milestone F7 before 1.0) | Open | 7 |
-| D-26 | Server administrator | The person who sets up a server can make their own account its administrator, with every permission | Locked (owner requirement) | 2 |
+| D-26 | Server administrator | Superseded by D-27: the administrator is now the server's owner, and other powers come from roles | Superseded | 2 |
+| D-27 | Community model | One server is one Discord-style community: channels, one owner, roles with permissions. Two communities means two servers. See [04-community-model.md](04-community-model.md) | Locked (owner requirement) | 1, 2, 3, 5 |
+| D-28 | History for new members | Messages sent before someone joined were not encrypted to them. Start-at-join (assumed), history sharing, or optional unencrypted channels | Open | 4 |
+| D-29 | What the server sees of a community | Channel names, role names and the member list are visible to the server; message content is not | Proposed | 1 |
+| D-30 | Sender keys timing | Needed before communities grow, because channels have many members; moves earlier than D-04 implied | Proposed | 4 |
+| D-31 | Direct messages | Within one server only; cross-server direct messages would need federation | Proposed | 1 |
 
 ### D-03 vcpkg in manifest mode
 One `vcpkg.json` with a pinned `builtin-baseline`, consumed through the CMake toolchain
@@ -170,7 +175,19 @@ integration, persistence, key distribution and verification.
 To be decided by the owner before Stage 4 starts. Stage 4's `CryptoProvider` interface
 is the same either way, so the choice does not affect Stages 2, 3 or 5.
 
-### D-26 Server administrator
+### D-27 Community model
+Requirement from the owner, given after D-26: each server is meant to be one Discord-type
+server. It has channels; one user is the admin who owns the server; they can make roles
+and give permissions; someone who wants to own two servers sets up a second server.
+
+The full design, its consequences for encryption, and the step-by-step plan for changing
+the existing code are in [04-community-model.md](04-community-model.md). Decisions D-28 to
+D-31 record the choices that design raises.
+
+### D-26 Server administrator (superseded by D-27)
+The text below is kept for history. Under D-27 the "administrator" is the server's owner,
+and anything short of that is granted through roles.
+
 Requirement from the owner: when someone sets up a server, they must be able to assign
 their own client as an administrator that has all permissions.
 
