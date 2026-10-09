@@ -45,22 +45,22 @@ bool known_type(const std::string& type) {
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention";
 }
 
+}  // namespace
+
 const char* conn_name(int c) {
     static const char* names[] = {"disconnected", "connecting", "authenticating", "syncing", "live"};
     return names[c];
 }
 
-}  // namespace
+// ---------------------------------------------------------------- engine
 
 Engine::Engine(EngineConfig config)
     : config_(std::move(config)),
       work_(asio::make_work_guard(io_)),
-      resolver_(io_),
       tls_ctx_(asio::ssl::context::tls_client),
-      reconnect_timer_(io_),
       sweep_timer_(io_) {
     if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
-    // The server is authenticated by its pinned fingerprint, checked after the
+    // Servers are authenticated by their pinned fingerprint, checked after the
     // handshake, so certificate-authority verification is switched off.
     tls::require_tls13(tls_ctx_);
     tls_ctx_.set_verify_mode(asio::ssl::verify_none);
@@ -70,8 +70,7 @@ Engine::Engine(EngineConfig config)
 
 Engine::~Engine() {
     asio::post(io_, [this] {
-        want_connection_ = false;
-        drop_connection("shutting down");
+        close_sessions();
         sweep_timer_.cancel();
         vault_.lock();
         io_.stop();
@@ -82,7 +81,10 @@ Engine::~Engine() {
 
 bool Engine::vault_exists() const { return Vault::exists(config_.vault_dir); }
 
-// ---------------------------------------------------------------- events out
+void Engine::close_sessions() {
+    for (auto& [id, s] : sessions_) s->disconnect("shutting down");
+    sessions_.clear();
+}
 
 void Engine::emit(json j) {
     j["seq"] = event_seq_++;
@@ -127,9 +129,113 @@ void Engine::emit_vault_state() {
     emit(std::move(j));
 }
 
-void Engine::set_conn(Conn c, const std::string& detail) {
+// The list of servers this vault belongs to: [{"id":1,"host":"..","port":".."}].
+Engine::json Engine::load_servers() {
+    if (auto stored = vault_.meta("servers")) {
+        json list = json::parse(*stored, nullptr, false);
+        if (list.is_array()) return list;
+    }
+    json list = json::array();
+    // A vault from before several servers were supported has exactly one.
+    auto host = vault_.meta("server_host");
+    auto port = vault_.meta("server_port");
+    if (host && port) {
+        list.push_back({{"id", 1}, {"host", *host}, {"port", *port}});
+        for (const char* key : {"registered", "prekeys_published", "server_fp", "invite"})
+            if (auto v = vault_.meta(key)) vault_.set_meta(std::string("s1:") + key, *v);
+        save_servers(list);
+    }
+    return list;
+}
+
+void Engine::save_servers(const json& list) { vault_.set_meta("servers", list.dump()); }
+
+Session* Engine::session(int64_t id) {
+    auto it = sessions_.find(id);
+    return it == sessions_.end() ? nullptr : it->second.get();
+}
+
+Session* Engine::session_for_room(ByteView room_id) {
+    auto room = vault_.room(room_id);
+    return room ? session(room->server_id) : nullptr;
+}
+
+// Commands that name no server go to the first one, which keeps a client that
+// only ever uses one server simple.
+Session* Engine::default_session() { return sessions_.empty() ? nullptr : sessions_.begin()->second.get(); }
+
+// ---------------------------------------------------------------- session
+
+Session::Session(Engine& engine, int64_t id, std::string host, std::string port)
+    : engine_(engine),
+      id_(id),
+      io_(engine.io_),
+      vault_(engine.vault_),
+      tls_ctx_(engine.tls_ctx_),
+      next_request_(engine.next_request_),
+      resolver_(engine.io_),
+      reconnect_timer_(engine.io_),
+      host_(std::move(host)),
+      port_(std::move(port)) {}
+
+Session::~Session() { disconnect(""); }
+
+void Session::emit(json j) {
+    j["server_id"] = id_;
+    engine_.emit(std::move(j));
+}
+void Session::ok(uint64_t req, json data) { engine_.ok(req, std::move(data)); }
+void Session::fail(uint64_t req, const std::string& code, const std::string& message) {
+    engine_.fail(req, code, message);
+}
+
+std::optional<std::string> Session::meta(const std::string& key) {
+    return vault_.meta("s" + std::to_string(id_) + ":" + key);
+}
+void Session::set_meta(const std::string& key, const std::string& value) {
+    vault_.set_meta("s" + std::to_string(id_) + ":" + key, value);
+}
+std::vector<RoomRow> Session::rooms() { return vault_.rooms(id_); }
+
+const char* Session::conn_name() const { return corded::conn_name(static_cast<int>(conn_)); }
+
+void Session::emit_rooms() {
+    for (const auto& room : rooms()) emit({{"event", "room_updated"}, {"room", room_json(room)}});
+}
+
+Session::json Session::rooms_json() {
+    json out = json::array();
+    for (const auto& room : rooms()) out.push_back(room_json(room));
+    return out;
+}
+
+void Session::resume() {
+    want_connection_ = true;
+    start_connect();
+}
+
+void Session::disconnect(const std::string& reason) {
+    want_connection_ = false;
+    drop_connection(reason);
+}
+
+// Applies what a connect command or invite link says, then (re)connects.
+void Session::connect(uint64_t req, const json& cmd) {
+    // An explicit fingerprint (from an invite) must match. "reset_pin" accepts
+    // whatever identity the server presents next; use it only on purpose.
+    if (cmd.contains("invite")) set_meta("invite", cmd.at("invite").get<std::string>());
+    if (cmd.contains("fingerprint")) set_meta("server_fp", cmd.at("fingerprint").get<std::string>());
+    else if (cmd.value("reset_pin", false)) set_meta("server_fp", "");
+    want_connection_ = true;
+    backoff_s_ = 1;
+    drop_connection("");
+    start_connect();
+    ok(req, {{"server_id", id_}});
+}
+
+void Session::set_conn(Conn c, const std::string& detail) {
     conn_ = c;
-    json j = {{"event", "connection_state"}, {"state", conn_name(static_cast<int>(c))}};
+    json j = {{"event", "connection_state"}, {"state", corded::conn_name(static_cast<int>(c))}};
     if (!detail.empty()) j["detail"] = detail;
     if (!host_.empty()) j["server"] = host_ + ":" + port_;
     if (!server_fingerprint_.empty() && c != Conn::Disconnected && c != Conn::Connecting)
@@ -137,7 +243,7 @@ void Engine::set_conn(Conn c, const std::string& detail) {
     emit(std::move(j));
 }
 
-Engine::json Engine::member_json(const MemberRow& m) {
+Session::json Session::member_json(const MemberRow& m) {
     bool me = m.user_id.size() == 32 &&
               std::equal(m.user_id.begin(), m.user_id.end(), vault_.identity().user.pk.begin());
     json roles = json::array();
@@ -153,7 +259,7 @@ Engine::json Engine::member_json(const MemberRow& m) {
             {"verified", !me && vault_.is_verified(m.user_id)}};
 }
 
-Engine::json Engine::room_json(const RoomRow& room) {
+Session::json Session::room_json(const RoomRow& room) {
     json members = json::array();
     std::string title;
     for (const auto& m : room.members) {
@@ -165,6 +271,7 @@ Engine::json Engine::room_json(const RoomRow& room) {
     if (room.kind == 0) title = "#" + room.channel_name;
     else if (!room.name.empty()) title = room.name;
     return {{"room_id", b64(room.room_id)},
+            {"server_id", room.server_id},
             {"title", title.empty() ? "(empty room)" : title},
             {"name", room.kind == 0 ? room.channel_name : room.name},
             {"kind", kinds[room.kind >= 0 && room.kind <= 2 ? room.kind : 2]},
@@ -174,7 +281,7 @@ Engine::json Engine::room_json(const RoomRow& room) {
 }
 
 // What this client knows about the community it is connected to.
-Engine::json Engine::server_json() {
+Session::json Session::server_json() {
     json roles = json::array();
     for (const auto& r : roles_)
         roles.push_back({{"name", r.name},
@@ -183,13 +290,15 @@ Engine::json Engine::server_json() {
                          {"permissions", perm::to_names(r.permissions)}});
     bool owner = server_owner_.size() == 32 &&
                  std::equal(server_owner_.begin(), server_owner_.end(), vault_.identity().user.pk.begin());
-    return {{"name", server_name_},
+    return {{"server_id", id_},
+            {"address", host_ + ":" + port_},
+            {"name", server_name_},
             {"is_owner", owner},
             {"my_permissions", perm::to_names(my_permissions_)},
             {"roles", std::move(roles)}};
 }
 
-Engine::json Engine::event_json(const EventRow& e) {
+Session::json Session::event_json(const EventRow& e) {
     json j = {{"room_id", b64(e.room_id)},
               {"event_id", b64(e.event_id)},
               {"type", e.type},
@@ -284,15 +393,15 @@ void Engine::after_unlock() {
     emit_vault_state();
     sweep_expired();  // anything that came due while the vault was locked
     schedule_sweep();
-    for (const auto& room : vault_.rooms()) emit({{"event", "room_updated"}, {"room", room_json(room)}});
-    // Reconnect to the server used last time, if there was one.
-    auto host = vault_.meta("server_host");
-    auto port = vault_.meta("server_port");
-    if (host && port) {
-        host_ = *host;
-        port_ = *port;
-        want_connection_ = true;
-        start_connect();
+    // Bring back every server this vault belongs to and reconnect to each.
+    for (const auto& entry : load_servers()) {
+        int64_t id = entry.value("id", int64_t{0});
+        if (id <= 0 || sessions_.count(id)) continue;
+        auto s = std::make_unique<Session>(*this, id, entry.value("host", ""), entry.value("port", ""));
+        Session* raw = s.get();
+        sessions_[id] = std::move(s);
+        raw->emit_rooms();
+        raw->resume();
     }
 }
 
@@ -302,15 +411,25 @@ uint64_t Engine::command(std::string json_text) {
     return req;
 }
 
+// Commands about the vault or about which servers exist are handled here; the
+// rest go to the session of the server they concern.
 void Engine::run_command(uint64_t req, const std::string& text) {
     try {
         json cmd = json::parse(text);
         std::string name = cmd.at("cmd").get<std::string>();
 
         if (name == "status") {
+            Session* first = default_session();
+            json servers = json::array();
+            for (auto& [id, s] : sessions_) {
+                json entry = s->server_json();
+                entry["connection"] = s->conn_name();
+                servers.push_back(std::move(entry));
+            }
             json data = {{"vault", vault_.unlocked() ? "unlocked" : vault_exists() ? "locked" : "missing"},
-                         {"connection", conn_name(static_cast<int>(conn_))},
-                         {"is_admin", is_admin_ && conn_ != Conn::Disconnected}};
+                         {"connection", first ? first->conn_name() : "disconnected"},
+                         {"is_admin", first && first->is_admin()},
+                         {"servers", std::move(servers)}};
             if (vault_.unlocked()) {
                 data["user_id"] = b64(vault_.identity().user.pk);
                 data["username"] = vault_.username();
@@ -324,21 +443,77 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         }
         if (name == "connect") {
             cmd_connect(req, cmd);
-        } else if (name == "disconnect") {
-            want_connection_ = false;
-            drop_connection("disconnected by user");
-            ok(req);
-        } else if (name == "lock") {
-            want_connection_ = false;
-            drop_connection("vault locked");
+            return;
+        }
+        if (name == "lock") {
+            close_sessions();
             sweep_timer_.cancel();
             vault_.lock();
             emit_vault_state();
             ok(req);
-        } else if (name == "list_rooms") {
+            return;
+        }
+        if (name == "list_servers") {
+            json servers = json::array();
+            for (auto& [id, s] : sessions_) {
+                json entry = s->server_json();
+                entry["connection"] = s->conn_name();
+                servers.push_back(std::move(entry));
+            }
+            ok(req, {{"servers", std::move(servers)}});
+            return;
+        }
+        if (name == "list_rooms" && !cmd.contains("server_id")) {
+            // Every room on every server.
             json rooms = json::array();
-            for (const auto& room : vault_.rooms()) rooms.push_back(room_json(room));
+            for (auto& [id, s] : sessions_)
+                for (auto& room : s->rooms_json()) rooms.push_back(std::move(room));
             ok(req, {{"rooms", std::move(rooms)}});
+            return;
+        }
+        if (name == "disconnect" && !cmd.contains("server_id")) {
+            for (auto& [id, s] : sessions_) s->disconnect("disconnected by user");
+            ok(req);
+            return;
+        }
+
+        // Which server is this about? A room says so by itself; otherwise the
+        // command may name one, and if not, the first server is meant.
+        Session* target = nullptr;
+        if (cmd.contains("room_id")) {
+            target = session_for_room(need_b64(cmd, "room_id", 16));
+            if (!target) {
+                fail(req, "not_found", "unknown room");
+                return;
+            }
+        } else if (cmd.contains("server_id")) {
+            target = session(cmd.at("server_id").get<int64_t>());
+            if (!target) {
+                fail(req, "not_found", "unknown server");
+                return;
+            }
+        } else {
+            target = default_session();
+        }
+        if (!target) {
+            fail(req, "not_connected", "not connected to a server");
+            return;
+        }
+        if (name == "disconnect") {
+            target->disconnect("disconnected by user");
+            ok(req);
+            return;
+        }
+        target->run_command(req, name, cmd);
+    } catch (const std::exception& e) {
+        fail(req, "invalid_argument", e.what());
+    }
+}
+
+void Session::run_command(uint64_t req, const std::string& name, const json& cmd) {
+    try {
+        if (name == "list_rooms") {
+            ok(req, {{"rooms", rooms_json()}});
         } else if (name == "safety_numbers") {
             // One entry per other member of the room.
             Bytes room_id = need_b64(cmd, "room_id", 16);
@@ -361,7 +536,7 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         } else if (name == "set_verified") {
             Bytes user_id = need_b64(cmd, "user_id", 32);
             vault_.set_verified(user_id, cmd.value("verified", true));
-            for (const auto& room : vault_.rooms())
+            for (const auto& room : rooms())
                 for (const auto& m : room.members)
                     if (m.user_id == user_id) {
                         emit({{"event", "room_updated"}, {"room", room_json(room)}});
@@ -518,36 +693,30 @@ static nlohmann::json parse_invite_link(const std::string& link) {
     return out;
 }
 
+// Finds the server by address, or adds it to this vault, then connects.
 void Engine::cmd_connect(uint64_t req, const json& given) {
     // An invite link carries everything: address, the server's key, the code.
     json cmd = given.contains("link") ? parse_invite_link(given.at("link").get<std::string>()) : given;
     std::string host = cmd.at("host").get<std::string>();
     std::string port = cmd.at("port").is_string() ? cmd.at("port").get<std::string>()
                                                   : std::to_string(cmd.at("port").get<int>());
-    // The prototype knows one server per vault. Pointing at a different one
-    // means registering and publishing keys again.
-    if (vault_.meta("server_host") != host || vault_.meta("server_port") != port) {
-        vault_.set_meta("server_host", host);
-        vault_.set_meta("server_port", port);
-        vault_.set_meta("registered", "0");
-        vault_.set_meta("prekeys_published", "0");
-        vault_.set_meta("server_fp", "");
-    }
-    // An explicit fingerprint (from an invite) must match. "reset_pin" accepts
-    // whatever identity the server presents next; use it only on purpose.
-    if (cmd.contains("invite")) vault_.set_meta("invite", cmd.at("invite").get<std::string>());
-    if (cmd.contains("fingerprint")) vault_.set_meta("server_fp", cmd.at("fingerprint").get<std::string>());
-    else if (cmd.value("reset_pin", false)) vault_.set_meta("server_fp", "");
-    host_ = host;
-    port_ = port;
-    want_connection_ = true;
-    backoff_s_ = 1;
-    drop_connection("");
-    start_connect();
-    ok(req);
+    for (auto& [id, s] : sessions_)
+        if (s->host() == host && s->port() == port) {
+            s->connect(req, cmd);
+            return;
+        }
+    json list = load_servers();
+    int64_t id = 1;
+    for (const auto& entry : list) id = std::max(id, entry.value("id", int64_t{0}) + 1);
+    list.push_back({{"id", id}, {"host", host}, {"port", port}});
+    save_servers(list);
+    auto s = std::make_unique<Session>(*this, id, host, port);
+    Session* raw = s.get();
+    sessions_[id] = std::move(s);
+    raw->connect(req, cmd);
 }
 
-void Engine::cmd_start_chat(uint64_t req, const json& cmd) {
+void Session::cmd_start_chat(uint64_t req, const json& cmd) {
     if (conn_ != Conn::Live && conn_ != Conn::Syncing) {
         fail(req, "not_connected", "not connected to a server");
         return;
@@ -559,7 +728,7 @@ void Engine::cmd_start_chat(uint64_t req, const json& cmd) {
 
 // Commands for running a community. The server decides whether we may; these
 // only translate names into ids and report the answer.
-void Engine::community_command(uint64_t req, const std::string& name, const json& cmd) {
+void Session::community_command(uint64_t req, const std::string& name, const json& cmd) {
     if (name == "server_info") {
         ok(req, server_json());
         return;
@@ -684,7 +853,7 @@ void Engine::community_command(uint64_t req, const std::string& name, const json
 
 // Shared start of the commands that act on a person: find them by username.
 // The server decides whether we are allowed; this only resolves the name.
-void Engine::admin_action(uint64_t req, const std::string& username,
+void Session::admin_action(uint64_t req, const std::string& username,
                           std::function<void(const Bytes& user_id)> then) {
     if (conn_ != Conn::Live) {
         fail(req, "not_connected", "not connected to a server");
@@ -703,7 +872,7 @@ void Engine::admin_action(uint64_t req, const std::string& username,
 
 // A room with any number of people. Two-person rooms are unique per pair;
 // larger ones are always new.
-void Engine::cmd_create_room(uint64_t req, const json& cmd) {
+void Session::cmd_create_room(uint64_t req, const json& cmd) {
     if (conn_ != Conn::Live && conn_ != Conn::Syncing) {
         fail(req, "not_connected", "not connected to a server");
         return;
@@ -718,7 +887,7 @@ void Engine::cmd_create_room(uint64_t req, const json& cmd) {
 }
 
 // Resolves usernames to user ids one at a time, then creates the room.
-void Engine::lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>> names,
+void Session::lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>> names,
                          std::shared_ptr<wire::CreateRoomT> create, std::string room_name) {
     if (create->members.size() == names->size()) {
         create_room(req, std::move(*create), std::move(room_name));
@@ -741,7 +910,7 @@ void Engine::lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>>
     });
 }
 
-void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string room_name) {
+void Session::create_room(uint64_t req, wire::CreateRoomT create, std::string room_name) {
     request(std::move(create), [this, req, room_name](wire::FrameT& r) {
         if (r.body.type != wire::FrameBody_RoomInfo) {
             auto* e = r.body.AsError();
@@ -766,7 +935,7 @@ void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string roo
 }
 
 // Whether a member's roles (as the server reported them) carry a permission.
-bool Engine::has_permission(const RoomRow& room, ByteView user_id, uint64_t permission) {
+bool Session::has_permission(const RoomRow& room, ByteView user_id, uint64_t permission) {
     for (const auto& m : room.members) {
         if (m.user_id.size() != user_id.size() || !std::equal(m.user_id.begin(), m.user_id.end(), user_id.begin()))
             continue;
@@ -783,7 +952,7 @@ bool Engine::has_permission(const RoomRow& room, ByteView user_id, uint64_t perm
 // owner, an administrator, or anyone with a role that grants manage_messages.
 // Judged from the roles the server reported; per-channel exceptions are not
 // taken into account here.
-bool Engine::can_moderate(const RoomRow& room, ByteView user_id) {
+bool Session::can_moderate(const RoomRow& room, ByteView user_id) {
     if (room.kind != 0) return false;
     for (const auto& m : room.members) {
         if (m.user_id.size() != user_id.size() || !std::equal(m.user_id.begin(), m.user_id.end(), user_id.begin()))
@@ -800,7 +969,7 @@ bool Engine::can_moderate(const RoomRow& room, ByteView user_id) {
 // person who sent the original. A deletion is honoured from them, or in a
 // channel from a moderator. Deletion is a request: this client erases its
 // copy, but cannot make anyone else forget.
-void Engine::apply_relation(const EventRow& e) {
+void Session::apply_relation(const EventRow& e) {
     if (e.rel_target.empty()) return;
     if (e.rel_kind == "thread") {
         // The thread's first message gains a reply; tell frontends its count changed.
@@ -828,7 +997,7 @@ void Engine::apply_relation(const EventRow& e) {
 }
 
 // Room state carried by events: the room's name, and how long messages last.
-void Engine::apply_state(const EventRow& e) {
+void Session::apply_state(const EventRow& e) {
     if (e.type == "m.room.retention") {
         auto room = vault_.room(e.room_id);
         if (!room) return;
@@ -854,7 +1023,7 @@ void Engine::apply_state(const EventRow& e) {
         emit({{"event", "room_updated"}, {"room", room_json(*room)}});
 }
 
-void Engine::cmd_send_event(uint64_t req, const json& cmd) {
+void Session::cmd_send_event(uint64_t req, const json& cmd) {
     EventRow e;
     e.room_id = need_b64(cmd, "room_id", 16);
     if (!vault_.room(e.room_id)) {
@@ -905,7 +1074,7 @@ void Engine::cmd_send_event(uint64_t req, const json& cmd) {
 
 // ---------------------------------------------------------------- network
 
-void Engine::start_connect() {
+void Session::start_connect() {
     if (!want_connection_ || conn_ != Conn::Disconnected) return;
     uint64_t gen = ++conn_gen_;
     set_conn(Conn::Connecting);
@@ -941,7 +1110,7 @@ void Engine::start_connect() {
 
 // Trust on first use: the first fingerprint seen for a server is remembered,
 // and a different one later is refused outright.
-bool Engine::check_server_identity() {
+bool Session::check_server_identity() {
     std::string seen;
     try {
         seen = b64(tls::peer_fingerprint(*stream_));
@@ -950,9 +1119,9 @@ bool Engine::check_server_identity() {
         drop_connection(std::string("secure connection failed: ") + e.what());
         return false;
     }
-    std::string pinned = vault_.meta("server_fp").value_or("");
+    std::string pinned = meta("server_fp").value_or("");
     if (pinned.empty()) {
-        vault_.set_meta("server_fp", seen);
+        set_meta("server_fp", seen);
         emit({{"event", "server_pinned"}, {"server", host_ + ":" + port_}, {"fingerprint", seen}});
     } else if (pinned != seen) {
         want_connection_ = false;
@@ -964,7 +1133,7 @@ bool Engine::check_server_identity() {
     return true;
 }
 
-void Engine::drop_connection(const std::string& reason) {
+void Session::drop_connection(const std::string& reason) {
     ++conn_gen_;  // orphans every callback of the old connection
     Conn previous = conn_;
     conn_ = Conn::Disconnected;  // before the handlers below run, so they cannot send
@@ -988,7 +1157,7 @@ void Engine::drop_connection(const std::string& reason) {
     if (want_connection_) schedule_reconnect();
 }
 
-void Engine::schedule_reconnect() {
+void Session::schedule_reconnect() {
     int delay = backoff_s_;
     backoff_s_ = std::min(backoff_s_ * 2, 30);
     reconnect_timer_.expires_after(std::chrono::seconds(delay));
@@ -997,7 +1166,7 @@ void Engine::schedule_reconnect() {
     });
 }
 
-void Engine::read_header(uint64_t gen) {
+void Session::read_header(uint64_t gen) {
     auto s = stream_;
     asio::async_read(*s, asio::buffer(hdr_), [this, gen, s](asio::error_code ec, size_t) {
         if (gen != conn_gen_) return;
@@ -1014,7 +1183,7 @@ void Engine::read_header(uint64_t gen) {
     });
 }
 
-void Engine::read_body(uint64_t gen, uint32_t n) {
+void Session::read_body(uint64_t gen, uint32_t n) {
     body_.resize(n);
     auto s = stream_;
     asio::async_read(*s, asio::buffer(body_), [this, gen, s](asio::error_code ec, size_t) {
@@ -1037,13 +1206,13 @@ void Engine::read_body(uint64_t gen, uint32_t n) {
     });
 }
 
-void Engine::send_frame(const wire::FrameT& f) {
+void Session::send_frame(const wire::FrameT& f) {
     if (conn_ == Conn::Disconnected || conn_ == Conn::Connecting) return;
     out_.push_back(encode_frame(f));
     if (!writing_) write_next(conn_gen_);
 }
 
-void Engine::write_next(uint64_t gen) {
+void Session::write_next(uint64_t gen) {
     if (out_.empty()) {
         writing_ = false;
         return;
@@ -1064,7 +1233,7 @@ void Engine::write_next(uint64_t gen) {
 
 // ---------------------------------------------------------------- protocol
 
-void Engine::on_frame(wire::FrameT& f) {
+void Session::on_frame(wire::FrameT& f) {
     if (f.request_id != 0) {
         auto it = pending_.find(f.request_id);
         if (it != pending_.end()) {
@@ -1088,14 +1257,14 @@ void Engine::on_frame(wire::FrameT& f) {
     }
 }
 
-void Engine::on_hello(const wire::HelloT& hello) {
+void Session::on_hello(const wire::HelloT& hello) {
     if (hello.protocol_version != kProtocolVersion) {
         want_connection_ = false;
         drop_connection("the server speaks a different protocol version");
         return;
     }
     challenge_auth_msg_ = signed_message(kCtxAuth, {hello.challenge, to_bytes(hello.server_name), tls_exporter_});
-    if (vault_.meta("registered") != "1") {
+    if (meta("registered") != "1") {
         send_register();
         return;
     }
@@ -1107,14 +1276,14 @@ void Engine::on_hello(const wire::HelloT& hello) {
         if (!e || e->code == kDisconnected) return;
         if (e->code == err::UnknownDevice) {
             // The server does not know us (for example its data was reset).
-            vault_.set_meta("prekeys_published", "0");
+            set_meta("prekeys_published", "0");
             send_register();
             return;
         }
         if (e->code == err::Kicked) {
             // Removed from the community. Do not walk straight back in: the
             // person has to choose to rejoin, which registers again.
-            vault_.set_meta("registered", "0");
+            set_meta("registered", "0");
             want_connection_ = false;
             drop_connection("you were removed from this server; connect again to rejoin");
             return;
@@ -1124,7 +1293,7 @@ void Engine::on_hello(const wire::HelloT& hello) {
     });
 }
 
-void Engine::send_register() {
+void Session::send_register() {
     const auto& id = vault_.identity();
     wire::RegisterT reg;
     reg.username = vault_.username();
@@ -1133,7 +1302,7 @@ void Engine::send_register() {
     reg.dh_key = to_bytes(id.dh.pk);
     reg.cert = id.cert;
     reg.signature = sign(id.device.sk, challenge_auth_msg_);
-    reg.invite = vault_.meta("invite").value_or("");
+    reg.invite = meta("invite").value_or("");
     request(std::move(reg), [this](wire::FrameT& f) {
         auto* e = f.body.AsError();
         if (!e || e->code == kDisconnected) return;
@@ -1142,10 +1311,10 @@ void Engine::send_register() {
     });
 }
 
-void Engine::on_auth_ok(const wire::AuthOkT& auth) {
+void Session::on_auth_ok(const wire::AuthOkT& auth) {
     is_admin_ = auth.is_admin;
     emit({{"event", "account"}, {"username", vault_.username()}, {"is_admin", is_admin_}});
-    vault_.set_meta("registered", "1");
+    set_meta("registered", "1");
     backoff_s_ = 1;
     set_conn(Conn::Syncing);
     publish_prekeys();
@@ -1153,7 +1322,7 @@ void Engine::on_auth_ok(const wire::AuthOkT& auth) {
         if (f.body.type == wire::FrameBody_Error) return;
         if (auto* list = f.body.AsRoomList()) reconcile_rooms(*list);
         wire::SyncT sync;
-        for (const auto& room : vault_.rooms()) {
+        for (const auto& room : rooms()) {
             auto cur = std::make_unique<wire::CursorT>();
             cur->room_id = room.room_id;
             cur->seq = room.acked_seq;
@@ -1167,7 +1336,7 @@ void Engine::on_auth_ok(const wire::AuthOkT& auth) {
     });
 }
 
-void Engine::on_server_info(const wire::ServerInfoT& info) {
+void Session::on_server_info(const wire::ServerInfoT& info) {
     server_name_ = info.name;
     server_owner_ = info.owner;
     my_permissions_ = info.my_permissions;
@@ -1182,14 +1351,14 @@ void Engine::on_server_info(const wire::ServerInfoT& info) {
 // The server's list is the truth about which rooms we are in: store what it
 // lists and drop what it does not (a channel we can no longer see, a group we
 // were removed from).
-void Engine::reconcile_rooms(const wire::RoomListT& list) {
+void Session::reconcile_rooms(const wire::RoomListT& list) {
     std::set<Bytes> current;
     for (const auto& room : list.rooms) {
         if (!room) continue;
         store_room(*room);
         current.insert(room->room_id);
     }
-    for (const auto& known : vault_.rooms()) {
+    for (const auto& known : rooms()) {
         if (current.count(known.room_id)) continue;
         {
             db::Transaction tx(vault_.db());
@@ -1200,8 +1369,8 @@ void Engine::reconcile_rooms(const wire::RoomListT& list) {
     }
 }
 
-void Engine::publish_prekeys() {
-    if (vault_.meta("prekeys_published") == "1") return;
+void Session::publish_prekeys() {
+    if (meta("prekeys_published") == "1") return;
     const auto& id = vault_.identity();
     wire::PublishPrekeysT pub;
     {
@@ -1221,11 +1390,11 @@ void Engine::publish_prekeys() {
         tx.commit();
     }
     request(std::move(pub), [this](wire::FrameT& f) {
-        if (f.body.type == wire::FrameBody_Ok) vault_.set_meta("prekeys_published", "1");
+        if (f.body.type == wire::FrameBody_Ok) set_meta("prekeys_published", "1");
     });
 }
 
-void Engine::store_room(const wire::RoomInfoT& info) {
+void Session::store_room(const wire::RoomInfoT& info) {
     if (info.room_id.size() != 16) return;
     std::vector<MemberRow> members;
     for (const auto& m : info.members)
@@ -1246,14 +1415,14 @@ void Engine::store_room(const wire::RoomInfoT& info) {
     }
     {
         db::Transaction tx(vault_.db());
-        vault_.upsert_room(info.room_id, members, info.kind, info.name);
+        vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         tx.commit();
     }
     if (auto room = vault_.room(info.room_id))
         emit({{"event", "room_updated"}, {"room", room_json(*room)}});
 }
 
-void Engine::on_room_event(const wire::RoomEventT& ev) {
+void Session::on_room_event(const wire::RoomEventT& ev) {
     if (ev.room_id.size() != 16 || ev.event_id.size() != 16 || ev.sender_user.size() != 32 ||
         ev.sender_device.size() != 32)
         return;
@@ -1275,7 +1444,7 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
         // The ratchet step, the consumed prekey, the stored event and the sync
         // cursor commit together or not at all.
         db::Transaction tx(vault_.db());
-        vault_.upsert_room(ev.room_id, {});
+        vault_.upsert_room(ev.room_id, {}, -1, "", id_);
         auto peer = vault_.load_sessions(ev.sender_user).value_or(crypto::PeerSessions{});
         bool same_device = peer.empty() || to_bytes(peer.device_id) == ev.sender_device;
         peer.user_id = to_key32(ev.sender_user);
@@ -1320,7 +1489,7 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
         row.content = "{}";
         row.status = "undecryptable";
         db::Transaction tx(vault_.db());
-        vault_.upsert_room(ev.room_id, {});
+        vault_.upsert_room(ev.room_id, {}, -1, "", id_);
         vault_.insert_event(row);
         vault_.advance_cursor(ev.room_id, ev.seq);
         tx.commit();
@@ -1333,7 +1502,7 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
     }
 }
 
-void Engine::fail_outbox(const OutboxRow& row, const std::string& message) {
+void Session::fail_outbox(const OutboxRow& row, const std::string& message) {
     {
         db::Transaction tx(vault_.db());
         vault_.set_event_status(row.room_id, row.event_id, "failed");
@@ -1349,18 +1518,25 @@ void Engine::fail_outbox(const OutboxRow& row, const std::string& message) {
 
 // Sends the oldest queued event. One send is in flight at a time, which keeps
 // events in order and makes retries simple.
-void Engine::pump_outbox() {
+void Session::pump_outbox() {
     if (conn_ != Conn::Live || sending_ || !vault_.unlocked()) return;
-    auto queue = vault_.outbox();
-    if (queue.empty()) return;
-    OutboxRow row = queue.front();
+    // The oldest queued event that belongs to this server.
+    std::optional<OutboxRow> next;
+    for (const auto& queued : vault_.outbox()) {
+        auto its_room = vault_.room(queued.room_id);
+        if (!its_room || !vault_.event(queued.room_id, queued.event_id)) {
+            vault_.outbox_remove(queued.local_id);  // its room or event is gone
+            continue;
+        }
+        if (its_room->server_id == id_) {
+            next = queued;
+            break;
+        }
+    }
+    if (!next) return;
+    OutboxRow row = *next;
     auto room = vault_.room(row.room_id);
     auto event = vault_.event(row.room_id, row.event_id);
-    if (!room || !event) {
-        vault_.outbox_remove(row.local_id);
-        pump_outbox();
-        return;
-    }
 
     // Every other member needs a session before anything can be encrypted.
     const Key32& me = vault_.identity().user.pk;

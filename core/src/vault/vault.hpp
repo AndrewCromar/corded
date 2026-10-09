@@ -36,6 +36,7 @@ struct RoomRow {
     std::string name;  // empty until someone names the room
     int kind = 2;      // 0 channel of the server, 1 direct message, 2 group
     uint64_t ttl_s = 0;  // if set, new messages here disappear after this many seconds
+    int64_t server_id = 1;  // which of the vault's servers this room belongs to
     std::string channel_name;  // for channels, the name the server gives
     uint64_t acked_seq = 0;
     std::vector<MemberRow> members;
@@ -95,10 +96,12 @@ public:
     bool is_verified(ByteView user_id);
     void set_verified(ByteView user_id, bool verified);
 
-    // kind < 0 leaves the stored kind and channel name alone.
+    // kind < 0 leaves the stored kind and channel name alone. server_id is
+    // recorded when the room is first stored.
     void upsert_room(ByteView room_id, const std::vector<MemberRow>& members, int kind = -1,
-                     const std::string& channel_name = "");
-    std::vector<RoomRow> rooms();
+                     const std::string& channel_name = "", int64_t server_id = 1);
+    // server_id 0 means the rooms of every server.
+    std::vector<RoomRow> rooms(int64_t server_id = 0);
     std::optional<RoomRow> room(ByteView room_id);
     void advance_cursor(ByteView room_id, uint64_t seq);
     void set_room_name(ByteView room_id, const std::string& name);

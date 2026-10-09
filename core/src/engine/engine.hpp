@@ -29,39 +29,50 @@ struct EngineConfig {
     bool fast_kdf = false;  // tests only
 };
 
-class Engine {
+class Engine;
+
+// Everything about one server this client belongs to: its connection, what the
+// server has said about the community, and the commands that act on it. All
+// sessions share the engine's thread, vault and event queue.
+class Session {
 public:
-    explicit Engine(EngineConfig config);
-    ~Engine();
-    Engine(const Engine&) = delete;
-    Engine& operator=(const Engine&) = delete;
-
-    bool vault_exists() const;
-
-    // All of these return a request id at once; the outcome arrives later as a
-    // `command_result` event carrying the same id.
-    uint64_t vault_create(Bytes passphrase, std::string username);
-    uint64_t vault_unlock(Bytes passphrase);
-    uint64_t command(std::string json_text);
-
-    // Blocks for up to timeout_ms. Returns nothing on timeout.
-    std::optional<std::string> next_event(int timeout_ms);
-
-private:
     using json = nlohmann::json;
-    using Handler = std::function<void(wire::FrameT&)>;
     enum class Conn { Disconnected, Connecting, Authenticating, Syncing, Live };
 
-    // events out
+    Session(Engine& engine, int64_t id, std::string host, std::string port);
+    ~Session();
+
+    int64_t id() const { return id_; }
+    const std::string& host() const { return host_; }
+    const std::string& port() const { return port_; }
+    Conn conn() const { return conn_; }
+    const char* conn_name() const;
+    bool is_admin() const { return is_admin_ && conn_ != Conn::Disconnected; }
+
+    void connect(uint64_t req, const json& cmd);  // applies invite, pin and starts
+    void resume();                                 // reconnect after unlock
+    void disconnect(const std::string& reason);
+    void run_command(uint64_t req, const std::string& name, const json& cmd);
+    void emit_rooms();
+    json rooms_json();
+    json server_json();
+    void pump_outbox();
+
+private:
+    using Handler = std::function<void(wire::FrameT&)>;
+
+    // forwarded to the engine
     void emit(json j);
     void ok(uint64_t req, json data = json::object());
     void fail(uint64_t req, const std::string& code, const std::string& message);
-    void emit_vault_state();
+    // settings kept per server in the vault
+    std::optional<std::string> meta(const std::string& key);
+    void set_meta(const std::string& key, const std::string& value);
+    std::vector<RoomRow> rooms();
+
     void set_conn(Conn c, const std::string& detail = "");
 
-    // commands in
-    void run_command(uint64_t req, const std::string& text);
-    void cmd_connect(uint64_t req, const json& cmd);
+    // commands
     void cmd_start_chat(uint64_t req, const json& cmd);
     void cmd_create_room(uint64_t req, const json& cmd);
     void lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>> names,
@@ -71,10 +82,7 @@ private:
     void apply_relation(const EventRow& e);
     bool can_moderate(const RoomRow& room, ByteView user_id);
     bool has_permission(const RoomRow& room, ByteView user_id, uint64_t permission);
-    void sweep_expired();
-    void schedule_sweep();
     void cmd_send_event(uint64_t req, const json& cmd);
-    void after_unlock();
 
     // network
     void start_connect();
@@ -103,7 +111,6 @@ private:
     void on_server_info(const wire::ServerInfoT& info);
     void reconcile_rooms(const wire::RoomListT& list);
     void community_command(uint64_t req, const std::string& name, const json& cmd);
-    json server_json();
     json member_json(const MemberRow& m);
     // Sends a request whose answer is either Ok or an error.
     template <typename T>
@@ -120,25 +127,21 @@ private:
     void publish_prekeys();
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
-    void pump_outbox();
     void fail_outbox(const OutboxRow& row, const std::string& message);
 
     json room_json(const RoomRow& room);
     json event_json(const EventRow& e);
 
-    EngineConfig config_;
-    asio::io_context io_;
-    asio::executor_work_guard<asio::io_context::executor_type> work_;
+    Engine& engine_;
+    int64_t id_;
+    asio::io_context& io_;
+    Vault& vault_;
+    asio::ssl::context& tls_ctx_;
+    std::atomic<uint64_t>& next_request_;
     asio::ip::tcp::resolver resolver_;
-    asio::ssl::context tls_ctx_;
     std::shared_ptr<tls::Stream> stream_;  // one per connection attempt
     asio::steady_timer reconnect_timer_;
-    asio::steady_timer sweep_timer_;
-    std::thread thread_;
 
-    Vault vault_;
-
-    // connection state (engine thread only)
     Conn conn_ = Conn::Disconnected;
     bool want_connection_ = false;
     uint64_t conn_gen_ = 0;
@@ -168,6 +171,60 @@ private:
     uint64_t my_permissions_ = 0;
     std::vector<RoleInfo> roles_;
     std::set<Bytes> bundle_requested_;
+};
+
+class Engine {
+public:
+    explicit Engine(EngineConfig config);
+    ~Engine();
+    Engine(const Engine&) = delete;
+    Engine& operator=(const Engine&) = delete;
+
+    bool vault_exists() const;
+
+    // All of these return a request id at once; the outcome arrives later as a
+    // `command_result` event carrying the same id.
+    uint64_t vault_create(Bytes passphrase, std::string username);
+    uint64_t vault_unlock(Bytes passphrase);
+    uint64_t command(std::string json_text);
+
+    // Blocks for up to timeout_ms. Returns nothing on timeout.
+    std::optional<std::string> next_event(int timeout_ms);
+
+private:
+    friend class Session;
+    using json = nlohmann::json;
+
+    // events out
+    void emit(json j);
+    void ok(uint64_t req, json data = json::object());
+    void fail(uint64_t req, const std::string& code, const std::string& message);
+    void emit_vault_state();
+
+    // commands in
+    void run_command(uint64_t req, const std::string& text);
+    void cmd_connect(uint64_t req, const json& cmd);
+    void after_unlock();
+    void close_sessions();
+    void sweep_expired();
+    void schedule_sweep();
+
+    // The servers this vault belongs to, kept as a small list in the vault.
+    json load_servers();
+    void save_servers(const json& list);
+    Session* session(int64_t id);
+    Session* session_for_room(ByteView room_id);
+    Session* default_session();
+
+    EngineConfig config_;
+    asio::io_context io_;
+    asio::executor_work_guard<asio::io_context::executor_type> work_;
+    asio::ssl::context tls_ctx_;
+    asio::steady_timer sweep_timer_;
+    std::thread thread_;
+
+    Vault vault_;
+    std::map<int64_t, std::unique_ptr<Session>> sessions_;
 
     // event queue (shared with caller threads)
     std::mutex mu_;

@@ -1054,3 +1054,112 @@ TEST_CASE("disappearing messages are erased everywhere when their time comes") {
             REQUIRE(e["data"]["content"].value("body", "") != "expired before bob returned");
     REQUIRE_FALSE(in_timeline(bob, "expired before bob returned"));
 }
+
+TEST_CASE("one client belongs to two servers at once") {
+    TempDir tmp;
+    int port_a = test_port(), port_b = test_port();
+    Server server_a(port_a, (tmp.path / "server-a").string(), "--name", "Alpha");
+    Server server_b(port_b, (tmp.path / "server-b").string(), "--name", "Beta");
+    auto connect_to = [](int port) { return json{{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}}; };
+    auto live_on = [](int64_t server) {
+        return [server](const json& e) {
+            return e["event"] == "connection_state" && e["state"] == "live" && e["server_id"] == server;
+        };
+    };
+
+    // Alice joins both; Bob is only on Alpha, Carol only on Beta.
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string());
+    REQUIRE(alice.create("alice")["ok"] == true);
+    json first = alice.cmd(connect_to(port_a));
+    int64_t alpha = first["data"]["server_id"];
+    alice.have("live on alpha", live_on(alpha));
+    json second = alice.cmd(connect_to(port_b));
+    int64_t beta = second["data"]["server_id"];
+    REQUIRE(alpha != beta);
+    alice.have("live on beta", live_on(beta));
+    REQUIRE(bob.create("bob")["ok"] == true);
+    REQUIRE(bob.cmd(connect_to(port_a))["ok"] == true);
+    bob.wait_live();
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd(connect_to(port_b))["ok"] == true);
+    carol.wait_live();
+
+    // Each server tells Alice about itself, and she owns both (first to register).
+    json servers = alice.cmd({{"cmd", "list_servers"}})["data"]["servers"];
+    REQUIRE(servers.size() == 2);
+    std::map<int64_t, std::string> names;
+    for (const auto& s : servers) {
+        names[s["server_id"].get<int64_t>()] = s["name"];
+        REQUIRE(s["is_owner"] == true);
+        REQUIRE(s["connection"] == "live");
+    }
+    REQUIRE(names[alpha] == "Alpha");
+    REQUIRE(names[beta] == "Beta");
+
+    // Each server has its own #general, and rooms say which server they are on.
+    std::string general_a, general_b;
+    auto find_generals = [&] {
+        json rooms = alice.cmd({{"cmd", "list_rooms"}})["data"]["rooms"];
+        for (const auto& r : rooms) {
+            if (r["title"] != "#general") continue;
+            if (r["server_id"] == alpha && r["members"].size() == 2) general_a = r["room_id"];
+            if (r["server_id"] == beta && r["members"].size() == 2) general_b = r["room_id"];
+        }
+        return !general_a.empty() && !general_b.empty();
+    };
+    for (int i = 0; i < 100 && !find_generals(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    REQUIRE(find_generals());
+    REQUIRE(general_a != general_b);
+    {
+        json only_beta = alice.cmd({{"cmd", "list_rooms"}, {"server_id", beta}})["data"]["rooms"];
+        for (const auto& r : only_beta) REQUIRE(r["server_id"] == beta);
+    }
+
+    // A message goes to the server its room is on, and nowhere else.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general_a}, {"body", "hello alpha"}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general_b}, {"body", "hello beta"}})["ok"] == true);
+    bob.wait_message("hello alpha");
+    carol.wait_message("hello beta");
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general_a}, {"body", "bob on alpha"}})["ok"] == true);
+    REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", general_b}, {"body", "carol on beta"}})["ok"] == true);
+    REQUIRE(alice.have_message("bob on alpha")["server_id"] == alpha);
+    REQUIRE(alice.have_message("carol on beta")["server_id"] == beta);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    for (const auto& e : bob.seen)
+        if (e["event"] == "event_received") REQUIRE(e["data"]["content"].value("body", "") != "hello beta");
+    REQUIRE_FALSE(tree_contains(tmp.path / "server-a", "carol"));
+
+    // Running one server does not touch the other.
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "beta-only"}, {"server_id", beta}})["ok"] == true);
+    carol.have("#beta-only", [](const json& e) { return e["event"] == "room_updated" && e["room"]["title"] == "#beta-only"; });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    for (const auto& e : bob.seen)
+        if (e["event"] == "room_updated") REQUIRE(e["room"]["title"] != "#beta-only");
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "x"}, {"server_id", 999}})["ok"] == false);
+
+    // Losing one server leaves the other working.
+    server_b.stop();
+    alice.wait("beta down", [&](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" && e["server_id"] == beta;
+    });
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general_a}, {"body", "alpha still works"}})["ok"] == true);
+    bob.wait_message("alpha still works");
+    server_b.start();
+
+    // After a restart the client is back on both, with both histories.
+    alice.close();
+    alice.open();
+    REQUIRE(alice.unlock()["ok"] == true);
+    alice.have("alpha again", live_on(alpha));
+    alice.have("beta again", live_on(beta));
+    json tl_a = alice.cmd({{"cmd", "fetch_timeline"}, {"room_id", general_a}})["data"]["events"];
+    json tl_b = alice.cmd({{"cmd", "fetch_timeline"}, {"room_id", general_b}})["data"]["events"];
+    auto has = [](const json& tl, const std::string& body) {
+        for (const auto& e : tl) if (e["content"].value("body", "") == body) return true;
+        return false;
+    };
+    REQUIRE(has(tl_a, "bob on alpha"));
+    REQUIRE_FALSE(has(tl_a, "carol on beta"));
+    REQUIRE(has(tl_b, "carol on beta"));
+}

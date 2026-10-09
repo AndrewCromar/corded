@@ -232,7 +232,8 @@ build on it.
 | **C6** | **Invites in the protocol.** Members with `CREATE_INVITE` create and revoke codes with use counts and expiry. An invite link carries the address, the TLS fingerprint and the code. | Server, engine, TUI | Tests: join by link; expired and used-up codes refused |
 | **C7** | **Moderation.** `MANAGE_MESSAGES` lets a moderator delete others' messages: the server drops the ciphertext and clients honour the redaction. Pins. | Server, engine, TUI | Tests: moderator deletion honoured, the same attempt without the permission ignored |
 | **C8** | **Sender keys for channels.** One encryption per message, keys shared over pairwise sessions, rotation when anyone loses access. | Core crypto, engine | Tests: membership-change matrix; a removed member's client cannot decrypt anything sent after removal |
-| **C9** | **History for newcomers**, according to the choice made for D-28. | Depends on the choice | Depends on the choice |
+| **C9** | **History for newcomers** (D-28): request, server switch, member switch, sharing through another member's client. | Server, engine, TUI | Tests: a newcomer receives earlier messages; nothing is shared when the server or the member has it off; disappearing and deleted messages are never shared |
+| **C11** | **Optional unencrypted servers** (D-32): a per-server switch, off by default, with a clear marker in every client. | Server, engine, TUI | Tests: default stays encrypted; with the switch on, a newcomer reads history from the server and every client shows the marker |
 | **C10** | **Polish that makes it feel like a community:** categories, channel topics, nicknames, role colours, `@role` mentions, unread and mention counts per channel, ownership transfer. | Server, engine, TUI | Per feature |
 
 ### Status
@@ -243,7 +244,7 @@ build on it.
 | C2 Channels | Built on `next` |
 | C3 Channel permission overrides | Built on `next` (private and read-only channels) |
 | C4 Client and TUI | Built on `next` (engine commands and TUI commands; no dedicated management screens) |
-| C5 Several servers per vault | Not started |
+| C5 Several servers per vault | Core built on `next`: one session per server sharing one identity and vault; rooms and events tagged with their server. The TUI still shows one server at a time and has no switcher yet |
 | C6 Invites | Built on `next`: codes with use limits and expiry, revocation, `corded://` links carrying address, key and code |
 | C7 Moderation | Deleting others' messages is built on `next`. Pins are not. The server does not yet drop the stored ciphertext of a deleted message |
 | C8 to C10 | Not started |
@@ -281,20 +282,53 @@ The stage structure stands. What moves:
 - **Feature roadmap.** Mentions gain roles; pins and moderation depend on permissions;
   everything else is unaffected.
 
-### A server-wide switch for encryption (proposed answer to D-28)
+### History for newcomers (D-28, decided)
 
-The owner's reply to the history question was that the server admin could simply disable
-it server side. Read as: the owner of a server may turn end-to-end encryption off for
-that whole server.
+The owner's decision: the new client requests old messages. If the server allows that, it
+gives them; where it has to get them from other clients, it asks those clients, which may
+have sharing turned off. So a newcomer may or may not get old messages, depending on
+whether the server or the other members have it disabled.
 
-If confirmed, the design would be:
+Because channel content is end-to-end encrypted, the server holds nothing it could hand
+over by itself, so in practice the messages always come from another member's client:
+
+```
+ newcomer                server                      an existing member
+    | -- HistoryRequest --> |                               |
+    |   (room, how many)    | checks: is sharing allowed    |
+    |                       | on this server? can the       |
+    |                       | newcomer view this room?      |
+    |                       | -- HistoryWanted -----------> |
+    |                       |    (room, who is asking)      | checks: has this member
+    |                       |                               | turned sharing off? is the
+    |                       |                               | asker really in the room?
+    | <====== old messages, encrypted to the newcomer only, sent through the server ======= |
+```
+
+- **Server switch.** `cordedd --no-history-sharing` refuses every request. Default: allowed.
+- **Member switch.** Each client has a "share history with newcomers" setting. Default: on.
+  A member who turns it off simply does not answer.
+- **Who answers.** The server passes the request to members who are online and can view
+  the room. If nobody is online, the newcomer gets nothing for now and may ask again.
+- **What is shared.** Recent messages in that room from the answering member's vault, up
+  to a limit. Disappearing messages and deleted messages are never shared.
+- **What the newcomer can and cannot trust.** The old messages arrive from the member who
+  shared them, not from their original authors, so the newcomer is trusting that member's
+  account of who said what. Clients mark such messages as shared history.
+- **Requests are not accepted blindly.** A client only accepts shared history it asked
+  for, for a room it is in, from someone who is a member of that room.
+
+### Turning end-to-end encryption off (D-32, decided in principle)
+
+The owner's decision: end-to-end encryption is always on by default but can be disabled
+if wanted. The shape proposed for it:
 
 - **A setting chosen by the owner**, `cordedd --no-e2ee` or a server setting changed by
   someone with `MANAGE_SERVER`. Default stays encrypted.
 - **With it off**, channel messages are sent to the server readable (still inside TLS),
-  the server stores them, and newcomers get the full history, search can work on the
-  server, and large channels cost nothing extra. Direct messages can stay end-to-end
-  encrypted regardless, since they have no newcomers.
+  the server stores them, and newcomers get the full history from the server directly,
+  search can work on the server, and large channels cost nothing extra. Direct messages
+  can stay end-to-end encrypted regardless.
 - **Every client shows it plainly**, per server: a visible "not end-to-end encrypted:
   the server's operator can read channels here" marker, at join time and in the header.
   A client must never present an unencrypted server as if it were private.
@@ -304,13 +338,12 @@ If confirmed, the design would be:
 - **What is lost** on such a server: the operator, anyone who compromises the server, and
   anyone with access to its disk or backups can read channel content.
 
-This would make C8 (sender keys) and C9 (history for newcomers) unnecessary on servers
-that choose it, and still needed on servers that stay encrypted.
+This is change-plan step C11. On servers that choose it, C8 (sender keys) is unnecessary.
 
 ## 8. Open questions for the owner
 
-1. **History for new members (D-28).** Start-at-join, history sharing, or allow some
-   channels to be unencrypted? The plan assumes start-at-join until told otherwise.
+1. ~~History for new members (D-28).~~ Decided: newcomers request history and get it if
+   the server and the members allow. See section 3.
 2. **Direct messages across servers.** The plan keeps them within one server. Is that
    acceptable?
 3. **Can the owner see who is in direct messages with whom?** The server necessarily

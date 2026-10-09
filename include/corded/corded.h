@@ -10,8 +10,14 @@
  *
  * Threading: every function may be called from any thread.
  *
+ * One vault can belong to several servers at once. Every event that concerns a
+ * server carries "server_id", and so does every room. A command about a room
+ * goes to that room's server by itself. A command that names no room may carry
+ * "server_id"; without it, the first server is meant.
+ *
  * Commands (JSON objects passed to corded_command, "cmd" names the command):
  *   {"cmd":"status"}
+ *   {"cmd":"list_servers"}
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}

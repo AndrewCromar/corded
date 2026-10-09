@@ -243,6 +243,11 @@ CREATE TABLE IF NOT EXISTS outbox (
         db_.exec("ALTER TABLE rooms ADD COLUMN ttl_s INTEGER NOT NULL DEFAULT 0");
     }
     db_.exec("CREATE INDEX IF NOT EXISTS events_expiry ON events(expires_at) WHERE expires_at IS NOT NULL");
+    try {
+        db_.exec("SELECT server_id FROM rooms LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE rooms ADD COLUMN server_id INTEGER NOT NULL DEFAULT 1");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -351,9 +356,9 @@ void Vault::set_verified(ByteView user_id, bool verified) {
 }
 
 void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members, int kind,
-                        const std::string& channel_name) {
-    auto st = db_.prepare("INSERT OR IGNORE INTO rooms (room_id) VALUES (?)");
-    st.bind(1, room_id).exec();
+                        const std::string& channel_name, int64_t server_id) {
+    auto st = db_.prepare("INSERT OR IGNORE INTO rooms (room_id, server_id) VALUES (?, ?)");
+    st.bind(1, room_id).bind(2, server_id).exec();
     if (kind >= 0) {
         auto up = db_.prepare("UPDATE rooms SET kind = ?, channel_name = ? WHERE room_id = ?");
         up.bind(1, kind).bind(2, channel_name).bind(3, room_id).exec();
@@ -374,7 +379,8 @@ void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members,
 std::optional<RoomRow> Vault::room(ByteView room_id) {
     RoomRow r;
     {
-        auto st = db_.prepare("SELECT acked_seq, name, kind, channel_name, ttl_s FROM rooms WHERE room_id = ?");
+        auto st = db_.prepare("SELECT acked_seq, name, kind, channel_name, ttl_s, server_id FROM rooms "
+                              "WHERE room_id = ?");
         st.bind(1, room_id);
         if (!st.step()) return std::nullopt;
         r.room_id = to_bytes(room_id);
@@ -383,6 +389,7 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
         r.kind = static_cast<int>(st.i64(2));
         r.channel_name = st.text(3);
         r.ttl_s = st.u64(4);
+        r.server_id = st.i64(5);
     }
     auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles FROM members "
                           "WHERE room_id = ? ORDER BY username");
@@ -401,10 +408,11 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
     return r;
 }
 
-std::vector<RoomRow> Vault::rooms() {
+std::vector<RoomRow> Vault::rooms(int64_t server_id) {
     std::vector<Bytes> ids;
     {
-        auto st = db_.prepare("SELECT room_id FROM rooms");
+        auto st = db_.prepare("SELECT room_id FROM rooms WHERE ?1 = 0 OR server_id = ?1");
+        st.bind(1, server_id);
         while (st.step()) ids.push_back(st.blob(0));
     }
     std::vector<RoomRow> out;
