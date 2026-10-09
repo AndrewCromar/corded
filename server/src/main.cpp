@@ -1,8 +1,7 @@
 // cordedd: the Corded relay server. It authenticates devices, hands out prekey
 // bundles, tracks room membership, and stores and forwards ciphertext.
 //
-// Prototype limits: open registration, one device per user, a single I/O
-// thread, no rate limiting.
+// Prototype limits: one device per user, a single I/O thread.
 #include "storage.hpp"
 
 #include "corded/common/sig.hpp"
@@ -22,6 +21,18 @@ namespace corded::server {
 using asio::ip::tcp;
 
 class Server;
+
+struct Options {
+    std::string host = "0.0.0.0", data_dir = "./cordedd-data", name = "corded";
+    uint16_t port = 7443;
+    // Who may create an account: anyone, only people with the invite code, or nobody.
+    enum class Registration { Open, Invite, Closed } registration = Registration::Open;
+    std::string invite_code;
+    // Each connection may send this many frames per second, with short bursts
+    // above it. Faster senders are slowed down, not disconnected.
+    double frames_per_second = 100, frame_burst = 200;
+    int max_connections_per_address = 20;
+};
 
 class Conn : public std::enable_shared_from_this<Conn> {
 public:
@@ -51,6 +62,9 @@ public:
 
     bool authed() const { return !device_id.empty(); }
 
+    std::string address;
+    double tokens = 0;
+    std::chrono::steady_clock::time_point refilled = std::chrono::steady_clock::now();
     Bytes challenge;
     Bytes tls_exporter;  // binds the sign-in signature to this TLS session
     Bytes device_id, user_id;
@@ -86,13 +100,16 @@ private:
 
 class Server {
 public:
-    Server(asio::io_context& io, const std::string& host, uint16_t port, const std::string& data_dir,
-           std::string name)
+    Server(asio::io_context& io, Options options)
         : io_(io),
           acceptor_(io),
           tls_(asio::ssl::context::tls_server),
-          storage_(data_dir + "/cordedd.db"),
-          name_(std::move(name)) {
+          storage_(options.data_dir + "/cordedd.db"),
+          name_(options.name),
+          options_(std::move(options)) {
+        const std::string& host = options_.host;
+        const std::string& data_dir = options_.data_dir;
+        uint16_t port = options_.port;
         // The server's identity is a self-signed certificate made on first
         // start. Clients pin its fingerprint.
         std::string cert = data_dir + "/tls-cert.pem", key = data_dir + "/tls-key.pem";
@@ -111,6 +128,9 @@ public:
         acceptor_.listen();
         spdlog::info("cordedd listening on {}:{}", host, acceptor_.local_endpoint().port());
         spdlog::info("server fingerprint: {}", fingerprint_);
+        spdlog::info("registration: {}", options_.registration == Options::Registration::Open     ? "open to anyone"
+                                         : options_.registration == Options::Registration::Invite ? "invite code required"
+                                                                                                   : "closed");
     }
 
     asio::awaitable<void> accept_loop() {
@@ -124,7 +144,15 @@ public:
                 continue;
             }
             sock.set_option(tcp::no_delay(true), ec);
+            std::string address = sock.remote_endpoint(ec).address().to_string();
+            if (per_address_[address] >= options_.max_connections_per_address) {
+                spdlog::warn("too many connections from {}", address);
+                continue;  // the socket closes as it goes out of scope
+            }
+            ++per_address_[address];
             auto conn = std::make_shared<Conn>(std::move(sock), tls_, *this);
+            conn->address = address;
+            conn->tokens = options_.frame_burst;
             asio::co_spawn(io_, [conn] { return conn->run(); }, asio::detached);
         }
     }
@@ -137,6 +165,12 @@ public:
     }
 
     const std::string& name() const { return name_; }
+    const Options& options() const { return options_; }
+
+    void closed(Conn& c) {
+        auto it = per_address_.find(c.address);
+        if (it != per_address_.end() && --it->second <= 0) per_address_.erase(it);
+    }
 
     void disconnected(Conn& c) {
         if (!c.authed()) return;
@@ -210,6 +244,22 @@ private:
             !valid_username(r.username)) {
             c->fail(rid, err::Malformed, "bad registration (names are a-z, 0-9, _ and -)");
             return;
+        }
+        // People who already have an account may always come back; only new
+        // accounts are subject to the registration policy.
+        if (!storage_.find_device(r.device_id)) {
+            using Reg = Options::Registration;
+            bool allowed = options_.registration == Reg::Open;
+            if (options_.registration == Reg::Invite)
+                allowed = r.invite.size() == options_.invite_code.size() &&
+                          sodium_memcmp(r.invite.data(), options_.invite_code.data(), r.invite.size()) == 0;
+            if (!allowed) {
+                c->fail(rid, err::RegistrationClosed,
+                        options_.registration == Reg::Invite
+                            ? "this server needs a valid invite code to register"
+                            : "this server is not accepting new accounts");
+                return;
+            }
         }
         auto cert_msg = signed_message(kCtxDeviceCert, {r.device_id, r.dh_key});
         auto auth_msg = signed_message(kCtxAuth, {c->challenge, to_bytes(name_), c->tls_exporter});
@@ -379,7 +429,9 @@ private:
     asio::ssl::context tls_;
     Storage storage_;
     std::string name_;
+    Options options_;
     std::string fingerprint_;
+    std::map<std::string, int> per_address_;
     std::map<Bytes, std::weak_ptr<Conn>> online_;
 };
 
@@ -411,20 +463,36 @@ asio::awaitable<void> Conn::run() {
                 close_after_flush_ = true;
                 break;
             }
+            // Rate limit: refill the bucket, and if it is empty wait until it is not.
+            const Options& opt = server_.options();
+            auto now = std::chrono::steady_clock::now();
+            tokens = std::min(opt.frame_burst,
+                              tokens + std::chrono::duration<double>(now - refilled).count() * opt.frames_per_second);
+            refilled = now;
+            if (tokens < 1.0) {
+                asio::steady_timer pause(co_await asio::this_coro::executor);
+                pause.expires_after(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>((1.0 - tokens) / opt.frames_per_second)));
+                co_await pause.async_wait(asio::use_awaitable);
+                tokens = 1.0;
+                refilled = std::chrono::steady_clock::now();
+            }
+            tokens -= 1.0;
             server_.handle(self, *frame);
         }
     } catch (const std::exception&) {
         // Connection dropped; nothing to report.
     }
     server_.disconnected(*this);
+    server_.closed(*this);
     if (!close_after_flush_ || !writing_) close();
 }
 
 }  // namespace corded::server
 
 int main(int argc, char** argv) {
-    std::string host = "0.0.0.0", data_dir = "./cordedd-data", name = "corded";
-    uint16_t port = 7443;
+    corded::server::Options opt;
+    using Reg = corded::server::Options::Registration;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -434,23 +502,33 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
-        if (a == "--port") port = static_cast<uint16_t>(std::stoi(next()));
-        else if (a == "--host") host = next();
-        else if (a == "--data") data_dir = next();
-        else if (a == "--name") name = next();
+        if (a == "--port") opt.port = static_cast<uint16_t>(std::stoi(next()));
+        else if (a == "--host") opt.host = next();
+        else if (a == "--data") opt.data_dir = next();
+        else if (a == "--name") opt.name = next();
+        else if (a == "--invite-code") {
+            opt.invite_code = next();
+            opt.registration = Reg::Invite;
+        } else if (a == "--closed") opt.registration = Reg::Closed;
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
         else {
             std::fprintf(stderr,
-                         "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME] "
-                         "[--verbose]\n");
+                         "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME]\n"
+                         "               [--invite-code CODE | --closed] [--verbose]\n\n"
+                         "  --invite-code CODE  only people who give this code can create an account\n"
+                         "  --closed            nobody can create an account; existing users still sign in\n");
             return a == "--help" ? 0 : 2;
         }
     }
+    if (opt.registration == Reg::Invite && opt.invite_code.size() < 8) {
+        std::fprintf(stderr, "the invite code must be at least 8 characters\n");
+        return 2;
+    }
     try {
         if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
-        std::filesystem::create_directories(data_dir);
+        std::filesystem::create_directories(opt.data_dir);
         asio::io_context io(1);
-        corded::server::Server server(io, host, port, data_dir, name);
+        corded::server::Server server(io, opt);
         asio::signal_set signals(io, SIGINT, SIGTERM);
         signals.async_wait([&](asio::error_code, int) {
             spdlog::info("shutting down");

@@ -92,6 +92,11 @@ and start typing. Things to try:
 | `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
 
+By default anyone who can reach the server can create an account. To restrict that,
+start it with `--invite-code <code>` (at least 8 characters) and give the code to the
+people you want; they pass `--invite <code>` to `corded-tui` the first time. `--closed`
+stops new accounts entirely while existing users keep working.
+
 To talk between two computers, run the server on one, and point the other's `--server`
 at that machine's address. Quit a client and start it again with the same `--vault` to
 see it unlock, restore history and pick up anything it missed.
@@ -117,6 +122,8 @@ It does:
 - An encrypted connection to the server: TLS 1.3, with the server's self-signed key
   pinned by the client, and sign-in bound to that TLS session.
 - Editing and deleting your own messages.
+- Server protections: invite-only or closed registration, a per-connection rate limit
+  that slows down floods, and a cap on connections per address.
 - Safety numbers, so two people can check that nobody is sitting between them.
 - Typed events with relations instead of plain strings. Replies and reactions already use
   this, and it is what threads, edits and the rest will be built on.
@@ -129,8 +136,6 @@ It does not, yet:
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
 - More than one device per user, or more than one server per vault.
-- Rate limiting, invites, or closed registration on the server: anyone who can reach it
-  can register.
 - Run anywhere but Linux.
 
 ## Where to look

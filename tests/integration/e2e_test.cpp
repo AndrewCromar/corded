@@ -55,14 +55,20 @@ struct Server {
     pid_t pid = -1;
     int port;
     std::string data;
-    Server(int p, std::string d) : port(p), data(std::move(d)) { start(); }
+    std::string extra_flag, extra_value;
+    Server(int p, std::string d, std::string flag = "", std::string value = "")
+        : port(p), data(std::move(d)), extra_flag(std::move(flag)), extra_value(std::move(value)) {
+        start();
+    }
     ~Server() { stop(); }
     void start() {
         pid = fork();
         if (pid == 0) {
             std::string port_s = std::to_string(port);
             execl(CORDEDD_PATH, "cordedd", "--host", "127.0.0.1", "--port", port_s.c_str(), "--data",
-                  data.c_str(), static_cast<char*>(nullptr));
+                  data.c_str(), extra_flag.empty() ? static_cast<char*>(nullptr) : extra_flag.c_str(),
+                  extra_value.empty() ? static_cast<char*>(nullptr) : extra_value.c_str(),
+                  static_cast<char*>(nullptr));
             _exit(127);
         }
         for (int i = 0; i < 100 && !port_open(port); ++i)
@@ -516,4 +522,40 @@ TEST_CASE("three people share a group room") {
 
     REQUIRE_FALSE(tree_contains(tmp.path / "server", "hello everyone"));
     REQUIRE_FALSE(tree_contains(tmp.path / "server", "the secret plan"));
+}
+
+TEST_CASE("an invite-only server turns away people without the code") {
+    TempDir tmp;
+    int port = test_port();
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    auto refused = [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("registration failed") != std::string::npos;
+    };
+    Client member((tmp.path / "member").string());
+    REQUIRE(member.create("member")["ok"] == true);
+    {
+        Server server(port, (tmp.path / "server").string(), "--invite-code", "let-me-in-please");
+        Client stranger((tmp.path / "stranger").string());
+        REQUIRE(stranger.create("stranger")["ok"] == true);
+        REQUIRE(stranger.cmd(connect)["ok"] == true);
+        REQUIRE(stranger.wait("refusal", refused)["detail"].get<std::string>().find("invite") != std::string::npos);
+
+        json wrong = connect;
+        wrong["invite"] = "let-me-in-pleasf";
+        REQUIRE(stranger.cmd(wrong)["ok"] == true);
+        stranger.wait("refusal", refused);
+
+        json right = connect;
+        right["invite"] = "let-me-in-please";
+        REQUIRE(member.cmd(right)["ok"] == true);
+        member.wait_live();
+    }
+    // Closed to new accounts, but the existing member still gets in.
+    Server closed(port, (tmp.path / "server").string(), "--closed");
+    member.wait_live();
+    Client late((tmp.path / "late").string());
+    REQUIRE(late.create("late")["ok"] == true);
+    REQUIRE(late.cmd(connect)["ok"] == true);
+    late.wait("refusal", refused);
 }

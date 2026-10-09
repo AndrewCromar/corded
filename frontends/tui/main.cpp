@@ -54,11 +54,13 @@ std::string snippet(const std::string& s, size_t n = 40) {
 
 class TuiApp {
 public:
-    TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint)
+    TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint,
+           std::string invite)
         : vault_dir_(std::move(vault_dir)),
           server_(std::move(server)),
           name_(std::move(name)),
-          fingerprint_(std::move(fingerprint)) {}
+          fingerprint_(std::move(fingerprint)),
+          invite_(std::move(invite)) {}
 
     int run() {
         corded_config cfg{};
@@ -272,6 +274,7 @@ private:
         int port = colon == std::string::npos ? 7443 : std::atoi(server.substr(colon + 1).c_str());
         json cmd = {{"cmd", "connect"}, {"host", host}, {"port", port}};
         if (!fingerprint_.empty()) cmd["fingerprint"] = fingerprint_;
+        if (!invite_.empty()) cmd["invite"] = invite_;
         command(cmd);
     }
 
@@ -556,7 +559,7 @@ private:
         if (creating_ && !name_.empty()) pass_input_->TakeFocus();
     }
 
-    std::string vault_dir_, server_, name_, fingerprint_;
+    std::string vault_dir_, server_, name_, fingerprint_, invite_;
     std::string server_fp_, pin_notice_;
     corded_engine* engine_ = nullptr;
     ScreenInteractive screen_ = ScreenInteractive::Fullscreen();
@@ -582,7 +585,7 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string vault, server, name, fingerprint;
+    std::string vault, server, name, fingerprint, invite;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -590,14 +593,16 @@ int main(int argc, char** argv) {
         else if (a == "--server") server = next();
         else if (a == "--name") name = next();
         else if (a == "--fingerprint") fingerprint = next();
+        else if (a == "--invite") invite = next();
         else {
             std::printf("usage: corded-tui [--vault DIR] [--server HOST:PORT] [--name USERNAME]\n"
-                        "                  [--fingerprint KEY]\n\n"
+                        "                  [--fingerprint KEY] [--invite CODE]\n\n"
                         "  --vault        where this identity is stored (default: ~/.corded/default)\n"
                         "  --server       server to connect to, for example localhost:7443\n"
                         "  --name         username to register when creating a new vault\n"
                         "  --fingerprint  the server's key, as printed when cordedd starts; without\n"
-                        "                 it the key seen on first connection is trusted\n");
+                        "                 it the key seen on first connection is trusted\n"
+                        "  --invite       invite code, if the server needs one to create an account\n");
             return a == "--help" || a == "-h" ? 0 : 2;
         }
     }
@@ -605,5 +610,5 @@ int main(int argc, char** argv) {
         const char* home = std::getenv("HOME");
         vault = std::string(home ? home : ".") + "/.corded/default";
     }
-    return TuiApp(vault, server, name, fingerprint).run();
+    return TuiApp(vault, server, name, fingerprint, invite).run();
 }

@@ -12,7 +12,8 @@
  *
  * Commands (JSON objects passed to corded_command, "cmd" names the command):
  *   {"cmd":"status"}
- *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>"}
+ *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
+ *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"disconnect"}
  *   {"cmd":"lock"}
  *   {"cmd":"list_rooms"}

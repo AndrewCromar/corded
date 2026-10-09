@@ -363,6 +363,7 @@ void Engine::cmd_connect(uint64_t req, const json& cmd) {
     }
     // An explicit fingerprint (from an invite) must match. "reset_pin" accepts
     // whatever identity the server presents next; use it only on purpose.
+    if (cmd.contains("invite")) vault_.set_meta("invite", cmd.at("invite").get<std::string>());
     if (cmd.contains("fingerprint")) vault_.set_meta("server_fp", cmd.at("fingerprint").get<std::string>());
     else if (cmd.value("reset_pin", false)) vault_.set_meta("server_fp", "");
     host_ = host;
@@ -739,6 +740,7 @@ void Engine::send_register() {
     reg.dh_key = to_bytes(id.dh.pk);
     reg.cert = id.cert;
     reg.signature = sign(id.device.sk, challenge_auth_msg_);
+    reg.invite = vault_.meta("invite").value_or("");
     request(std::move(reg), [this](wire::FrameT& f) {
         auto* e = f.body.AsError();
         if (!e || e->code == kDisconnected) return;

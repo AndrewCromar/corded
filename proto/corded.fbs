@@ -16,6 +16,7 @@ table Register {
   dh_key: [ubyte];       // X25519 device DH public key
   cert: [ubyte];         // user identity signature over (device_id, dh_key)
   signature: [ubyte];    // device signature over the challenge
+  invite: string;        // required when the server is invite-only
 }
 table Authenticate { device_id: [ubyte]; signature: [ubyte]; }
 table AuthOk { user_id: [ubyte]; username: string; server_ts: uint64; }
