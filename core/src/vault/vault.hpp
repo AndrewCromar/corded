@@ -26,6 +26,7 @@ public:
 struct MemberRow {
     Bytes user_id;
     std::string username;
+    bool is_admin = false;  // a server administrator
 };
 
 struct RoomRow {

@@ -222,6 +222,11 @@ CREATE TABLE IF NOT EXISTS outbox (
     } catch (const db::Error&) {
         db_.exec("ALTER TABLE events ADD COLUMN edited_content TEXT NOT NULL DEFAULT ''");
     }
+    try {
+        db_.exec("SELECT is_admin FROM members LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE members ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -336,9 +341,9 @@ void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members)
     auto del = db_.prepare("DELETE FROM members WHERE room_id = ?");
     del.bind(1, room_id).exec();
     for (const auto& m : members) {
-        auto ins = db_.prepare("INSERT OR REPLACE INTO members (room_id, user_id, username) "
-                               "VALUES (?,?,?)");
-        ins.bind(1, room_id).bind(2, m.user_id).bind(3, m.username).exec();
+        auto ins = db_.prepare("INSERT OR REPLACE INTO members (room_id, user_id, username, is_admin) "
+                               "VALUES (?,?,?,?)");
+        ins.bind(1, room_id).bind(2, m.user_id).bind(3, m.username).bind(4, m.is_admin ? 1 : 0).exec();
     }
 }
 
@@ -352,9 +357,10 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
         r.acked_seq = st.u64(0);
         r.name = st.text(1);
     }
-    auto st = db_.prepare("SELECT user_id, username FROM members WHERE room_id = ? ORDER BY username");
+    auto st = db_.prepare("SELECT user_id, username, is_admin FROM members WHERE room_id = ? "
+                          "ORDER BY username");
     st.bind(1, room_id);
-    while (st.step()) r.members.push_back({st.blob(0), st.text(1)});
+    while (st.step()) r.members.push_back({st.blob(0), st.text(1), st.i64(2) != 0});
     return r;
 }
 

@@ -144,6 +144,7 @@ Engine::json Engine::room_json(const RoomRow& room) {
         members.push_back({{"user_id", b64(m.user_id)},
                            {"username", m.username},
                            {"me", me},
+                           {"is_admin", m.is_admin},
                            {"verified", !me && vault_.is_verified(m.user_id)}});
         if (!me) title += (title.empty() ? "" : ", ") + m.username;
     }
@@ -252,7 +253,8 @@ void Engine::run_command(uint64_t req, const std::string& text) {
 
         if (name == "status") {
             json data = {{"vault", vault_.unlocked() ? "unlocked" : vault_exists() ? "locked" : "missing"},
-                         {"connection", conn_name(static_cast<int>(conn_))}};
+                         {"connection", conn_name(static_cast<int>(conn_))},
+                         {"is_admin", is_admin_ && conn_ != Conn::Disconnected}};
             if (vault_.unlocked()) {
                 data["user_id"] = b64(vault_.identity().user.pk);
                 data["username"] = vault_.username();
@@ -343,6 +345,50 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                                                      {"content", {{"action", "added"}, {"username", username}}}});
                     ok(req);
                 });
+            });
+        } else if (name == "kick_member") {
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            std::string username = cmd.at("username").get<std::string>();
+            admin_action(req, username, [this, req, room_id, username](const Bytes& user_id) {
+                wire::KickMemberT kick;
+                kick.room_id = room_id;
+                kick.user_id = user_id;
+                request(std::move(kick), [this, req, room_id, username](wire::FrameT& r) {
+                    if (r.body.type != wire::FrameBody_RoomInfo) {
+                        auto* e = r.body.AsError();
+                        fail(req, "forbidden", e ? e->message : "could not remove that person");
+                        return;
+                    }
+                    store_room(*r.body.AsRoomInfo());
+                    cmd_send_event(next_request_++, {{"room_id", b64(room_id)},
+                                                     {"type", "m.room.member"},
+                                                     {"content", {{"action", "removed"}, {"username", username}}}});
+                    ok(req);
+                });
+            });
+        } else if (name == "ban_user" || name == "set_admin") {
+            std::string username = cmd.at("username").get<std::string>();
+            bool flag = cmd.value(name == "ban_user" ? "banned" : "admin", true);
+            admin_action(req, username, [this, req, name, flag](const Bytes& user_id) {
+                auto done = [this, req](wire::FrameT& r) {
+                    if (r.body.type == wire::FrameBody_Ok) {
+                        ok(req);
+                        return;
+                    }
+                    auto* e = r.body.AsError();
+                    fail(req, "forbidden", e ? e->message : "the server refused");
+                };
+                if (name == "ban_user") {
+                    wire::BanUserT ban;
+                    ban.user_id = user_id;
+                    ban.banned = flag;
+                    request(std::move(ban), done);
+                } else {
+                    wire::SetAdminT set;
+                    set.user_id = user_id;
+                    set.admin = flag;
+                    request(std::move(set), done);
+                }
             });
         } else if (name == "leave_room") {
             if (conn_ != Conn::Live) {
@@ -452,6 +498,25 @@ void Engine::cmd_start_chat(uint64_t req, const json& cmd) {
     auto names = std::make_shared<std::vector<std::string>>();
     names->push_back(cmd.at("username").get<std::string>());
     lookup_next(req, names, std::make_shared<wire::CreateRoomT>(), "");
+}
+
+// Shared start of the administrator commands: find the person by username.
+// The server decides whether we are allowed; this only resolves the name.
+void Engine::admin_action(uint64_t req, const std::string& username,
+                          std::function<void(const Bytes& user_id)> then) {
+    if (conn_ != Conn::Live) {
+        fail(req, "not_connected", "not connected to a server");
+        return;
+    }
+    wire::LookupUserT q;
+    q.username = username;
+    request(std::move(q), [this, req, username, then = std::move(then)](wire::FrameT& f) {
+        if (f.body.type != wire::FrameBody_UserInfo) {
+            fail(req, "not_found", "no user called " + username);
+            return;
+        }
+        then(f.body.AsUserInfo()->user_id);
+    });
 }
 
 // A room with any number of people. Two-person rooms are unique per pair;
@@ -769,7 +834,7 @@ void Engine::on_frame(wire::FrameT& f) {
     }
     switch (f.body.type) {
         case wire::FrameBody_Hello: on_hello(*f.body.AsHello()); break;
-        case wire::FrameBody_AuthOk: on_auth_ok(); break;
+        case wire::FrameBody_AuthOk: on_auth_ok(*f.body.AsAuthOk()); break;
         case wire::FrameBody_RoomInfo: store_room(*f.body.AsRoomInfo()); break;
         case wire::FrameBody_RoomEvent: on_room_event(*f.body.AsRoomEvent()); break;
         case wire::FrameBody_Error:
@@ -825,7 +890,9 @@ void Engine::send_register() {
     });
 }
 
-void Engine::on_auth_ok() {
+void Engine::on_auth_ok(const wire::AuthOkT& auth) {
+    is_admin_ = auth.is_admin;
+    emit({{"event", "account"}, {"username", vault_.username()}, {"is_admin", is_admin_}});
     vault_.set_meta("registered", "1");
     backoff_s_ = 1;
     set_conn(Conn::Syncing);
@@ -892,7 +959,20 @@ void Engine::store_room(const wire::RoomInfoT& info) {
     if (info.room_id.size() != 16) return;
     std::vector<MemberRow> members;
     for (const auto& m : info.members)
-        if (m && m->user_id.size() == 32) members.push_back({m->user_id, m->username});
+        if (m && m->user_id.size() == 32) members.push_back({m->user_id, m->username, m->is_admin});
+    // A member list without us means we were removed from the room.
+    const Key32& me = vault_.identity().user.pk;
+    bool still_in = false;
+    for (const auto& m : members)
+        if (std::equal(m.user_id.begin(), m.user_id.end(), me.begin())) still_in = true;
+    if (!still_in) {
+        if (!vault_.room(info.room_id)) return;
+        db::Transaction tx(vault_.db());
+        vault_.delete_room(info.room_id);
+        tx.commit();
+        emit({{"event", "room_removed"}, {"room_id", b64(info.room_id)}, {"reason", "removed"}});
+        return;
+    }
     {
         db::Transaction tx(vault_.db());
         vault_.upsert_room(info.room_id, members);

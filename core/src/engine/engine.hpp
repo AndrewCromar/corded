@@ -92,7 +92,9 @@ private:
     void on_frame(wire::FrameT& f);
     void on_hello(const wire::HelloT& hello);
     void send_register();
-    void on_auth_ok();
+    void on_auth_ok(const wire::AuthOkT& ok);
+    void admin_action(uint64_t req, const std::string& username,
+                      std::function<void(const Bytes& user_id)> then);
     void publish_prekeys();
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
@@ -129,6 +131,7 @@ private:
     uint32_t next_wire_id_ = 1;
     std::map<uint32_t, Handler> pending_;
     bool sending_ = false;
+    bool is_admin_ = false;  // what the server said at sign-in
     std::set<Bytes> bundle_requested_;
 
     // event queue (shared with caller threads)

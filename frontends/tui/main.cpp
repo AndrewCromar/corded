@@ -129,7 +129,10 @@ private:
                 room.loaded = true;
                 command({{"cmd", "fetch_timeline"}, {"room_id", room.id}, {"limit", 500}});
             }
+        } else if (kind == "account") {
+            is_admin_ = ev.value("is_admin", false);
         } else if (kind == "room_removed") {
+            if (ev.value("reason", "") == "removed") notice_ = "you were removed from a chat";
             std::string id = ev.value("room_id", "");
             rooms_.erase(std::remove_if(rooms_.begin(), rooms_.end(), [&](const Room& r) { return r.id == id; }),
                          rooms_.end());
@@ -242,7 +245,9 @@ private:
         else if (type == "m.room.member")
             m.body = d["content"].value("action", "") == "left"
                          ? "left the chat"
-                         : "added " + d["content"].value("username", "someone") + " to the chat";
+                         : d["content"].value("action", "") == "removed"
+                               ? "removed " + d["content"].value("username", "someone") + " from the chat"
+                               : "added " + d["content"].value("username", "someone") + " to the chat";
         else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
@@ -366,6 +371,12 @@ private:
                 json c = {{"cmd", "create_room"}, {"usernames", names}};
                 if (!room_name.empty()) c["name"] = room_name;
                 chat_request_ = command(c);
+            } else if (cmd == "/kick" && !arg.empty() && room) {
+                command({{"cmd", "kick_member"}, {"room_id", room->id}, {"username", arg}});
+            } else if ((cmd == "/ban" || cmd == "/unban") && !arg.empty()) {
+                command({{"cmd", "ban_user"}, {"username", arg}, {"banned", cmd == "/ban"}});
+            } else if ((cmd == "/admin" || cmd == "/unadmin") && !arg.empty()) {
+                command({{"cmd", "set_admin"}, {"username", arg}, {"admin", cmd == "/admin"}});
             } else if (cmd == "/add" && !arg.empty() && room) {
                 command({{"cmd", "add_member"}, {"room_id", room->id}, {"username", arg}});
             } else if (cmd == "/leave" && room) {
@@ -515,6 +526,7 @@ private:
         Element header = hbox({
             text(" corded ") | bold | inverted,
             text(" " + username_ + " "),
+            text(is_admin_ ? "admin " : "") | color(Color::Magenta),
             text(connection_.empty() ? "offline" : connection_) | color(conn_color),
             text(server_shown_.empty() ? "" : "  " + server_shown_) | dim,
             text(server_fp_.empty() || connection_ != "live" ? "" : "  TLS, key " + server_fp_.substr(0, 8)) | dim,
@@ -546,6 +558,8 @@ private:
                               text("/edit <text>       change your last message        /delete  remove it"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
+                              text(is_admin_ ? "admin: /kick <user>  /ban <user>  /unban <user>  /admin <user>  /unadmin <user>"
+                                             : "") | color(Color::Magenta),
                           }) |
                           border);
         if (show_verify_) {
@@ -618,7 +632,7 @@ private:
     std::vector<Room> rooms_;
     std::vector<std::string> titles_;
     int selected_ = 0;
-    bool show_help_ = false, show_verify_ = false;
+    bool show_help_ = false, show_verify_ = false, is_admin_ = false;
     json verify_list_ = json::array();
 
     Component root_, name_input_, pass_input_, pass2_input_, input_, room_menu_;

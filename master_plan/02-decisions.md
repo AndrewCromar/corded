@@ -214,6 +214,7 @@ properly when its owning stage is reached.
 | D-07 transport security | TLS 1.3 with a self-signed server certificate, pinned by clients on first use or from a fingerprint given up front; sign-in signature covers a TLS exporter value. Tag `prototype-v0` predates this and uses plain TCP | CA-validated certificates and invite links carrying the fingerprint are not built yet | Stage 2 |
 | D-16 group rooms | Groups work, but by encrypting each message separately for every member (pairwise Double Ratchet) instead of sender keys. Membership is fixed at creation. Tag `prototype-v0` has two-person rooms only | Stronger per-message security and no new crypto, at the cost of message size growing with the group; sender keys become worthwhile once groups are large or membership can change | Stage 4 |
 | D-15 devices | One device per user | As planned for first releases | F7 |
+| D-26 server administrator | `cordedd --admin <username>` names administrators; they can kick from groups they are in, ban and unban, and grant or revoke administrator status. Not yet: deleting rooms, managing invites and registration over the protocol, the `init` subcommand and configuration file | First version | Stage 2 |
 | Stage 1 | Wire schema written directly as `proto/corded.fbs`, no prose specification | Prototype shortcut | Stage 1 |
 | Threading | One engine thread does both networking and engine work | Simpler; the two-thread split is still the plan | Stage 3 |
 | Servers per vault | One | Prototype shortcut | Stage 3 |

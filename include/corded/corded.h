@@ -22,6 +22,10 @@
  *   {"cmd":"set_room_name","room_id":"...","name":"new name"}
  *   {"cmd":"add_member","room_id":"...","username":"dave"}     (groups only)
  *   {"cmd":"leave_room","room_id":"..."}                        (groups only)
+ *  Server administrators only (the server refuses anyone else):
+ *   {"cmd":"kick_member","room_id":"...","username":"dave"}
+ *   {"cmd":"ban_user","username":"dave","banned":true}
+ *   {"cmd":"set_admin","username":"dave","admin":true}
  *   {"cmd":"safety_numbers","room_id":"..."}
  *   {"cmd":"set_verified","user_id":"...","verified":true}
  *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>",
@@ -34,7 +38,8 @@
  *   {"cmd":"fetch_timeline","room_id":"...","limit":200}
  *
  * Events (JSON objects, "event" names the event):
- *   vault_state, connection_state, server_pinned, room_updated, room_removed, event_received,
+ *   vault_state, connection_state, account, server_pinned, room_updated, room_removed,
+ *   event_received,
  *   event_updated, event_send_status, command_result, warning
  */
 #ifndef CORDED_H

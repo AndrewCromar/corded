@@ -657,3 +657,66 @@ TEST_CASE("people can be added to a group and can leave it") {
     REQUIRE(alice.cmd({{"cmd", "add_member"}, {"room_id", dm_room}, {"username", "dave"}})["ok"] == false);
     REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", dm_room}})["ok"] == false);
 }
+
+TEST_CASE("the account named at server start is an administrator") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--admin", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string()), dave((tmp.path / "dave").string());
+    auto account = [](const json& e) { return e["event"] == "account"; };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}, {&dave, "dave"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        // Only the named account is told it is an administrator.
+        REQUIRE(client->wait("account", account)["is_admin"] == (std::string(name) == "alice"));
+        client->have("live", [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; });
+    }
+    json made = alice.cmd({{"cmd", "create_room"}, {"usernames", {"bob", "carol", "dave"}}});
+    std::string room = made["data"]["room"]["room_id"];
+    for (const auto& m : made["data"]["room"]["members"]) REQUIRE(m["is_admin"] == (m["username"] == "alice"));
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "hello all"}})["ok"] == true);
+    for (Client* c : {&bob, &carol, &dave}) c->wait_message("hello all");
+
+    // An ordinary member is refused every administrator action.
+    for (const json& attempt : {json{{"cmd", "kick_member"}, {"room_id", room}, {"username", "carol"}},
+                                json{{"cmd", "ban_user"}, {"username", "carol"}},
+                                json{{"cmd", "set_admin"}, {"username", "bob"}},
+                                json{{"cmd", "set_admin"}, {"username", "carol"}}}) {
+        json r = bob.cmd(attempt);
+        REQUIRE(r["ok"] == false);
+        REQUIRE(r["error"]["message"].get<std::string>().find("administrator") != std::string::npos);
+    }
+
+    // The administrator removes Carol from the room.
+    REQUIRE(alice.cmd({{"cmd", "kick_member"}, {"room_id", room}, {"username", "carol"}})["ok"] == true);
+    json removed = carol.wait("removal", [&](const json& e) { return e["event"] == "room_removed" && e["room_id"] == room; });
+    REQUIRE(removed["reason"] == "removed");
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "carol is gone"}})["ok"] == true);
+    bob.wait_message("carol is gone");
+    dave.wait_message("carol is gone");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    for (const auto& e : carol.seen)
+        if (e["event"] == "event_received") REQUIRE(e["data"]["content"].value("body", "") != "carol is gone");
+
+    // The administrator bans Bob: he is disconnected and cannot sign back in.
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}})["ok"] == true);
+    json banned = bob.wait("ban", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("banned") != std::string::npos;
+    }, 20000);
+    REQUIRE(banned["detail"].get<std::string>().find("sign-in failed") != std::string::npos);
+    // Unbanned, he can connect again.
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}, {"banned", false}})["ok"] == true);
+    REQUIRE(bob.cmd(connect)["ok"] == true);
+    bob.wait_live();
+
+    // Administrators can make others administrators, but cannot be banned.
+    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "dave"}})["ok"] == true);
+    REQUIRE(dave.cmd({{"cmd", "ban_user"}, {"username", "alice"}})["ok"] == false);
+    REQUIRE(dave.cmd({{"cmd", "kick_member"}, {"room_id", room}, {"username", "bob"}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "dave"}, {"admin", false}})["ok"] == true);
+    REQUIRE(dave.cmd({{"cmd", "ban_user"}, {"username", "bob"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "alice"}, {"admin", false}})["ok"] == false);
+}

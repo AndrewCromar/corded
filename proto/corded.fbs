@@ -3,7 +3,7 @@
 namespace corded.wire;
 
 table KeyEntry { id: uint32; key: [ubyte]; }
-table Member { user_id: [ubyte]; username: string; }
+table Member { user_id: [ubyte]; username: string; is_admin: bool; }
 table Recipient { device_id: [ubyte]; ciphertext: [ubyte]; }
 table Cursor { room_id: [ubyte]; seq: uint64; }
 
@@ -19,7 +19,7 @@ table Register {
   invite: string;        // required when the server is invite-only
 }
 table Authenticate { device_id: [ubyte]; signature: [ubyte]; }
-table AuthOk { user_id: [ubyte]; username: string; server_ts: uint64; }
+table AuthOk { user_id: [ubyte]; username: string; server_ts: uint64; is_admin: bool; }
 table Error { code: uint16; message: string; }
 table Ok {}
 
@@ -40,6 +40,11 @@ table RoomInfo { room_id: [ubyte]; members: [Member]; created_at: uint64; is_dir
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
 table LeaveRoom { room_id: [ubyte]; }
+
+// ---- server administrators only ----
+table KickMember { room_id: [ubyte]; user_id: [ubyte]; }
+table BanUser { user_id: [ubyte]; banned: bool; }      // a banned user cannot sign in
+table SetAdmin { user_id: [ubyte]; admin: bool; }
 table ListRooms {}
 table RoomList { rooms: [RoomInfo]; }
 
@@ -59,7 +64,8 @@ union FrameBody {
   PublishPrekeys, FetchBundle, Bundle, LookupUser, UserInfo,
   CreateRoom, RoomInfo, ListRooms, RoomList,
   SendRoomEvent, SendOk, RoomEvent, Sync, SyncComplete,
-  AddMember, LeaveRoom
+  AddMember, LeaveRoom,
+  KickMember, BanUser, SetAdmin
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

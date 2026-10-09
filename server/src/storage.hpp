@@ -17,9 +17,13 @@ inline uint64_t now_ms() {
                                      .count());
 }
 
+// users.access_level
+inline constexpr int kBanned = -1, kUser = 0, kAdmin = 1;
+
 struct DeviceRow {
     Bytes device_id, user_id, dh_key, cert;
     std::string username;
+    int access_level = kUser;
 };
 
 struct StoredEvent {
@@ -67,6 +71,11 @@ CREATE TABLE IF NOT EXISTS room_events (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
 )sql");
+        try {
+            db_.exec("SELECT access_level FROM users LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE users ADD COLUMN access_level INTEGER NOT NULL DEFAULT 0");
+        }
         // Added after the first prototype: two-person chats are marked, so a
         // group that shrinks to two people is not mistaken for one.
         try {
@@ -79,12 +88,13 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
     }
 
     std::optional<DeviceRow> find_device(ByteView device_id) {
-        auto st = db_.prepare("SELECT d.device_id, d.user_id, d.dh_key, d.cert, u.username "
-                              "FROM devices d JOIN users u ON u.user_id = d.user_id "
+        auto st = db_.prepare("SELECT d.device_id, d.user_id, d.dh_key, d.cert, u.username, "
+                              "u.access_level FROM devices d JOIN users u ON u.user_id = d.user_id "
                               "WHERE d.device_id = ?");
         st.bind(1, device_id);
         if (!st.step()) return std::nullopt;
-        return DeviceRow{st.blob(0), st.blob(1), st.blob(2), st.blob(3), st.text(4)};
+        return DeviceRow{st.blob(0), st.blob(1), st.blob(2), st.blob(3), st.text(4),
+                         static_cast<int>(st.i64(5))};
     }
 
     std::optional<DeviceRow> device_of_user(ByteView user_id) {
@@ -179,6 +189,23 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         return u;
     }
 
+    int access_level(ByteView user_id) {
+        auto st = db_.prepare("SELECT access_level FROM users WHERE user_id = ?");
+        st.bind(1, user_id);
+        return st.step() ? static_cast<int>(st.i64(0)) : kUser;
+    }
+
+    void set_access_level(ByteView user_id, int level) {
+        auto st = db_.prepare("UPDATE users SET access_level = ? WHERE user_id = ?");
+        st.bind(1, level).bind(2, user_id).exec();
+    }
+
+    // Used at start-up to promote the administrators the operator named.
+    void promote_by_username(std::string_view username) {
+        auto st = db_.prepare("UPDATE users SET access_level = 1 WHERE username = ?");
+        st.bind(1, username).exec();
+    }
+
     bool user_exists(ByteView user_id) {
         auto st = db_.prepare("SELECT 1 FROM users WHERE user_id = ?");
         st.bind(1, user_id);
@@ -202,7 +229,7 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
                 info.is_direct = st.i64(1) != 0;
             }
         }
-        auto st = db_.prepare("SELECT u.user_id, u.username FROM memberships m "
+        auto st = db_.prepare("SELECT u.user_id, u.username, u.access_level FROM memberships m "
                               "JOIN users u ON u.user_id = m.user_id WHERE m.room_id = ? "
                               "ORDER BY u.username");
         st.bind(1, room_id);
@@ -210,6 +237,7 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
             auto m = std::make_unique<wire::MemberT>();
             m->user_id = st.blob(0);
             m->username = st.text(1);
+            m->is_admin = st.i64(2) == kAdmin;
             info.members.push_back(std::move(m));
         }
         return info;

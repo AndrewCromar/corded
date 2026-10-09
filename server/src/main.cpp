@@ -28,6 +28,8 @@ struct Options {
     // Who may create an account: anyone, only people with the invite code, or nobody.
     enum class Registration { Open, Invite, Closed } registration = Registration::Open;
     std::string invite_code;
+    // Accounts with every permission, named by whoever runs the server.
+    std::set<std::string> admins;
     // Each connection may send this many frames per second, with short bursts
     // above it. Faster senders are slowed down, not disconnected.
     double frames_per_second = 100, frame_burst = 200;
@@ -58,6 +60,12 @@ public:
         closed_ = true;
         asio::error_code ec;
         stream_.lowest_layer().close(ec);
+    }
+
+    // Sends what is queued, then closes.
+    void close_when_flushed() {
+        close_after_flush_ = true;
+        if (!writing_) close();
     }
 
     bool authed() const { return !device_id.empty(); }
@@ -128,6 +136,10 @@ public:
         acceptor_.listen();
         spdlog::info("cordedd listening on {}:{}", host, acceptor_.local_endpoint().port());
         spdlog::info("server fingerprint: {}", fingerprint_);
+        for (const auto& admin : options_.admins) {
+            storage_.promote_by_username(admin);
+            spdlog::info("administrator: {}", admin);
+        }
         spdlog::info("registration: {}", options_.registration == Options::Registration::Open     ? "open to anyone"
                                          : options_.registration == Options::Registration::Invite ? "invite code required"
                                                                                                    : "closed");
@@ -203,6 +215,9 @@ public:
                 case wire::FrameBody_ListRooms: on_list_rooms(*c, rid); break;
                 case wire::FrameBody_AddMember: on_add_member(*c, rid, *f.body.AsAddMember()); break;
                 case wire::FrameBody_LeaveRoom: on_leave_room(*c, rid, *f.body.AsLeaveRoom()); break;
+                case wire::FrameBody_KickMember: on_kick_member(*c, rid, *f.body.AsKickMember()); break;
+                case wire::FrameBody_BanUser: on_ban_user(*c, rid, *f.body.AsBanUser()); break;
+                case wire::FrameBody_SetAdmin: on_set_admin(*c, rid, *f.body.AsSetAdmin()); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
                     break;
@@ -233,10 +248,11 @@ private:
         c->user_id = dev.user_id;
         c->username = dev.username;
         online_[dev.device_id] = c;
-        spdlog::info("{} connected", dev.username);
+        spdlog::info("{} connected{}", dev.username, dev.access_level == kAdmin ? " (administrator)" : "");
         wire::AuthOkT ok;
         ok.user_id = dev.user_id;
         ok.username = dev.username;
+        ok.is_admin = dev.access_level == kAdmin;
         ok.server_ts = now_ms();
         c->reply(0, std::move(ok));
     }
@@ -279,6 +295,15 @@ private:
             c->fail(rid, err::Forbidden, "device belongs to another user");
             return;
         }
+        if (dev->access_level == kBanned) {
+            c->fail(rid, err::Forbidden, "this account is banned from the server");
+            return;
+        }
+        // The operator named this username as an administrator.
+        if (options_.admins.count(dev->username) && dev->access_level != kAdmin) {
+            storage_.set_access_level(dev->user_id, kAdmin);
+            dev->access_level = kAdmin;
+        }
         mark_online(c, *dev);
     }
 
@@ -288,6 +313,10 @@ private:
         // Same answer for an unknown device and a bad signature.
         if (!dev || !verify_sig(a.device_id, msg, a.signature)) {
             c->fail(rid, err::UnknownDevice, "authentication failed");
+            return;
+        }
+        if (dev->access_level == kBanned) {
+            c->fail(rid, err::Forbidden, "this account is banned from the server");
             return;
         }
         mark_online(c, *dev);
@@ -401,6 +430,77 @@ private:
         }
         storage_.remove_member(q.room_id, c.user_id);
         announce_room(storage_.room_info(q.room_id), c.user_id);
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Administrator status is read from storage on every use, so removing it
+    // takes effect at once.
+    bool require_admin(Conn& c, uint32_t rid) {
+        if (storage_.access_level(c.user_id) == kAdmin) return true;
+        c.fail(rid, err::Forbidden, "only a server administrator can do that");
+        return false;
+    }
+
+    void on_kick_member(Conn& c, uint32_t rid, const wire::KickMemberT& q) {
+        if (!require_admin(c, rid)) return;
+        if (!storage_.is_member(q.room_id, c.user_id)) {
+            c.fail(rid, err::Forbidden, "you are not in that room");
+            return;
+        }
+        if (storage_.is_direct(q.room_id) || !storage_.is_member(q.room_id, q.user_id) ||
+            q.user_id == c.user_id) {
+            c.fail(rid, err::Forbidden, "that person cannot be removed from this room");
+            return;
+        }
+        storage_.remove_member(q.room_id, q.user_id);
+        wire::RoomInfoT info = storage_.room_info(q.room_id);
+        announce_room(info, c.user_id);
+        // The removed person gets the new member list too, which no longer has them.
+        if (auto dev = storage_.device_of_user(q.user_id)) push(dev->device_id, info);
+        c.reply(rid, std::move(info));
+    }
+
+    void on_ban_user(Conn& c, uint32_t rid, const wire::BanUserT& q) {
+        if (!require_admin(c, rid)) return;
+        if (!storage_.user_exists(q.user_id)) {
+            c.fail(rid, err::NotFound, "unknown user");
+            return;
+        }
+        int level = storage_.access_level(q.user_id);
+        if (q.user_id == c.user_id || level == kAdmin) {
+            c.fail(rid, err::Forbidden, "an administrator cannot be banned; remove their admin status first");
+            return;
+        }
+        storage_.set_access_level(q.user_id, q.banned ? kBanned : kUser);
+        if (q.banned) {
+            if (auto dev = storage_.device_of_user(q.user_id)) {
+                auto it = online_.find(dev->device_id);
+                if (it != online_.end())
+                    if (auto conn = it->second.lock()) {
+                        conn->fail(0, err::Forbidden, "this account is banned from the server");
+                        conn->close_when_flushed();
+                    }
+            }
+        }
+        spdlog::info("{} {} a user", c.username, q.banned ? "banned" : "unbanned");
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_set_admin(Conn& c, uint32_t rid, const wire::SetAdminT& q) {
+        if (!require_admin(c, rid)) return;
+        if (!storage_.user_exists(q.user_id)) {
+            c.fail(rid, err::NotFound, "unknown user");
+            return;
+        }
+        if (q.user_id == c.user_id) {
+            c.fail(rid, err::Forbidden, "you cannot change your own administrator status");
+            return;
+        }
+        if (storage_.access_level(q.user_id) == kBanned) {
+            c.fail(rid, err::Forbidden, "that account is banned");
+            return;
+        }
+        storage_.set_access_level(q.user_id, q.admin ? kAdmin : kUser);
         c.reply(rid, wire::OkT{});
     }
 
@@ -561,11 +661,14 @@ int main(int argc, char** argv) {
             opt.invite_code = next();
             opt.registration = Reg::Invite;
         } else if (a == "--closed") opt.registration = Reg::Closed;
+        else if (a == "--admin") opt.admins.insert(next());
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
         else {
             std::fprintf(stderr,
                          "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME]\n"
-                         "               [--invite-code CODE | --closed] [--verbose]\n\n"
+                         "               [--invite-code CODE | --closed] [--admin USERNAME]... [--verbose]\n\n"
+                         "  --admin USERNAME    make this account a server administrator with every\n"
+                         "                      permission; may be given more than once\n"
                          "  --invite-code CODE  only people who give this code can create an account\n"
                          "  --closed            nobody can create an account; existing users still sign in\n");
             return a == "--help" ? 0 : 2;

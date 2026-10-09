@@ -95,6 +95,18 @@ and start typing. Things to try:
 | `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
 
+To make yourself the server's administrator, name your account when you start it:
+
+```sh
+./build/dev/bin/cordedd --port 7443 --data ./server-data --admin alice
+```
+
+Whoever registers as `alice` (or already has) is then an administrator. In the client,
+administrators get `/kick <user>` (remove someone from the open group), `/ban <user>` and
+`/unban <user>` (block or restore someone's access to the server), and `/admin <user>`
+and `/unadmin <user>` (give or take away administrator status). `--admin` can be given
+several times. An administrator still cannot read chats they are not in.
+
 By default anyone who can reach the server can create an account. To restrict that,
 start it with `--invite-code <code>` (at least 8 characters) and give the code to the
 people you want; they pass `--invite <code>` to `corded-tui` the first time. `--closed`
@@ -127,6 +139,8 @@ It does:
   pinned by the client, and sign-in bound to that TLS session.
 - Threads: replies that hang under the message that started them.
 - Editing and deleting your own messages.
+- A server administrator, named by whoever starts the server, who can remove people from
+  groups, ban and unban accounts, and make other administrators.
 - Server protections: invite-only or closed registration, a per-connection rate limit
   that slows down floods, and a cap on connections per address.
 - Safety numbers, so two people can check that nobody is sitting between them.
@@ -136,8 +150,10 @@ It does:
 
 It does not, yet:
 
-- Remove someone else from a group (anyone can add, and anyone can leave, but there are
-  no admins yet).
+- Room-level roles. Anyone in a group can add people and rename it; only a server
+  administrator can remove someone.
+- The rest of the administrator powers in the plan: deleting rooms, and managing invites
+  and registration from the client instead of the server's command line.
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
