@@ -252,3 +252,15 @@ TEST_CASE("randomised conversation with loss, reordering and duplicates") {
     }
     REQUIRE(delivered > 1000);
 }
+
+TEST_CASE("safety numbers match on both sides and differ between people") {
+    Device alice, bob, carol;
+    std::string ab = safety_number(alice.id.user.pk, bob.id.user.pk);
+    REQUIRE(ab == safety_number(bob.id.user.pk, alice.id.user.pk));
+    REQUIRE(ab != safety_number(alice.id.user.pk, carol.id.user.pk));
+    REQUIRE(ab.size() == 12 * 5 + 11);
+    for (size_t i = 0; i < ab.size(); ++i) {
+        if (i % 6 == 5) REQUIRE(ab[i] == ' ');
+        else REQUIRE((ab[i] >= '0' && ab[i] <= '9'));
+    }
+}

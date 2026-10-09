@@ -82,6 +82,8 @@ and start typing. Things to try:
 | `/chat <username>` | Starts or opens a chat with someone on the same server |
 | `/group bob carol : Weekend plans` | Starts a group chat; the part after the colon is an optional name |
 | `/name <text>` | Renames the open chat |
+| `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
+| `/verified <username>` | Marks someone as checked after comparing numbers |
 | `/reply <text>` | Replies to the last message you received |
 | `/react <emoji or text>` | Reacts to the last message you received |
 | `/help` | Shows the command list |
@@ -112,6 +114,7 @@ It does:
   return, in order. Clients reconnect on their own, and queued messages survive restarts.
 - An encrypted connection to the server: TLS 1.3, with the server's self-signed key
   pinned by the client, and sign-in bound to that TLS session.
+- Safety numbers, so two people can check that nobody is sitting between them.
 - Typed events with relations instead of plain strings. Replies and reactions already use
   this, and it is what threads, edits and the rest will be built on.
 - A frontend that uses only the public header, [`corded.h`](include/corded/corded.h).
@@ -119,7 +122,9 @@ It does:
 It does not, yet:
 
 - Change who is in a group after it is created, or leave one.
-- Verify contacts (safety numbers). The first key seen for a user is trusted.
+- Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
+  but a contact whose key later changes is not yet flagged; their messages just fail to
+  decrypt.
 - More than one device per user, or more than one server per vault.
 - Rate limiting, invites, or closed registration on the server: anyone who can reach it
   can register.

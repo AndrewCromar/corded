@@ -50,6 +50,11 @@ struct Identity {
     static Identity generate();
 };
 
+// A number two people can compare out of band (in person, on a call) to check
+// that nobody is sitting between them. Both sides compute the same value:
+// twelve groups of five digits derived from the two user identity keys.
+std::string safety_number(const Key32& user_a, const Key32& user_b);
+
 bool verify_device_cert(ByteView user_id, ByteView device_id, ByteView dh_key, ByteView cert);
 
 // What the server hands out so a session can be started with an offline peer.

@@ -247,6 +247,19 @@ TEST_CASE("two clients talk end to end through a real server") {
     REQUIRE(custom["data"]["content"]["result"] == 17);
     REQUIRE(custom["data"]["fallback_text"] == "rolled a 17");
 
+    // Both people see the same safety number, and marking it checked sticks.
+    {
+        json a = alice.cmd({{"cmd", "safety_numbers"}, {"room_id", room}});
+        json b = bob.cmd({{"cmd", "safety_numbers"}, {"room_id", room}});
+        REQUIRE(a["data"]["safety_numbers"].size() == 1);
+        REQUIRE(a["data"]["safety_numbers"][0]["username"] == "bob");
+        REQUIRE(a["data"]["safety_numbers"][0]["verified"] == false);
+        REQUIRE(a["data"]["safety_numbers"][0]["safety_number"] == b["data"]["safety_numbers"][0]["safety_number"]);
+        REQUIRE(alice.cmd({{"cmd", "set_verified"}, {"user_id", a["data"]["safety_numbers"][0]["user_id"]}})["ok"] == true);
+        REQUIRE(alice.cmd({{"cmd", "safety_numbers"}, {"room_id", room}})["data"]["safety_numbers"][0]["verified"] == true);
+        REQUIRE(bob.cmd({{"cmd", "safety_numbers"}, {"room_id", room}})["data"]["safety_numbers"][0]["verified"] == false);
+    }
+
     // A burst in both directions keeps its order.
     for (int i = 0; i < 20; ++i) {
         REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "a" + std::to_string(i)}})["ok"] == true);

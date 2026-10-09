@@ -3,6 +3,8 @@
 #include "corded/common/frame.hpp"
 #include "corded/common/sig.hpp"
 
+#include <cstdio>
+
 namespace corded::crypto {
 
 namespace {
@@ -225,6 +227,46 @@ Identity Identity::generate() {
     id.dh = generate_dh();
     id.cert = sign(id.user.sk, signed_message(kCtxDeviceCert, {id.device.pk, id.dh.pk}));
     return id;
+}
+
+namespace {
+
+// Thirty digits for one identity key, from an iterated hash so that searching
+// for a look-alike key is expensive.
+std::string key_digits(const Key32& user) {
+    constexpr std::string_view kLabel = "corded/v1/safety-number";
+    uint8_t h[crypto_hash_sha512_BYTES];
+    Bytes in;
+    append(in, kLabel);
+    append(in, user);
+    crypto_hash_sha512(h, in.data(), in.size());
+    for (int i = 0; i < 5200; ++i) {
+        in.assign(h, h + sizeof h);
+        append(in, user);
+        crypto_hash_sha512(h, in.data(), in.size());
+    }
+    std::string out;
+    for (int group = 0; group < 6; ++group) {
+        uint64_t v = 0;
+        for (int i = 0; i < 5; ++i) v = (v << 8) | h[group * 5 + i];
+        char buf[8];
+        std::snprintf(buf, sizeof buf, "%05u", static_cast<unsigned>(v % 100000));
+        out += buf;
+    }
+    return out;
+}
+
+}  // namespace
+
+std::string safety_number(const Key32& user_a, const Key32& user_b) {
+    std::string a = key_digits(user_a), b = key_digits(user_b);
+    std::string all = a < b ? a + b : b + a;  // same order for both people
+    std::string out;
+    for (size_t i = 0; i < all.size(); i += 5) {
+        if (i) out += ' ';
+        out += all.substr(i, 5);
+    }
+    return out;
 }
 
 bool verify_device_cert(ByteView user_id, ByteView device_id, ByteView dh_key, ByteView cert) {

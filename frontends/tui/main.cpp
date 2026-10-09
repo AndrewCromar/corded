@@ -170,6 +170,11 @@ private:
             select_room(id);
             return;
         }
+        if (ok && ev["data"].contains("safety_numbers")) {
+            verify_list_ = ev["data"]["safety_numbers"];
+            show_verify_ = true;
+            return;
+        }
         if (ok && ev["data"].contains("events")) {
             Room& room = room_for(ev["data"].value("room_id", ""));
             for (const auto& d : ev["data"]["events"]) add_event(room, d);
@@ -298,6 +303,7 @@ private:
         if (line.empty()) return;
         notice_.clear();
         pin_notice_.clear();
+        show_verify_ = false;
         Room* room = current();
 
         if (line[0] == '/') {
@@ -329,6 +335,18 @@ private:
                 chat_request_ = command(c);
             } else if (cmd == "/name" && !arg.empty() && room) {
                 command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
+            } else if (cmd == "/verify" && room) {
+                command({{"cmd", "safety_numbers"}, {"room_id", room->id}});
+            } else if ((cmd == "/verified" || cmd == "/unverified") && !arg.empty() && room) {
+                bool found = false;
+                for (const auto& entry : verify_list_) {
+                    if (entry.value("username", "") != arg) continue;
+                    found = true;
+                    command({{"cmd", "set_verified"}, {"user_id", entry.value("user_id", "")},
+                             {"verified", cmd == "/verified"}});
+                    command({{"cmd", "safety_numbers"}, {"room_id", room->id}});
+                }
+                if (!found) notice_ = "run /verify first, then /verified <username>";
             } else if (cmd == "/connect" && !arg.empty()) {
                 server_ = arg;
                 connect_to(arg);
@@ -445,12 +463,26 @@ private:
                               text("/chat <username>   start or open a chat"),
                               text("/group a b c : Name  start a group chat (the name is optional)"),
                               text("/name <text>       rename the open chat"),
+                              text("/verify            show safety numbers for the people in this chat"),
                               text("/reply <text>      reply to the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
                           }) |
                           border);
+        if (show_verify_) {
+            Elements rows = {text("Safety numbers") | bold,
+                             text("Compare with each person over a channel you trust (in person, "
+                                  "on a call). If the numbers match, nobody is in between.") | dim};
+            for (const auto& entry : verify_list_)
+                rows.push_back(hbox({
+                    text(entry.value("username", "?") + "  ") | bold,
+                    text(entry.value("safety_number", "")),
+                    text(entry.value("verified", false) ? "  (checked)" : "") | color(Color::Green),
+                }));
+            rows.push_back(text("/verified <username> marks someone as checked; /unverified undoes it") | dim);
+            all.push_back(vbox(std::move(rows)) | border);
+        }
         std::string footer = !notice_.empty() ? notice_ : !pin_notice_.empty() ? pin_notice_ : "/help for commands";
         all.push_back(text(" " + footer) | (notice_.empty() ? dim : color(Color::Yellow)));
         return vbox(std::move(all));
@@ -508,7 +540,8 @@ private:
     std::vector<Room> rooms_;
     std::vector<std::string> titles_;
     int selected_ = 0;
-    bool show_help_ = false;
+    bool show_help_ = false, show_verify_ = false;
+    json verify_list_ = json::array();
 
     Component root_, name_input_, pass_input_, pass2_input_, input_, room_menu_;
 };

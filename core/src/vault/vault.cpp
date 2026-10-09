@@ -213,6 +213,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     local_id INTEGER PRIMARY KEY AUTOINCREMENT, room_id BLOB NOT NULL, event_id BLOB NOT NULL
 );
 )sql");
+    db_.exec("CREATE TABLE IF NOT EXISTS verified_users ("
+             "user_id BLOB PRIMARY KEY, verified_at INTEGER NOT NULL) WITHOUT ROWID");
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -301,6 +303,23 @@ void Vault::save_sessions(const crypto::PeerSessions& peer) {
     auto st = db_.prepare("INSERT OR REPLACE INTO sessions (peer_user, peer_device, state) "
                           "VALUES (?,?,?)");
     st.bind(1, peer.user_id).bind(2, peer.device_id).bind(3, peer.serialize()).exec();
+}
+
+bool Vault::is_verified(ByteView user_id) {
+    auto st = db_.prepare("SELECT 1 FROM verified_users WHERE user_id = ?");
+    st.bind(1, user_id);
+    return st.step();
+}
+
+void Vault::set_verified(ByteView user_id, bool verified) {
+    if (verified) {
+        auto st = db_.prepare("INSERT OR IGNORE INTO verified_users (user_id, verified_at) "
+                              "VALUES (?, strftime('%s','now'))");
+        st.bind(1, user_id).exec();
+    } else {
+        auto st = db_.prepare("DELETE FROM verified_users WHERE user_id = ?");
+        st.bind(1, user_id).exec();
+    }
 }
 
 void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members) {

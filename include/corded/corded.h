@@ -19,6 +19,8 @@
  *   {"cmd":"start_chat","username":"bob"}
  *   {"cmd":"create_room","usernames":["bob","carol"],"name":"optional room name"}
  *   {"cmd":"set_room_name","room_id":"...","name":"new name"}
+ *   {"cmd":"safety_numbers","room_id":"..."}
+ *   {"cmd":"set_verified","user_id":"...","verified":true}
  *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>"}
  *   {"cmd":"send_event","room_id":"...","type":"m.reaction","content":{...},
  *    "relation":{"kind":"annotation","target":"<event id>","key":"+1"}}

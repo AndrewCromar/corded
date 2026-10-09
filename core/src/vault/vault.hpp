@@ -83,6 +83,10 @@ public:
     std::optional<crypto::PeerSessions> load_sessions(ByteView peer_user);
     void save_sessions(const crypto::PeerSessions& peer);
 
+    // People whose safety number the user has checked.
+    bool is_verified(ByteView user_id);
+    void set_verified(ByteView user_id, bool verified);
+
     void upsert_room(ByteView room_id, const std::vector<MemberRow>& members);
     std::vector<RoomRow> rooms();
     std::optional<RoomRow> room(ByteView room_id);

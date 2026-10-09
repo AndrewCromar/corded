@@ -138,6 +138,12 @@ def main():
         alice.expect("[+1]")
         print("ok  reaction shows on the other side")
 
+        alice.type("/verify\r")
+        alice.expect("Safety numbers")
+        alice.type("/verified bob\r")
+        alice.expect("(checked)")
+        print("ok  safety numbers shown and a contact marked as checked")
+
         carol = start("carol")
         alice.type("/group bob carol : Weekend plans\r")
         alice.expect("Weekend plans")

@@ -140,7 +140,10 @@ Engine::json Engine::room_json(const RoomRow& room) {
     for (const auto& m : room.members) {
         bool me = ByteView(m.user_id).size() == 32 &&
                   std::equal(m.user_id.begin(), m.user_id.end(), vault_.identity().user.pk.begin());
-        members.push_back({{"user_id", b64(m.user_id)}, {"username", m.username}, {"me", me}});
+        members.push_back({{"user_id", b64(m.user_id)},
+                           {"username", m.username},
+                           {"me", me},
+                           {"verified", !me && vault_.is_verified(m.user_id)}});
         if (!me) title += (title.empty() ? "" : ", ") + m.username;
     }
     if (!room.name.empty()) title = room.name;
@@ -272,6 +275,35 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             json rooms = json::array();
             for (const auto& room : vault_.rooms()) rooms.push_back(room_json(room));
             ok(req, {{"rooms", std::move(rooms)}});
+        } else if (name == "safety_numbers") {
+            // One entry per other member of the room.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            auto room = vault_.room(room_id);
+            if (!room) {
+                fail(req, "not_found", "unknown room");
+                return;
+            }
+            json list = json::array();
+            const Key32& me = vault_.identity().user.pk;
+            for (const auto& m : room->members) {
+                if (m.user_id.size() != 32 || std::equal(m.user_id.begin(), m.user_id.end(), me.begin()))
+                    continue;
+                list.push_back({{"user_id", b64(m.user_id)},
+                                {"username", m.username},
+                                {"safety_number", crypto::safety_number(me, to_key32(m.user_id))},
+                                {"verified", vault_.is_verified(m.user_id)}});
+            }
+            ok(req, {{"room_id", b64(room_id)}, {"safety_numbers", std::move(list)}});
+        } else if (name == "set_verified") {
+            Bytes user_id = need_b64(cmd, "user_id", 32);
+            vault_.set_verified(user_id, cmd.value("verified", true));
+            for (const auto& room : vault_.rooms())
+                for (const auto& m : room.members)
+                    if (m.user_id == user_id) {
+                        emit({{"event", "room_updated"}, {"room", room_json(room)}});
+                        break;
+                    }
+            ok(req);
         } else if (name == "start_chat") {
             cmd_start_chat(req, cmd);
         } else if (name == "create_room") {
