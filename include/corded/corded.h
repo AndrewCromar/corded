@@ -14,6 +14,7 @@
  *   {"cmd":"status"}
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
+ *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}
  *   {"cmd":"disconnect"}
  *   {"cmd":"lock"}
  *   {"cmd":"list_rooms"}
@@ -34,6 +35,8 @@
  *   {"cmd":"edit_role","role":"moderator","permissions":["kick_members"]}
  *   {"cmd":"delete_role","role":"moderator"}
  *   {"cmd":"grant_role","username":"dave","role":"moderator","grant":true}
+ *   {"cmd":"create_invite","max_uses":5,"expires_in_hours":24}   (both optional)
+ *   {"cmd":"revoke_invite","code":"..."}
  *   {"cmd":"kick","username":"dave"}
  *   {"cmd":"ban_user","username":"dave","banned":true}
  *  Permission names: view_channel, send_messages, add_reactions, attach_files,

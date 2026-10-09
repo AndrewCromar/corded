@@ -243,7 +243,10 @@ build on it.
 | C2 Channels | Built on `next` |
 | C3 Channel permission overrides | Built on `next` (private and read-only channels) |
 | C4 Client and TUI | Built on `next` (engine commands and TUI commands; no dedicated management screens) |
-| C5 to C10 | Not started |
+| C5 Several servers per vault | Not started |
+| C6 Invites | Built on `next`: codes with use limits and expiry, revocation, `corded://` links carrying address, key and code |
+| C7 Moderation | Deleting others' messages is built on `next`. Pins are not. The server does not yet drop the stored ciphertext of a deleted message |
+| C8 to C10 | Not started |
 
 Simplifications in what is built, to be revisited: after any change to roles, channels or
 membership the server sends every online member a full fresh picture instead of a small

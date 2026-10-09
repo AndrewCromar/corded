@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS member_roles (
     user_id BLOB NOT NULL REFERENCES users(user_id), role_id INTEGER NOT NULL REFERENCES roles(role_id),
     PRIMARY KEY (user_id, role_id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS invites (
+    code_hash BLOB PRIMARY KEY, created_by BLOB NOT NULL, uses_left INTEGER, expires_at INTEGER
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS channel_overrides (
     room_id BLOB NOT NULL REFERENCES rooms(room_id), role_id INTEGER NOT NULL REFERENCES roles(role_id),
     allow INTEGER NOT NULL, deny INTEGER NOT NULL,
@@ -379,6 +382,39 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         auto st = db_.prepare("INSERT OR REPLACE INTO channel_overrides (room_id, role_id, allow, deny) "
                               "VALUES (?,?,?,?)");
         st.bind(1, room_id).bind(2, role_id).bind(3, allow).bind(4, deny).exec();
+    }
+
+    // Invite codes are stored only as hashes.
+    static Bytes hash_code(std::string_view code) {
+        Bytes h(crypto_hash_sha256_BYTES);
+        crypto_hash_sha256(h.data(), reinterpret_cast<const uint8_t*>(code.data()), code.size());
+        return h;
+    }
+    void add_invite(std::string_view code, ByteView created_by, uint32_t max_uses, uint64_t expires_at) {
+        auto st = db_.prepare("INSERT INTO invites (code_hash, created_by, uses_left, expires_at) "
+                              "VALUES (?,?,?,?)");
+        st.bind(1, hash_code(code)).bind(2, created_by);
+        if (max_uses) st.bind(3, max_uses);
+        else st.bind_null(3);
+        if (expires_at) st.bind(4, expires_at);
+        else st.bind_null(4);
+        st.exec();
+    }
+    bool invite_valid(std::string_view code) {
+        auto st = db_.prepare("SELECT 1 FROM invites WHERE code_hash = ? AND (uses_left IS NULL OR "
+                              "uses_left > 0) AND (expires_at IS NULL OR expires_at > ?)");
+        st.bind(1, hash_code(code)).bind(2, now_ms());
+        return st.step();
+    }
+    void use_invite(std::string_view code) {
+        auto st = db_.prepare("UPDATE invites SET uses_left = uses_left - 1 WHERE code_hash = ? "
+                              "AND uses_left IS NOT NULL");
+        st.bind(1, hash_code(code)).exec();
+    }
+    bool revoke_invite(std::string_view code) {
+        auto st = db_.prepare("DELETE FROM invites WHERE code_hash = ?");
+        st.bind(1, hash_code(code)).exec();
+        return db_.changes() > 0;
     }
 
     // Everyone who belongs to the community (not banned, not kicked).

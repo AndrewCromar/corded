@@ -106,6 +106,8 @@ the matching permission:
 | `/role new <name> [permission ...]` | Creates a role, for example `/role new mods kick_members manage_messages` |
 | `/role give <user> <role>`, `/role take <user> <role>` | Gives or takes away a role |
 | `/role delete <name>` | Deletes a role |
+| `/remove` | Deletes the last message someone else posted in the open channel |
+| `/invite [uses]` | Makes an invite link |
 | `/kick <user>` | Removes someone from the server; they can rejoin |
 | `/ban <user>`, `/unban <user>` | Blocks or restores someone's access |
 
@@ -116,10 +118,26 @@ Permissions a role can carry: `view_channel`, `send_messages`, `add_reactions`,
 ranked at or above themselves, and nobody can act on the owner. If you start the server
 without `--owner`, the first person to register owns it.
 
-By default anyone who can reach the server can create an account. To restrict that,
-start it with `--invite-code <code>` (at least 8 characters) and give the code to the
-people you want; they pass `--invite <code>` to `corded-tui` the first time. `--closed`
-stops new accounts entirely while existing users keep working.
+**Inviting people.** By default anyone who can reach the server can create an account.
+Start it with `--invite-only` and new accounts need an invite:
+
+```sh
+./build/dev/bin/cordedd --port 7443 --data ./server-data --name "My Server" --owner alice --invite-only
+```
+
+The owner (who can always get in) types `/invite` in the client, or `/invite 3` for a
+link that works three times. The link carries the server's address, its key and a code,
+so the person invited needs nothing else:
+
+```sh
+./build/dev/bin/corded-tui --vault ./bob-vault --name bob --join 'corded://...'
+```
+
+The link is long, so the client also saves it to `last-invite.txt` in your vault
+directory. Other members can make invites once they have a role with the `create_invite`
+permission. `--closed` stops new accounts entirely while existing members keep working.
+If you make a link while connected as `localhost`, the link says `localhost` too; connect
+by the address other people will use.
 
 To talk between two computers, run the server on one, and point the other's `--server`
 at that machine's address. Quit a client and start it again with the same `--vault` to
@@ -140,6 +158,8 @@ It does:
 - A community per server: channels that every member sees, an owner, and roles with
   permissions. Channels can be made private to a role or read-only. Members can be kicked
   and banned by people whose role allows it.
+- Moderation: a role with `manage_messages` can delete other people's messages (`/remove`).
+- Invite links made from the client, with optional use limits.
 - Direct messages and private group chats alongside the channels. Group names are
   encrypted, so the server never learns them.
 - Messages in channels are end-to-end encrypted too. That has a consequence Discord users
@@ -163,10 +183,7 @@ It does:
 It does not, yet:
 
 - Belong to several servers from one client. One vault talks to one server for now.
-- Invite links, and managing invites and registration from the client; those are still
-  server command-line flags.
-- Let a moderator delete someone else's message, categories, nicknames, role colours,
-  transferring ownership.
+- Categories, nicknames, role colours, transferring ownership.
 - Scale to large channels. Each message is encrypted once per member, which is fine for
   dozens of people and too slow for hundreds; sender keys are planned for that.
 - Hide channel names, role names or the member list from the server. Only message

@@ -57,8 +57,9 @@ std::string snippet(const std::string& s, size_t n = 40) {
 class TuiApp {
 public:
     TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint,
-           std::string invite)
-        : vault_dir_(std::move(vault_dir)),
+           std::string invite, std::string join_link)
+        : join_link_(std::move(join_link)),
+          vault_dir_(std::move(vault_dir)),
           server_(std::move(server)),
           name_(std::move(name)),
           fingerprint_(std::move(fingerprint)),
@@ -113,7 +114,8 @@ private:
                 username_ = ev.value("username", "");
                 phase_ = 1;
                 input_->TakeFocus();
-                if (!server_.empty()) connect_to(server_);
+                if (!join_link_.empty()) command({{"cmd", "connect"}, {"link", join_link_}});
+                else if (!server_.empty()) connect_to(server_);
             }
         } else if (kind == "connection_state") {
             connection_ = ev.value("state", "");
@@ -203,6 +205,25 @@ private:
             room_for(id).title = ev["data"]["room"].value("title", "?");
             refresh_titles();
             select_room(id);
+            return;
+        }
+        if (ok && ev["data"].contains("link")) {
+            // The link is longer than most terminals are wide, so it is also
+            // saved to a file where it can be copied in one piece.
+            std::string link = ev["data"].value("link", "");
+            std::string path = vault_dir_ + "/last-invite.txt";
+            bool saved = false;
+            if (FILE* f = std::fopen(path.c_str(), "w")) {
+                saved = std::fputs((link + "\n").c_str(), f) >= 0;
+                std::fclose(f);
+            }
+            Elements rows = {text("Invite link") | bold};
+            for (size_t pos = 0; pos < link.size(); pos += 70) rows.push_back(text("  " + link.substr(pos, 70)));
+            rows.push_back(text(saved ? "Saved in one piece to " + path : "(could not save it to a file)") | dim);
+            rows.push_back(text("The person you invite starts their client with:") | dim);
+            rows.push_back(text("  corded-tui --name <their name> --join '<the whole link>'") | dim);
+            info_box_ = vbox(std::move(rows)) | border;
+            show_info_ = true;
             return;
         }
         if (ok && ev["data"].contains("members")) {
@@ -429,6 +450,11 @@ private:
                 command({{"cmd", "kick"}, {"username", arg}});
             } else if ((cmd == "/ban" || cmd == "/unban") && !arg.empty()) {
                 command({{"cmd", "ban_user"}, {"username", arg}, {"banned", cmd == "/ban"}});
+            } else if (cmd == "/invite") {
+                // "/invite" for an unlimited link, "/invite 3" for three uses.
+                json c = {{"cmd", "create_invite"}};
+                if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
+                command(c);
             } else if (cmd == "/members") {
                 command({{"cmd", "member_list"}});
             } else if (cmd == "/roles") {
@@ -505,6 +531,12 @@ private:
                     command({{"cmd", "edit_event"}, {"room_id", room->id}, {"event_id", mine->event_id}, {"body", arg}});
                 else
                     command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", mine->event_id}});
+            } else if (cmd == "/remove" && room) {
+                // Moderators: delete the last message someone else posted here.
+                if (const Message* m = last_from_other(*room))
+                    command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", m->event_id}});
+                else
+                    notice_ = "nothing here to remove";
             } else if (cmd == "/verify" && room) {
                 command({{"cmd", "safety_numbers"}, {"room_id", room->id}});
             } else if ((cmd == "/verified" || cmd == "/unverified") && !arg.empty() && room) {
@@ -672,6 +704,8 @@ private:
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
+                              text("   /invite [uses]   make an invite link for someone to join"),
+                              text("   /remove   delete the last message someone else posted in this channel"),
                           }) |
                           border);
         if (show_info_) all.push_back(info_box_);
@@ -728,6 +762,7 @@ private:
         if (creating_ && !name_.empty()) pass_input_->TakeFocus();
     }
 
+    std::string join_link_;
     std::string vault_dir_, server_, name_, fingerprint_, invite_;
     std::string server_fp_, pin_notice_;
     corded_engine* engine_ = nullptr;
@@ -758,7 +793,7 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string vault, server, name, fingerprint, invite;
+    std::string vault, server, name, fingerprint, invite, join;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -767,9 +802,12 @@ int main(int argc, char** argv) {
         else if (a == "--name") name = next();
         else if (a == "--fingerprint") fingerprint = next();
         else if (a == "--invite") invite = next();
+        else if (a == "--join") join = next();
         else {
             std::printf("usage: corded-tui [--vault DIR] [--server HOST:PORT] [--name USERNAME]\n"
-                        "                  [--fingerprint KEY] [--invite CODE]\n\n"
+                        "                  [--fingerprint KEY] [--invite CODE] [--join LINK]\n\n"
+                        "  --join         an invite link (corded://...) from a member of the server;\n"
+                        "                 replaces --server, --fingerprint and --invite\n"
                         "  --vault        where this identity is stored (default: ~/.corded/default)\n"
                         "  --server       server to connect to, for example localhost:7443\n"
                         "  --name         username to register when creating a new vault\n"
@@ -783,5 +821,5 @@ int main(int argc, char** argv) {
         const char* home = std::getenv("HOME");
         vault = std::string(home ? home : ".") + "/.corded/default";
     }
-    return TuiApp(vault, server, name, fingerprint, invite).run();
+    return TuiApp(vault, server, name, fingerprint, invite, join).run();
 }

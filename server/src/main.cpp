@@ -229,6 +229,8 @@ public:
                 case wire::FrameBody_UpdateChannel: on_update_channel(*c, rid, *f.body.AsUpdateChannel()); break;
                 case wire::FrameBody_DeleteChannel: on_delete_channel(*c, rid, *f.body.AsDeleteChannel()); break;
                 case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
+                case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
+                case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
                     break;
@@ -311,6 +313,7 @@ private:
         }
         // People who already have an account may always come back; only new
         // accounts are subject to the registration policy.
+        bool used_invite = false;
         auto before = storage_.find_device(r.device_id);
         if (before && before->access_level == kBanned) {
             c->fail(rid, err::Forbidden, "this account is banned from the server");
@@ -321,9 +324,17 @@ private:
         if (!before || rejoining) {
             using Reg = Options::Registration;
             bool allowed = options_.registration == Reg::Open;
-            if (options_.registration == Reg::Invite)
-                allowed = r.invite.size() == options_.invite_code.size() &&
-                          sodium_memcmp(r.invite.data(), options_.invite_code.data(), r.invite.size()) == 0;
+            if (options_.registration == Reg::Invite) {
+                // Either the fixed code from the command line, or one a member made.
+                bool fixed = !options_.invite_code.empty() &&
+                             r.invite.size() == options_.invite_code.size() &&
+                             sodium_memcmp(r.invite.data(), options_.invite_code.data(), r.invite.size()) == 0;
+                used_invite = !fixed && !r.invite.empty() && storage_.invite_valid(r.invite);
+                // The named owner must be able to get in to make the first invite.
+                bool founding = !options_.owner_name.empty() && r.username == options_.owner_name &&
+                                storage_.owner().empty();
+                allowed = fixed || used_invite || founding;
+            }
             if (!allowed) {
                 c->fail(rid, err::RegistrationClosed,
                         options_.registration == Reg::Invite
@@ -343,6 +354,7 @@ private:
             c->fail(rid, code, "username is taken");
             return;
         }
+        if (used_invite) storage_.use_invite(r.invite);
         auto dev = storage_.find_device(r.device_id);
         if (!dev || dev->user_id != r.user_id) {
             c->fail(rid, err::Forbidden, "device belongs to another user");
@@ -658,6 +670,29 @@ private:
         c.reply(rid, wire::OkT{});
     }
 
+    void on_create_invite(Conn& c, uint32_t rid, const wire::NewInviteT& q) {
+        if (!require(c, rid, perm::CreateInvite)) return;
+        if (q.max_uses > 100000 || q.expires_in_s > 366ull * 24 * 3600) {
+            c.fail(rid, err::Malformed, "invite limits are out of range");
+            return;
+        }
+        wire::InviteT invite;
+        invite.code = b64(random_bytes(16));
+        invite.max_uses = q.max_uses;
+        invite.expires_at = q.expires_in_s ? now_ms() + q.expires_in_s * 1000 : 0;
+        storage_.add_invite(invite.code, c.user_id, invite.max_uses, invite.expires_at);
+        c.reply(rid, std::move(invite));
+    }
+
+    void on_revoke_invite(Conn& c, uint32_t rid, const wire::RevokeInviteT& q) {
+        if (!require(c, rid, perm::CreateInvite)) return;
+        if (!storage_.revoke_invite(q.code)) {
+            c.fail(rid, err::NotFound, "no such invite");
+            return;
+        }
+        c.reply(rid, wire::OkT{});
+    }
+
     void on_kick(Conn& c, uint32_t rid, const wire::KickT& q) {
         if (!require(c, rid, perm::KickMembers)) return;
         if (!storage_.user_exists(q.user_id) || storage_.access_level(q.user_id) < 0) {
@@ -858,13 +893,18 @@ int main(int argc, char** argv) {
         else if (a == "--invite-code") {
             opt.invite_code = next();
             opt.registration = Reg::Invite;
+        } else if (a == "--invite-only") {
+            opt.registration = Reg::Invite;
         } else if (a == "--closed") opt.registration = Reg::Closed;
         else if (a == "--owner") opt.owner_name = next();
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
         else {
             std::fprintf(stderr,
                          "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME]\n"
-                         "               [--invite-code CODE | --closed] [--owner USERNAME] [--verbose]\n\n"
+                         "               [--invite-only | --invite-code CODE | --closed] [--owner USERNAME]\n"
+                         "               [--verbose]\n\n"
+                         "  --invite-only       new accounts need an invite made by a member (/invite in the\n"
+                         "                      client); the named owner can always get in\n"
                          "  --name NAME         what this community is called\n"
                          "  --owner USERNAME    the account that owns this server and has every\n"
                          "                      permission; without it, the first to register owns it\n"
@@ -873,7 +913,7 @@ int main(int argc, char** argv) {
             return a == "--help" ? 0 : 2;
         }
     }
-    if (opt.registration == Reg::Invite && opt.invite_code.size() < 8) {
+    if (!opt.invite_code.empty() && opt.invite_code.size() < 8) {
         std::fprintf(stderr, "the invite code must be at least 8 characters\n");
         return 2;
     }

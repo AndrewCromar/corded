@@ -379,7 +379,8 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         } else if (name == "server_info" || name == "member_list" || name == "create_role" ||
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
-                   name == "set_channel_access" || name == "kick" || name == "ban_user") {
+                   name == "set_channel_access" || name == "kick" || name == "ban_user" ||
+                   name == "create_invite" || name == "revoke_invite") {
             community_command(req, name, cmd);
         } else if (name == "leave_room") {
             if (conn_ != Conn::Live) {
@@ -454,7 +455,37 @@ void Engine::run_command(uint64_t req, const std::string& text) {
     }
 }
 
-void Engine::cmd_connect(uint64_t req, const json& cmd) {
+// Parses corded://host[:port]/?fp=<fingerprint>&invite=<code> into the fields
+// the connect command takes.
+static nlohmann::json parse_invite_link(const std::string& link) {
+    const std::string scheme = "corded://";
+    if (link.rfind(scheme, 0) != 0) throw std::invalid_argument("not a corded:// link");
+    std::string rest = link.substr(scheme.size());
+    std::string authority = rest.substr(0, rest.find_first_of("/?"));
+    std::string query = rest.find('?') == std::string::npos ? "" : rest.substr(rest.find('?') + 1);
+    nlohmann::json out;
+    auto colon = authority.rfind(':');
+    out["host"] = colon == std::string::npos ? authority : authority.substr(0, colon);
+    out["port"] = colon == std::string::npos ? std::string("7443") : authority.substr(colon + 1);
+    if (out["host"].get<std::string>().empty()) throw std::invalid_argument("the link has no server address");
+    for (size_t pos = 0; pos < query.size();) {
+        size_t end = query.find('&', pos);
+        if (end == std::string::npos) end = query.size();
+        std::string pair = query.substr(pos, end - pos);
+        auto eq = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string key = pair.substr(0, eq), value = pair.substr(eq + 1);
+            if (key == "fp") out["fingerprint"] = value;
+            if (key == "invite") out["invite"] = value;
+        }
+        pos = end + 1;
+    }
+    return out;
+}
+
+void Engine::cmd_connect(uint64_t req, const json& given) {
+    // An invite link carries everything: address, the server's key, the code.
+    json cmd = given.contains("link") ? parse_invite_link(given.at("link").get<std::string>()) : given;
     std::string host = cmd.at("host").get<std::string>();
     std::string port = cmd.at("port").is_string() ? cmd.at("port").get<std::string>()
                                                   : std::to_string(cmd.at("port").get<int>());
@@ -576,6 +607,29 @@ void Engine::community_command(uint64_t req, const std::string& name, const json
         q.allow = permission_bits(cmd.value("allow", json::array()));
         q.deny = permission_bits(cmd.value("deny", json::array()));
         simple_request(req, std::move(q));
+    } else if (name == "create_invite") {
+        wire::NewInviteT q;
+        q.max_uses = cmd.value("max_uses", 0u);
+        q.expires_in_s = static_cast<uint64_t>(cmd.value("expires_in_hours", 0.0) * 3600.0);
+        request(std::move(q), [this, req](wire::FrameT& r) {
+            auto* invite = r.body.AsInvite();
+            if (!invite) {
+                auto* e = r.body.AsError();
+                fail(req, "refused", e ? e->message : "could not create an invite");
+                return;
+            }
+            // The link pins the server's key, so whoever uses it cannot be
+            // pointed at an impostor.
+            ok(req, {{"code", invite->code},
+                     {"max_uses", invite->max_uses},
+                     {"expires_at", invite->expires_at},
+                     {"link", "corded://" + host_ + ":" + port_ + "/?fp=" + server_fingerprint_ +
+                                  "&invite=" + invite->code}});
+        });
+    } else if (name == "revoke_invite") {
+        wire::RevokeInviteT q;
+        q.code = cmd.at("code").get<std::string>();
+        simple_request(req, std::move(q));
     } else if (name == "kick") {
         admin_action(req, cmd.at("username").get<std::string>(), [this, req](const Bytes& user_id) {
             wire::KickT q;
@@ -676,9 +730,27 @@ void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string roo
     });
 }
 
-// Edits and deletions change another event. Both are honoured only when they
-// come from the person who sent the original. Deletion is a request: this
-// client erases its copy, but cannot make anyone else forget.
+// Whether this person may delete other people's messages in a channel: the
+// owner, an administrator, or anyone with a role that grants manage_messages.
+// Judged from the roles the server reported; per-channel exceptions are not
+// taken into account here.
+bool Engine::can_moderate(const RoomRow& room, ByteView user_id) {
+    if (room.kind != 0) return false;
+    for (const auto& m : room.members) {
+        if (m.user_id.size() != user_id.size() || !std::equal(m.user_id.begin(), m.user_id.end(), user_id.begin()))
+            continue;
+        if (m.is_owner || m.is_admin) return true;
+        for (uint32_t id : m.roles)
+            for (const auto& r : roles_)
+                if (r.id == id && (r.permissions & perm::ManageMessages)) return true;
+    }
+    return false;
+}
+
+// Edits and deletions change another event. An edit is honoured only from the
+// person who sent the original. A deletion is honoured from them, or in a
+// channel from a moderator. Deletion is a request: this client erases its
+// copy, but cannot make anyone else forget.
 void Engine::apply_relation(const EventRow& e) {
     if (e.rel_target.empty()) return;
     if (e.rel_kind == "thread") {
@@ -689,7 +761,11 @@ void Engine::apply_relation(const EventRow& e) {
     }
     if (e.rel_kind != "replace" && e.rel_kind != "redact") return;
     auto target = vault_.event(e.room_id, e.rel_target);
-    if (!target || target->sender_user != e.sender_user) return;
+    if (!target) return;
+    if (target->sender_user != e.sender_user) {
+        auto room = vault_.room(e.room_id);
+        if (e.rel_kind != "redact" || !room || !can_moderate(*room, e.sender_user)) return;
+    }
     if (target->status == "redacted" || target->status == "undecryptable") return;
     if (e.rel_kind == "replace") {
         if (e.type != "m.edit" || target->type != "m.text") return;

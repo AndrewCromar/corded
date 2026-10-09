@@ -190,6 +190,22 @@ def main():
         alice.expect("[mods]")
         print("ok  owner creates a channel and a role, and gives the role to a member")
 
+        # An invite link, used by a fourth person to join.
+        alice.type("/invite 1\r")
+        alice.expect("Invite link")
+        link = open(f"{tmp}/alice/last-invite.txt").read().strip()
+        assert link.startswith("corded://127.0.0.1:"), link
+        dave = Tui(f"{bindir}/corded-tui", ["--vault", f"{tmp}/dave", "--name", "dave", "--join", link])
+        clients.append(dave)
+        dave.expect("Create your identity")
+        dave.type("a long passphrase")
+        dave.type(DOWN)
+        dave.type("a long passphrase")
+        dave.type("\r")
+        dave.expect("live", timeout=30)
+        dave.expect("#general")
+        print("ok  invite link made in the client lets a new person join")
+
         alice.type("/channel private mods\r")
         time.sleep(1.5)
         carol.pump(0.5)

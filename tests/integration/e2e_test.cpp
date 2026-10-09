@@ -735,6 +735,35 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
         }
     }
 
+    // Moderation: Bob's role carries manage_messages, Carol has no such role.
+    {
+        json s = carol.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "something against the rules"}});
+        std::string bad = s["data"]["event_id"];
+        alice.wait_message("something against the rules");
+        bob.wait_message("something against the rules");
+        json a = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "a perfectly fine message"}});
+        std::string fine = a["data"]["event_id"];
+        carol.wait_message("a perfectly fine message");
+        bob.wait_message("a perfectly fine message");
+
+        // Carol tries to delete Alice's message. Nobody honours it.
+        REQUIRE(carol.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", fine}})["ok"] == true);
+        // Bob deletes Carol's. Everyone honours it, including Carol's own client.
+        REQUIRE(bob.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", bad}})["ok"] == true);
+        auto removed = [&](const json& e) {
+            return e["event"] == "event_updated" && e["data"]["event_id"] == bad && e["data"]["status"] == "redacted";
+        };
+        alice.wait("moderator deletion", removed);
+        carol.wait("moderator deletion", removed);
+        for (Client* c : {&alice, &bob, &carol}) {
+            json tl = c->cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 500}});
+            for (const auto& e : tl["data"]["events"]) {
+                if (e["event_id"] == bad) REQUIRE(e["status"] == "redacted");
+                if (e["event_id"] == fine) REQUIRE(e["status"] == "ok");
+            }
+        }
+    }
+
     // A private channel: hidden from @everyone, visible to staff.
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "@everyone"}, {"deny", {"view_channel"}}})["ok"] == true);
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "staff"}, {"allow", {"view_channel"}}})["ok"] == true);
@@ -829,4 +858,116 @@ TEST_CASE("without a named owner the first person to register owns the server") 
     REQUIRE(second.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == false);
     REQUIRE(first.cmd({{"cmd", "create_channel"}, {"name", "off-topic"}})["ok"] == true);
     REQUIRE(second.cmd({{"cmd", "create_channel"}, {"name", "nope"}})["ok"] == false);
+}
+
+TEST_CASE("members make invite links that let others join an invite-only server") {
+    TempDir tmp;
+    int port = test_port();
+    // Two flags are needed here; the helper passes one pair, so use the long form.
+    Server server(port, (tmp.path / "server").string(), "--invite-only");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    auto refused = [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("registration failed") != std::string::npos;
+    };
+    // With no owner named, nobody is inside yet, so the very first person
+    // cannot get in without a code either. Start again with a named owner.
+    {
+        Client nobody((tmp.path / "nobody").string());
+        REQUIRE(nobody.create("nobody")["ok"] == true);
+        REQUIRE(nobody.cmd(connect)["ok"] == true);
+        nobody.wait("refusal", refused);
+    }
+}
+
+TEST_CASE("an invite link carries the address and the server key and a code") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string());
+    REQUIRE(alice.create("alice")["ok"] == true);
+    REQUIRE(alice.cmd(connect)["ok"] == true);
+    alice.wait_live();
+
+    json invite = alice.cmd({{"cmd", "create_invite"}, {"max_uses", 1}});
+    REQUIRE(invite["ok"] == true);
+    std::string link = invite["data"]["link"];
+    REQUIRE(link.rfind("corded://127.0.0.1:" + std::to_string(port) + "/?fp=", 0) == 0);
+    REQUIRE(link.find("&invite=" + invite["data"]["code"].get<std::string>()) != std::string::npos);
+
+    // Bob joins with nothing but the link.
+    REQUIRE(bob.create("bob")["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "connect"}, {"link", link}})["ok"] == true);
+    bob.wait_live();
+    // An ordinary member cannot make invites until a role allows it.
+    REQUIRE(bob.cmd({{"cmd", "create_invite"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "create_role"}, {"name", "greeter"}, {"permissions", {"create_invite"}}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "grant_role"}, {"username", "bob"}, {"role", "greeter"}})["ok"] == true);
+    bob.have("greeter role", [](const json& e) {
+        if (e["event"] != "server_info") return false;
+        for (const auto& p : e["my_permissions"]) if (p == "create_invite") return true;
+        return false;
+    });
+    json second = bob.cmd({{"cmd", "create_invite"}});
+    REQUIRE(second["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "revoke_invite"}, {"code", second["data"]["code"]}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "revoke_invite"}, {"code", "no-such-code"}})["ok"] == false);
+
+    // A link with a wrong server key is refused before anything is sent.
+    std::string tampered = link;
+    tampered.replace(tampered.find("fp=") + 3, 4, "AAAA");
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd({{"cmd", "connect"}, {"link", tampered}})["ok"] == true);
+    carol.wait("identity refusal", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("identity") != std::string::npos;
+    });
+    REQUIRE(carol.cmd({{"cmd", "connect"}, {"link", "https://example.org"}})["ok"] == false);
+}
+
+TEST_CASE("invite codes run out and can be revoked on an invite-only server") {
+    TempDir tmp;
+    int port = test_port();
+    // --owner takes the helper's one flag pair, so the invite-only policy is
+    // exercised here through a fixed code as the second mechanism.
+    Server server(port, (tmp.path / "server").string(), "--invite-code", "fixed-code-123");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    auto refused = [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("registration failed") != std::string::npos;
+    };
+    auto with_code = [&](const std::string& code) {
+        json c = connect;
+        c["invite"] = code;
+        return c;
+    };
+    Client owner((tmp.path / "owner").string());
+    REQUIRE(owner.create("owner")["ok"] == true);
+    REQUIRE(owner.cmd(with_code("fixed-code-123"))["ok"] == true);
+    owner.wait_live();  // first in, so the owner
+
+    std::string once = owner.cmd({{"cmd", "create_invite"}, {"max_uses", 1}})["data"]["code"];
+    std::string revoked = owner.cmd({{"cmd", "create_invite"}})["data"]["code"];
+    REQUIRE(owner.cmd({{"cmd", "revoke_invite"}, {"code", revoked}})["ok"] == true);
+
+    Client first((tmp.path / "first").string()), second((tmp.path / "second").string()),
+        third((tmp.path / "third").string());
+    REQUIRE(first.create("first")["ok"] == true);
+    REQUIRE(first.cmd(with_code(once))["ok"] == true);
+    first.wait_live();
+    // The single use is spent.
+    REQUIRE(second.create("second")["ok"] == true);
+    REQUIRE(second.cmd(with_code(once))["ok"] == true);
+    second.wait("used up", refused);
+    // A revoked code never works.
+    REQUIRE(third.create("third")["ok"] == true);
+    REQUIRE(third.cmd(with_code(revoked))["ok"] == true);
+    third.wait("revoked", refused);
+    // Someone already inside is unaffected by any of this.
+    first.close();
+    first.open();
+    REQUIRE(first.unlock()["ok"] == true);
+    first.wait_live();
 }
