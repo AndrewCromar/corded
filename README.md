@@ -28,7 +28,7 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 |---|---|
 | Design blueprint | Done ([PDF](master_plan/Modular%20E2EE%20Messaging%20Platform%20-%20Technical%20Architecture%20Blueprint.pdf)) |
 | Implementation plan | Done ([master_plan/](master_plan/00-overview.md)) |
-| Prototype | Working on Linux: server, core library, terminal client. Two people can chat, end-to-end encrypted |
+| Prototype | Working on Linux: server, core library, terminal client. One-to-one and group chats, end-to-end encrypted |
 | Everything else in the plan | Not started |
 
 ## Try the prototype
@@ -80,6 +80,8 @@ and start typing. Things to try:
 |---|---|
 | any text | Sends a message to the open chat |
 | `/chat <username>` | Starts or opens a chat with someone on the same server |
+| `/group bob carol : Weekend plans` | Starts a group chat; the part after the colon is an optional name |
+| `/name <text>` | Renames the open chat |
 | `/reply <text>` | Replies to the last message you received |
 | `/react <emoji or text>` | Reacts to the last message you received |
 | `/help` | Shows the command list |
@@ -100,8 +102,10 @@ ctest --preset dev
 
 It does:
 
-- Real end-to-end encryption for two-person chats: X3DH key agreement and the Double
-  Ratchet, built on libsodium. The server stores only ciphertext, and a test checks that.
+- Real end-to-end encryption: X3DH key agreement and the Double Ratchet, built on
+  libsodium. The server stores only ciphertext, and a test checks that.
+- Group chats. Each message is encrypted separately for every member, and room names are
+  encrypted too, so the server never learns them.
 - An encrypted local vault. Keys and message history are stored in an encrypted SQLite
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
@@ -114,7 +118,7 @@ It does:
 
 It does not, yet:
 
-- Group chats with more than two people.
+- Change who is in a group after it is created, or leave one.
 - Verify contacts (safety numbers). The first key seen for a user is trusted.
 - More than one device per user, or more than one server per vault.
 - Rate limiting, invites, or closed registration on the server: anyone who can reach it

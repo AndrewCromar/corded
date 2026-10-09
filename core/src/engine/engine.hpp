@@ -62,6 +62,11 @@ private:
     void run_command(uint64_t req, const std::string& text);
     void cmd_connect(uint64_t req, const json& cmd);
     void cmd_start_chat(uint64_t req, const json& cmd);
+    void cmd_create_room(uint64_t req, const json& cmd);
+    void lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>> names,
+                     std::shared_ptr<wire::CreateRoomT> create, std::string room_name);
+    void create_room(uint64_t req, wire::CreateRoomT create, std::string room_name);
+    void apply_state(const EventRow& e);
     void cmd_send_event(uint64_t req, const json& cmd);
     void after_unlock();
 

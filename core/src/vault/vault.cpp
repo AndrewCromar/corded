@@ -213,6 +213,12 @@ CREATE TABLE IF NOT EXISTS outbox (
     local_id INTEGER PRIMARY KEY AUTOINCREMENT, room_id BLOB NOT NULL, event_id BLOB NOT NULL
 );
 )sql");
+    // Added after the first prototype: rooms can carry a name.
+    try {
+        db_.exec("SELECT name FROM rooms LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE rooms ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+    }
 }
 
 void Vault::load_identity() {
@@ -313,11 +319,12 @@ void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members)
 std::optional<RoomRow> Vault::room(ByteView room_id) {
     RoomRow r;
     {
-        auto st = db_.prepare("SELECT acked_seq FROM rooms WHERE room_id = ?");
+        auto st = db_.prepare("SELECT acked_seq, name FROM rooms WHERE room_id = ?");
         st.bind(1, room_id);
         if (!st.step()) return std::nullopt;
         r.room_id = to_bytes(room_id);
         r.acked_seq = st.u64(0);
+        r.name = st.text(1);
     }
     auto st = db_.prepare("SELECT user_id, username FROM members WHERE room_id = ? ORDER BY username");
     st.bind(1, room_id);
@@ -340,6 +347,11 @@ std::vector<RoomRow> Vault::rooms() {
 void Vault::advance_cursor(ByteView room_id, uint64_t seq) {
     auto st = db_.prepare("UPDATE rooms SET acked_seq = MAX(acked_seq, ?) WHERE room_id = ?");
     st.bind(1, seq).bind(2, room_id).exec();
+}
+
+void Vault::set_room_name(ByteView room_id, const std::string& name) {
+    auto st = db_.prepare("UPDATE rooms SET name = ? WHERE room_id = ?");
+    st.bind(1, name).bind(2, room_id).exec();
 }
 
 bool Vault::insert_event(const EventRow& e) {

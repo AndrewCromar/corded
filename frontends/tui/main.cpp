@@ -206,6 +206,7 @@ private:
         m.ts = d.value("origin_ts", uint64_t{0});
         if (rel_kind == "reply") m.reply_to = rel_target;
         if (type == "m.text") m.body = d["content"].value("body", "");
+        else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
         else m.body = "[unsupported message type: " + type + "]";
@@ -307,6 +308,27 @@ private:
                 screen_.Exit();
             } else if (cmd == "/chat" && !arg.empty()) {
                 chat_request_ = command({{"cmd", "start_chat"}, {"username", arg}});
+            } else if (cmd == "/group" && !arg.empty()) {
+                // "/group bob carol" or "/group bob carol : Weekend plans"
+                std::string people = arg, room_name;
+                if (auto colon = arg.find(':'); colon != std::string::npos) {
+                    people = arg.substr(0, colon);
+                    room_name = arg.substr(colon + 1);
+                    room_name.erase(0, room_name.find_first_not_of(' '));
+                }
+                json names = json::array();
+                size_t pos = 0;
+                while (pos < people.size()) {
+                    size_t end = people.find(' ', pos);
+                    if (end == std::string::npos) end = people.size();
+                    if (end > pos) names.push_back(people.substr(pos, end - pos));
+                    pos = end + 1;
+                }
+                json c = {{"cmd", "create_room"}, {"usernames", names}};
+                if (!room_name.empty()) c["name"] = room_name;
+                chat_request_ = command(c);
+            } else if (cmd == "/name" && !arg.empty() && room) {
+                command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
             } else if (cmd == "/connect" && !arg.empty()) {
                 server_ = arg;
                 connect_to(arg);
@@ -421,6 +443,8 @@ private:
         if (show_help_)
             all.push_back(vbox({
                               text("/chat <username>   start or open a chat"),
+                              text("/group a b c : Name  start a group chat (the name is optional)"),
+                              text("/name <text>       rename the open chat"),
                               text("/reply <text>      reply to the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
                               text("/connect host:port connect to a server"),

@@ -180,7 +180,7 @@ properly when its owning stage is reached.
 | D-11 vault encryption | SQLite3 Multiple Ciphers (ChaCha20-Poly1305) instead of SQLCipher | vcpkg's SQLCipher port only supports Windows | Stage 3 |
 | D-03 libsodium source | System libsodium by default; vcpkg copy behind the `vendored-sodium` manifest feature | The vcpkg port needs `autoconf-archive` installed on the host | Stage 0 |
 | D-07 transport security | TLS 1.3 with a self-signed server certificate, pinned by clients on first use or from a fingerprint given up front; sign-in signature covers a TLS exporter value. Tag `prototype-v0` predates this and uses plain TCP | CA-validated certificates and invite links carrying the fingerprint are not built yet | Stage 2 |
-| D-16 group rooms | Two-person rooms only (pairwise Double Ratchet) | Sender keys not built yet | Stage 4 |
+| D-16 group rooms | Groups work, but by encrypting each message separately for every member (pairwise Double Ratchet) instead of sender keys. Membership is fixed at creation. Tag `prototype-v0` has two-person rooms only | Stronger per-message security and no new crypto, at the cost of message size growing with the group; sender keys become worthwhile once groups are large or membership can change | Stage 4 |
 | D-15 devices | One device per user | As planned for first releases | F7 |
 | Stage 1 | Wire schema written directly as `proto/corded.fbs`, no prose specification | Prototype shortcut | Stage 1 |
 | Threading | One engine thread does both networking and engine work | Simpler; the two-thread split is still the plan | Stage 3 |

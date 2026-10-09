@@ -11,6 +11,7 @@ import re
 import select
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -23,6 +24,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-B]|\x1b[=>]")
 
 class Tui:
     def __init__(self, binary, args):
+        self.args = args
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.environ["TERM"] = "xterm-256color"
@@ -55,13 +57,34 @@ class Tui:
         tail = self.screen[-1500:]
         raise AssertionError(f"did not see {needle!r} on screen. Last output:\n{tail}")
 
+    def expect_any(self, needles, timeout=15):
+        end = time.time() + timeout
+        while time.time() < end:
+            if any(n in self.screen for n in needles):
+                return
+            self.pump(0.2)
+        raise AssertionError(f"did not see any of {needles!r}. Last output:\n{self.screen[-1500:]}")
+
     def clear(self):
         self.screen = ""
 
     def close(self):
         try:
             os.kill(self.pid, signal.SIGTERM)
+            for _ in range(50):
+                if os.waitpid(self.pid, os.WNOHANG)[0] != 0:
+                    return
+                # Keep reading: a client blocks if nobody drains its terminal.
+                self.pump(0.1)
+            info = []
+            for th in os.listdir(f"/proc/{self.pid}/task"):
+                st = open(f"/proc/{self.pid}/task/{th}/stat").read().split()
+                sc = open(f"/proc/{self.pid}/task/{th}/syscall").read().split()[0]
+                info.append(f"{th}:{st[2]}:syscall{sc}")
+            os.kill(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
+            raise AssertionError(f"client {self.args} did not exit on SIGTERM; threads {info}; "
+                                 f"screen tail {self.screen[-300:]!r}")
         except OSError:
             pass
 
@@ -69,7 +92,9 @@ class Tui:
 def main():
     bindir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/dev/bin")
     tmp = tempfile.mkdtemp(prefix="corded-tui-")
-    port = 23000 + os.getpid() % 10000
+    with socket.socket() as probe:  # ask the kernel for a free port
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
     server = subprocess.Popen(
         [f"{bindir}/cordedd", "--host", "127.0.0.1", "--port", str(port), "--data", f"{tmp}/server"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -113,6 +138,17 @@ def main():
         alice.expect("[+1]")
         print("ok  reaction shows on the other side")
 
+        carol = start("carol")
+        alice.type("/group bob carol : Weekend plans\r")
+        alice.expect("Weekend plans")
+        alice.type("hi group\r")
+        carol.expect("Weekend plans")
+        carol.expect("hi group")
+        bob.expect("Weekend plans (")  # shown as unread in bob's chat list
+        carol.type("carol is here\r")
+        alice.expect("carol is here")
+        print("ok  group chat with three people, named room, unread marker")
+
         # Restart alice: unlock the existing vault and see the history again.
         alice.type("/quit\r")
         os.waitpid(alice.pid, 0)
@@ -124,16 +160,20 @@ def main():
         alice.type("wrong passphrase\r")
         alice.expect("wrong passphrase", timeout=30)
         alice.type("a long passphrase\r")
-        alice.expect("hello from alice", timeout=30)
-        alice.expect("sent while alice was away", timeout=30)
+        alice.expect("Weekend plans", timeout=30)
+        # The missed message shows in the open chat, or as an unread count if
+        # the other chat happens to be the open one.
+        alice.expect_any(["sent while alice was away", "bob (1)"], timeout=30)
         print("ok  restart: wrong passphrase refused, history restored, missed message delivered")
         print("PASS")
     finally:
-        for c in clients:
-            c.close()
-        server.terminate()
-        server.wait()
-        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            for c in clients:
+                c.close()
+        finally:
+            server.terminate()
+            server.wait()
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

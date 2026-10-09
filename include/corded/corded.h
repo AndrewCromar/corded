@@ -12,18 +12,20 @@
  *
  * Commands (JSON objects passed to corded_command, "cmd" names the command):
  *   {"cmd":"status"}
- *   {"cmd":"connect","host":"example.org","port":7443}
+ *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>"}
  *   {"cmd":"disconnect"}
  *   {"cmd":"lock"}
  *   {"cmd":"list_rooms"}
  *   {"cmd":"start_chat","username":"bob"}
+ *   {"cmd":"create_room","usernames":["bob","carol"],"name":"optional room name"}
+ *   {"cmd":"set_room_name","room_id":"...","name":"new name"}
  *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>"}
  *   {"cmd":"send_event","room_id":"...","type":"m.reaction","content":{...},
  *    "relation":{"kind":"annotation","target":"<event id>","key":"+1"}}
  *   {"cmd":"fetch_timeline","room_id":"...","limit":200}
  *
  * Events (JSON objects, "event" names the event):
- *   vault_state, connection_state, room_updated, event_received,
+ *   vault_state, connection_state, server_pinned, room_updated, event_received,
  *   event_send_status, command_result, warning
  */
 #ifndef CORDED_H

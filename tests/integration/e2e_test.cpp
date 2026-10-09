@@ -147,6 +147,15 @@ struct Client {
                    e["data"]["mine"] == false;
         });
     }
+    // Like wait_message, but also satisfied by a message that already arrived
+    // while the test was waiting for something else.
+    json have_message(const std::string& body) {
+        for (const auto& e : seen)
+            if (e["event"] == "event_received" && e["data"]["content"].value("body", "") == body &&
+                e["data"]["mine"] == false)
+                return e;
+        return wait_message(body);
+    }
     json wait_sent(const std::string& event_id) {
         return wait("send confirmation", [&](const json& e) {
             return e["event"] == "event_send_status" && e["event_id"] == event_id;
@@ -164,7 +173,19 @@ bool tree_contains(const fs::path& root, const std::string& needle) {
     return false;
 }
 
-int test_port() { return 21000 + static_cast<int>(getpid() % 20000); }
+// Asks the kernel for a port nobody is using.
+int test_port() {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    socklen_t len = sizeof addr;
+    REQUIRE(bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+    REQUIRE(getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
+    close(fd);
+    return ntohs(addr.sin_port);
+}
 
 }  // namespace
 
@@ -312,7 +333,7 @@ TEST_CASE("the vault rejects a wrong passphrase and reopens with the right one")
 
 TEST_CASE("a second user cannot take an existing username") {
     TempDir tmp;
-    int port = test_port() + 1;
+    int port = test_port();
     Server server(port, (tmp.path / "server").string());
     json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
     Client first((tmp.path / "one").string());
@@ -330,7 +351,7 @@ TEST_CASE("a second user cannot take an existing username") {
 
 TEST_CASE("a client refuses a server whose identity has changed") {
     TempDir tmp;
-    int port = test_port() + 2;
+    int port = test_port();
     json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
     Client erin((tmp.path / "erin").string());
     REQUIRE(erin.create("erin")["ok"] == true);
@@ -361,4 +382,87 @@ TEST_CASE("a client refuses a server whose identity has changed") {
         return e["event"] == "connection_state" && e["state"] == "disconnected" &&
                e.value("detail", "").find("identity") != std::string::npos;
     });
+}
+
+TEST_CASE("three people share a group room") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string());
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string());
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->wait_live();
+    }
+
+    json made = alice.cmd({{"cmd", "create_room"}, {"usernames", {"bob", "carol"}}, {"name", "the secret plan"}});
+    REQUIRE(made["ok"] == true);
+    std::string room = made["data"]["room"]["room_id"];
+    REQUIRE(made["data"]["room"]["is_group"] == true);
+    REQUIRE(made["data"]["room"]["members"].size() == 3);
+    REQUIRE(alice.cmd({{"cmd", "create_room"}, {"usernames", {"bob", "nobody"}}})["ok"] == false);
+
+    // The name reaches the others as an encrypted event.
+    auto named = [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == room &&
+               e["room"]["title"] == "the secret plan";
+    };
+    bob.wait("room name", named);
+    carol.wait("room name", named);
+
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "hello everyone"}})["ok"] == true);
+    REQUIRE(bob.wait_message("hello everyone")["data"]["sender_name"] == "alice");
+    REQUIRE(carol.wait_message("hello everyone")["data"]["sender_name"] == "alice");
+
+    // Bob and Carol have never talked; their session is set up on demand.
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "bob here"}})["ok"] == true);
+    alice.wait_message("bob here");
+    REQUIRE(carol.wait_message("bob here")["data"]["sender_name"] == "bob");
+    REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "carol here"}})["ok"] == true);
+    alice.wait_message("carol here");
+    bob.wait_message("carol here");
+
+    // Everyone ends up with the same history in the same order.
+    for (int i = 0; i < 10; ++i) {
+        alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "a" + std::to_string(i)}});
+        bob.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "b" + std::to_string(i)}});
+        carol.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "c" + std::to_string(i)}});
+    }
+    alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "last one"}});
+    for (Client* c : {&alice, &bob, &carol})
+        for (const char* body : {"a9", "b9", "c9", "last one"})
+            if (!(c == &alice && (body[0] == 'a' || body[0] == 'l')) && !(c == &bob && body[0] == 'b') &&
+                !(c == &carol && body[0] == 'c'))
+                c->have_message(body);
+    // Wait until nobody has anything pending, then insist nothing went wrong.
+    for (Client* c : {&alice, &bob, &carol}) {
+        std::string problems;
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            problems.clear();
+            json tl = c->cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
+            for (const auto& e : tl["data"]["events"])
+                if (e["status"] != "ok")
+                    problems += e["status"].get<std::string>() + ":" + e["type"].get<std::string>() + " ";
+            if (problems.empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        INFO("events that never settled: " << problems);
+        REQUIRE(problems.empty());
+    }
+    auto bodies = [&](Client& c) {
+        std::vector<std::string> out;
+        json tl = c.cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
+        for (const auto& e : tl["data"]["events"])
+            if (e["type"] == "m.text") out.push_back(e["content"]["body"]);
+        return out;
+    };
+    auto a = bodies(alice);
+    REQUIRE(a.size() == 34);
+    REQUIRE(bodies(bob) == a);
+    REQUIRE(bodies(carol) == a);
+
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "hello everyone"));
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "the secret plan"));
 }

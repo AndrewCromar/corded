@@ -40,7 +40,9 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
     return c;
 }
 
-bool known_type(const std::string& type) { return type == "m.text" || type == "m.reaction"; }
+bool known_type(const std::string& type) {
+    return type == "m.text" || type == "m.reaction" || type == "m.room.name";
+}
 
 const char* conn_name(int c) {
     static const char* names[] = {"disconnected", "connecting", "authenticating", "syncing", "live"};
@@ -141,8 +143,11 @@ Engine::json Engine::room_json(const RoomRow& room) {
         members.push_back({{"user_id", b64(m.user_id)}, {"username", m.username}, {"me", me}});
         if (!me) title += (title.empty() ? "" : ", ") + m.username;
     }
+    if (!room.name.empty()) title = room.name;
     return {{"room_id", b64(room.room_id)},
             {"title", title.empty() ? "(empty room)" : title},
+            {"name", room.name},
+            {"is_group", room.members.size() > 2},
             {"members", std::move(members)}};
 }
 
@@ -269,6 +274,13 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             ok(req, {{"rooms", std::move(rooms)}});
         } else if (name == "start_chat") {
             cmd_start_chat(req, cmd);
+        } else if (name == "create_room") {
+            cmd_create_room(req, cmd);
+        } else if (name == "set_room_name") {
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.room.name"},
+                                 {"state_key", ""},
+                                 {"content", {{"name", cmd.at("name")}}}});
         } else if (name == "send_text") {
             json ev = {{"room_id", cmd.at("room_id")},
                        {"type", "m.text"},
@@ -323,31 +335,85 @@ void Engine::cmd_start_chat(uint64_t req, const json& cmd) {
         fail(req, "not_connected", "not connected to a server");
         return;
     }
+    auto names = std::make_shared<std::vector<std::string>>();
+    names->push_back(cmd.at("username").get<std::string>());
+    lookup_next(req, names, std::make_shared<wire::CreateRoomT>(), "");
+}
+
+// A room with any number of people. Two-person rooms are unique per pair;
+// larger ones are always new.
+void Engine::cmd_create_room(uint64_t req, const json& cmd) {
+    if (conn_ != Conn::Live && conn_ != Conn::Syncing) {
+        fail(req, "not_connected", "not connected to a server");
+        return;
+    }
+    auto names = std::make_shared<std::vector<std::string>>();
+    for (const auto& n : cmd.at("usernames")) names->push_back(n.get<std::string>());
+    if (names->empty()) {
+        fail(req, "invalid_argument", "name at least one other person");
+        return;
+    }
+    lookup_next(req, names, std::make_shared<wire::CreateRoomT>(), cmd.value("name", std::string{}));
+}
+
+// Resolves usernames to user ids one at a time, then creates the room.
+void Engine::lookup_next(uint64_t req, std::shared_ptr<std::vector<std::string>> names,
+                         std::shared_ptr<wire::CreateRoomT> create, std::string room_name) {
+    if (create->members.size() == names->size()) {
+        create_room(req, std::move(*create), std::move(room_name));
+        return;
+    }
+    std::string username = (*names)[create->members.size()];
     wire::LookupUserT q;
-    q.username = cmd.at("username").get<std::string>();
-    request(std::move(q), [this, req](wire::FrameT& f) {
+    q.username = username;
+    request(std::move(q), [this, req, names, create, room_name, username](wire::FrameT& f) {
         if (f.body.type != wire::FrameBody_UserInfo) {
             auto* e = f.body.AsError();
-            fail(req, "not_found", e ? e->message : "lookup failed");
+            fail(req, "not_found", e && e->code != kDisconnected ? "no user called " + username
+                                                                 : "connection lost");
             return;
         }
-        wire::CreateRoomT create;
         auto member = std::make_unique<wire::MemberT>();
         member->user_id = f.body.AsUserInfo()->user_id;
-        create.members.push_back(std::move(member));
-        request(std::move(create), [this, req](wire::FrameT& r) {
-            if (r.body.type != wire::FrameBody_RoomInfo) {
-                auto* e = r.body.AsError();
-                fail(req, "server_error", e ? e->message : "could not create the room");
-                return;
-            }
-            store_room(*r.body.AsRoomInfo());
-            if (auto room = vault_.room(r.body.AsRoomInfo()->room_id))
-                ok(req, {{"room", room_json(*room)}});
-            else
-                fail(req, "internal", "room was not stored");
-        });
+        create->members.push_back(std::move(member));
+        lookup_next(req, names, create, room_name);
     });
+}
+
+void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string room_name) {
+    request(std::move(create), [this, req, room_name](wire::FrameT& r) {
+        if (r.body.type != wire::FrameBody_RoomInfo) {
+            auto* e = r.body.AsError();
+            fail(req, "server_error", e ? e->message : "could not create the room");
+            return;
+        }
+        store_room(*r.body.AsRoomInfo());
+        auto room = vault_.room(r.body.AsRoomInfo()->room_id);
+        if (!room) {
+            fail(req, "internal", "room was not stored");
+            return;
+        }
+        // The name travels as an encrypted state event, so the server never sees it.
+        if (!room_name.empty())
+            cmd_send_event(next_request_++, {{"room_id", b64(room->room_id)},
+                                             {"type", "m.room.name"},
+                                             {"state_key", ""},
+                                             {"content", {{"name", room_name}}}});
+        room = vault_.room(room->room_id);
+        ok(req, {{"room", room_json(*room)}});
+    });
+}
+
+// Room state carried by events. Only the room name so far.
+void Engine::apply_state(const EventRow& e) {
+    if (e.type != "m.room.name") return;
+    json content = json::parse(e.content, nullptr, false);
+    if (!content.is_object() || !content.value("name", json()).is_string()) return;
+    std::string name = content["name"].get<std::string>();
+    if (name.size() > 80) name.resize(80);
+    vault_.set_room_name(e.room_id, name);
+    if (auto room = vault_.room(e.room_id))
+        emit({{"event", "room_updated"}, {"room", room_json(*room)}});
 }
 
 void Engine::cmd_send_event(uint64_t req, const json& cmd) {
@@ -383,6 +449,7 @@ void Engine::cmd_send_event(uint64_t req, const json& cmd) {
         vault_.outbox_push(e.room_id, e.event_id);
         tx.commit();
     }
+    apply_state(e);
     emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     ok(req, {{"event_id", b64(e.event_id)}});
     pump_outbox();
@@ -751,6 +818,7 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
         vault_.advance_cursor(ev.room_id, ev.seq);
         tx.commit();
     }
+    if (decrypted) apply_state(row);
     emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
 }
 

@@ -30,6 +30,7 @@ struct MemberRow {
 
 struct RoomRow {
     Bytes room_id;
+    std::string name;  // empty until someone names the room
     uint64_t acked_seq = 0;
     std::vector<MemberRow> members;
 };
@@ -86,6 +87,7 @@ public:
     std::vector<RoomRow> rooms();
     std::optional<RoomRow> room(ByteView room_id);
     void advance_cursor(ByteView room_id, uint64_t seq);
+    void set_room_name(ByteView room_id, const std::string& name);
 
     bool insert_event(const EventRow& e);  // false if the event id is already stored
     bool has_event(ByteView room_id, ByteView event_id);
