@@ -380,6 +380,15 @@ void Vault::set_room_name(ByteView room_id, const std::string& name) {
     st.bind(1, name).bind(2, room_id).exec();
 }
 
+void Vault::delete_room(ByteView room_id) {
+    for (const char* sql : {"DELETE FROM relations WHERE room_id = ?", "DELETE FROM events WHERE room_id = ?",
+                            "DELETE FROM outbox WHERE room_id = ?", "DELETE FROM members WHERE room_id = ?",
+                            "DELETE FROM rooms WHERE room_id = ?"}) {
+        auto st = db_.prepare(sql);
+        st.bind(1, room_id).exec();
+    }
+}
+
 bool Vault::insert_event(const EventRow& e) {
     auto st = db_.prepare(
         "INSERT OR IGNORE INTO events (room_id, event_id, seq, type, type_version, sender_user, "

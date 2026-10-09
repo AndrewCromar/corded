@@ -93,6 +93,7 @@ public:
     std::optional<RoomRow> room(ByteView room_id);
     void advance_cursor(ByteView room_id, uint64_t seq);
     void set_room_name(ByteView room_id, const std::string& name);
+    void delete_room(ByteView room_id);  // the room, its members and its history
 
     bool insert_event(const EventRow& e);  // false if the event id is already stored
     bool has_event(ByteView room_id, ByteView event_id);

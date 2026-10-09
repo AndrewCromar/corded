@@ -129,6 +129,12 @@ private:
                 room.loaded = true;
                 command({{"cmd", "fetch_timeline"}, {"room_id", room.id}, {"limit", 500}});
             }
+        } else if (kind == "room_removed") {
+            std::string id = ev.value("room_id", "");
+            rooms_.erase(std::remove_if(rooms_.begin(), rooms_.end(), [&](const Room& r) { return r.id == id; }),
+                         rooms_.end());
+            selected_ = 0;
+            refresh_titles();
         } else if (kind == "event_received") {
             const json& d = ev.at("data");
             Room& room = room_for(d.value("room_id", ""));
@@ -233,6 +239,10 @@ private:
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
         else if (type == "m.text") m.body = d["content"].value("body", "");
+        else if (type == "m.room.member")
+            m.body = d["content"].value("action", "") == "left"
+                         ? "left the chat"
+                         : "added " + d["content"].value("username", "someone") + " to the chat";
         else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
@@ -356,6 +366,13 @@ private:
                 json c = {{"cmd", "create_room"}, {"usernames", names}};
                 if (!room_name.empty()) c["name"] = room_name;
                 chat_request_ = command(c);
+            } else if (cmd == "/add" && !arg.empty() && room) {
+                command({{"cmd", "add_member"}, {"room_id", room->id}, {"username", arg}});
+            } else if (cmd == "/leave" && room) {
+                // Say goodbye first, while we can still send to the room.
+                command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.room.member"},
+                         {"content", {{"action", "left"}}}});
+                command({{"cmd", "leave_room"}, {"room_id", room->id}});
             } else if (cmd == "/name" && !arg.empty() && room) {
                 command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
             } else if ((cmd == "/edit" && !arg.empty() && room) || (cmd == "/delete" && room)) {
@@ -521,6 +538,7 @@ private:
                               text("/chat <username>   start or open a chat"),
                               text("/group a b c : Name  start a group chat (the name is optional)"),
                               text("/name <text>       rename the open chat"),
+                              text("/add <username>    add someone to the open group        /leave  leave it"),
                               text("/verify            show safety numbers for the people in this chat"),
                               text("/reply <text>      reply to the last message you received"),
                               text("/thread <text>     reply in a thread under the last message you received"),

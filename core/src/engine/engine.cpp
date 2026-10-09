@@ -42,7 +42,7 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
-           type == "m.redaction";
+           type == "m.redaction" || type == "m.room.member";
 }
 
 const char* conn_name(int c) {
@@ -313,6 +313,59 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             cmd_start_chat(req, cmd);
         } else if (name == "create_room") {
             cmd_create_room(req, cmd);
+        } else if (name == "add_member") {
+            // Look the person up, add them on the server, then tell the room.
+            if (conn_ != Conn::Live) {
+                fail(req, "not_connected", "not connected to a server");
+                return;
+            }
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            std::string username = cmd.at("username").get<std::string>();
+            wire::LookupUserT q;
+            q.username = username;
+            request(std::move(q), [this, req, room_id, username](wire::FrameT& f) {
+                if (f.body.type != wire::FrameBody_UserInfo) {
+                    fail(req, "not_found", "no user called " + username);
+                    return;
+                }
+                wire::AddMemberT add;
+                add.room_id = room_id;
+                add.user_id = f.body.AsUserInfo()->user_id;
+                request(std::move(add), [this, req, room_id, username](wire::FrameT& r) {
+                    if (r.body.type != wire::FrameBody_RoomInfo) {
+                        auto* e = r.body.AsError();
+                        fail(req, "server_error", e ? e->message : "could not add the member");
+                        return;
+                    }
+                    store_room(*r.body.AsRoomInfo());
+                    cmd_send_event(next_request_++, {{"room_id", b64(room_id)},
+                                                     {"type", "m.room.member"},
+                                                     {"content", {{"action", "added"}, {"username", username}}}});
+                    ok(req);
+                });
+            });
+        } else if (name == "leave_room") {
+            if (conn_ != Conn::Live) {
+                fail(req, "not_connected", "not connected to a server");
+                return;
+            }
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            wire::LeaveRoomT leave;
+            leave.room_id = room_id;
+            request(std::move(leave), [this, req, room_id](wire::FrameT& r) {
+                if (r.body.type != wire::FrameBody_Ok) {
+                    auto* e = r.body.AsError();
+                    fail(req, "server_error", e ? e->message : "could not leave the room");
+                    return;
+                }
+                {
+                    db::Transaction tx(vault_.db());
+                    vault_.delete_room(room_id);
+                    tx.commit();
+                }
+                emit({{"event", "room_removed"}, {"room_id", b64(room_id)}});
+                ok(req);
+            });
         } else if (name == "set_room_name") {
             cmd_send_event(req, {{"room_id", cmd.at("room_id")},
                                  {"type", "m.room.name"},
@@ -778,10 +831,23 @@ void Engine::on_auth_ok() {
     set_conn(Conn::Syncing);
     publish_prekeys();
     request(wire::ListRoomsT{}, [this](wire::FrameT& f) {
-        if (auto* list = f.body.AsRoomList())
-            for (const auto& room : list->rooms)
-                if (room) store_room(*room);
         if (f.body.type == wire::FrameBody_Error) return;
+        if (auto* list = f.body.AsRoomList()) {
+            std::set<Bytes> current;
+            for (const auto& room : list->rooms) {
+                if (!room) continue;
+                store_room(*room);
+                current.insert(room->room_id);
+            }
+            // Anything the server no longer lists is a room we have left.
+            for (const auto& known : vault_.rooms()) {
+                if (current.count(known.room_id)) continue;
+                db::Transaction tx(vault_.db());
+                vault_.delete_room(known.room_id);
+                tx.commit();
+                emit({{"event", "room_removed"}, {"room_id", b64(known.room_id)}});
+            }
+        }
         wire::SyncT sync;
         for (const auto& room : vault_.rooms()) {
             auto cur = std::make_unique<wire::CursorT>();

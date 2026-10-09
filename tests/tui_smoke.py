@@ -170,6 +170,11 @@ def main():
         alice.expect("carol is here")
         print("ok  group chat with three people, named room, unread marker")
 
+        carol.type("/leave\r")
+        carol.expect("No conversations yet")
+        alice.expect("left the chat")
+        print("ok  leaving a group removes it for the leaver and tells the others")
+
         # Restart alice: unlock the existing vault and see the history again.
         alice.type("/quit\r")
         os.waitpid(alice.pid, 0)

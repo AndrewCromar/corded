@@ -84,6 +84,8 @@ and start typing. Things to try:
 | `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
 | `/group bob carol : Weekend plans` | Starts a group chat; the part after the colon is an optional name |
 | `/name <text>` | Renames the open chat |
+| `/add <username>` | Adds someone to the open group |
+| `/leave` | Leaves the open group |
 | `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
 | `/verified <username>` | Marks someone as checked after comparing numbers |
 | `/reply <text>` | Replies to the last message you received |
@@ -115,7 +117,8 @@ It does:
 - Real end-to-end encryption: X3DH key agreement and the Double Ratchet, built on
   libsodium. The server stores only ciphertext, and a test checks that.
 - Group chats. Each message is encrypted separately for every member, and room names are
-  encrypted too, so the server never learns them.
+  encrypted too, so the server never learns them. People can be added later and can
+  leave; someone added later cannot read what was said before they joined.
 - An encrypted local vault. Keys and message history are stored in an encrypted SQLite
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
@@ -133,7 +136,8 @@ It does:
 
 It does not, yet:
 
-- Change who is in a group after it is created, or leave one.
+- Remove someone else from a group (anyone can add, and anyone can leave, but there are
+  no admins yet).
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.

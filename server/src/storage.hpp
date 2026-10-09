@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS room_events (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
 )sql");
+        // Added after the first prototype: two-person chats are marked, so a
+        // group that shrinks to two people is not mistaken for one.
+        try {
+            db_.exec("SELECT is_direct FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN is_direct INTEGER NOT NULL DEFAULT 0");
+            db_.exec("UPDATE rooms SET is_direct = 1 WHERE "
+                     "(SELECT COUNT(*) FROM memberships m WHERE m.room_id = rooms.room_id) = 2");
+        }
     }
 
     std::optional<DeviceRow> find_device(ByteView device_id) {
@@ -186,9 +195,12 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         wire::RoomInfoT info;
         info.room_id = to_bytes(room_id);
         {
-            auto st = db_.prepare("SELECT created_at FROM rooms WHERE room_id = ?");
+            auto st = db_.prepare("SELECT created_at, is_direct FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
-            if (st.step()) info.created_at = st.u64(0);
+            if (st.step()) {
+                info.created_at = st.u64(0);
+                info.is_direct = st.i64(1) != 0;
+            }
         }
         auto st = db_.prepare("SELECT u.user_id, u.username FROM memberships m "
                               "JOIN users u ON u.user_id = m.user_id WHERE m.room_id = ? "
@@ -215,8 +227,8 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
     std::optional<Bytes> find_direct_room(ByteView a, ByteView b) {
         auto st = db_.prepare(
             "SELECT m1.room_id FROM memberships m1 JOIN memberships m2 ON m1.room_id = m2.room_id "
-            "WHERE m1.user_id = ? AND m2.user_id = ? AND "
-            "(SELECT COUNT(*) FROM memberships m WHERE m.room_id = m1.room_id) = 2 LIMIT 1");
+            "JOIN rooms r ON r.room_id = m1.room_id "
+            "WHERE m1.user_id = ? AND m2.user_id = ? AND r.is_direct = 1 LIMIT 1");
         st.bind(1, a).bind(2, b);
         if (!st.step()) return std::nullopt;
         return st.blob(0);
@@ -225,14 +237,30 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
     Bytes create_room(const std::vector<Bytes>& members) {
         Bytes room_id = random_bytes(16);
         db::Transaction tx(db_);
-        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at) VALUES (?, ?)");
-        st.bind(1, room_id).bind(2, now_ms()).exec();
+        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct) VALUES (?, ?, ?)");
+        st.bind(1, room_id).bind(2, now_ms()).bind(3, members.size() == 2 ? 1 : 0).exec();
         for (const auto& m : members) {
             auto ins = db_.prepare("INSERT OR IGNORE INTO memberships (room_id, user_id) VALUES (?,?)");
             ins.bind(1, room_id).bind(2, m).exec();
         }
         tx.commit();
         return room_id;
+    }
+
+    bool is_direct(ByteView room_id) {
+        auto st = db_.prepare("SELECT is_direct FROM rooms WHERE room_id = ?");
+        st.bind(1, room_id);
+        return st.step() && st.i64(0) != 0;
+    }
+
+    void add_member(ByteView room_id, ByteView user_id) {
+        auto st = db_.prepare("INSERT OR IGNORE INTO memberships (room_id, user_id) VALUES (?, ?)");
+        st.bind(1, room_id).bind(2, user_id).exec();
+    }
+
+    void remove_member(ByteView room_id, ByteView user_id) {
+        auto st = db_.prepare("DELETE FROM memberships WHERE room_id = ? AND user_id = ?");
+        st.bind(1, room_id).bind(2, user_id).exec();
     }
 
     // Assigns the next sequence number and stores one row per recipient device.
@@ -257,6 +285,7 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
             st.exec();
         }
         for (const auto& r : ev.recipients) {
+            if (!r) continue;
             auto ins = db_.prepare("INSERT INTO room_events (room_id, seq, recipient_device, "
                                    "event_id, sender_user, sender_device, server_ts, ciphertext) "
                                    "VALUES (?,?,?,?,?,?,?,?)");

@@ -36,7 +36,10 @@ table UserInfo { user_id: [ubyte]; username: string; }
 
 // ---- rooms ----
 table CreateRoom { members: [Member]; }   // only user_id is read
-table RoomInfo { room_id: [ubyte]; members: [Member]; created_at: uint64; }
+table RoomInfo { room_id: [ubyte]; members: [Member]; created_at: uint64; is_direct: bool; }
+// Groups only. Any member may add someone; anyone may leave.
+table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
+table LeaveRoom { room_id: [ubyte]; }
 table ListRooms {}
 table RoomList { rooms: [RoomInfo]; }
 
@@ -55,7 +58,8 @@ union FrameBody {
   Hello, Register, Authenticate, AuthOk, Error, Ok,
   PublishPrekeys, FetchBundle, Bundle, LookupUser, UserInfo,
   CreateRoom, RoomInfo, ListRooms, RoomList,
-  SendRoomEvent, SendOk, RoomEvent, Sync, SyncComplete
+  SendRoomEvent, SendOk, RoomEvent, Sync, SyncComplete,
+  AddMember, LeaveRoom
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

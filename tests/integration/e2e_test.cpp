@@ -123,6 +123,12 @@ struct Client {
         FAIL("timed out waiting for: " << what);
         return {};
     }
+    // Like wait, but also satisfied by an event that has already arrived.
+    json have(const std::string& what, const std::function<bool(const json&)>& match) {
+        for (const auto& e : seen)
+            if (match(e)) return e;
+        return wait(what, match);
+    }
     json result(corded_request req, int timeout_ms = 10000) {
         return wait("result of request " + std::to_string(req), [&](const json& e) {
             return e["event"] == "command_result" && e["request"] == req;
@@ -584,4 +590,70 @@ TEST_CASE("an invite-only server turns away people without the code") {
     REQUIRE(late.create("late")["ok"] == true);
     REQUIRE(late.cmd(connect)["ok"] == true);
     late.wait("refusal", refused);
+}
+
+TEST_CASE("people can be added to a group and can leave it") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string());
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string()), dave((tmp.path / "dave").string());
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}, {&dave, "dave"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->wait_live();
+    }
+    json made = alice.cmd({{"cmd", "create_room"}, {"usernames", {"bob", "carol"}}});
+    std::string room = made["data"]["room"]["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "before dave joined"}})["ok"] == true);
+    bob.wait_message("before dave joined");
+    carol.wait_message("before dave joined");
+
+    // Bob (not the creator) adds Dave. Everyone learns the new membership.
+    REQUIRE(bob.cmd({{"cmd", "add_member"}, {"room_id", room}, {"username", "dave"}})["ok"] == true);
+    auto four_members = [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == room && e["room"]["members"].size() == 4;
+    };
+    alice.wait("membership", four_members);
+    carol.wait("membership", four_members);
+    dave.wait("membership", four_members);
+    json notice = alice.wait("join notice", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["type"] == "m.room.member";
+    });
+    REQUIRE(notice["data"]["content"]["username"] == "dave");
+
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "welcome dave"}})["ok"] == true);
+    dave.wait_message("welcome dave");
+    REQUIRE(dave.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "thanks all"}})["ok"] == true);
+    alice.wait_message("thanks all");
+    bob.wait_message("thanks all");
+    carol.wait_message("thanks all");
+    // Dave has nothing from before he joined.
+    json dave_tl = dave.cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
+    for (const auto& e : dave_tl["data"]["events"]) REQUIRE(e["content"].value("body", "") != "before dave joined");
+
+    // Carol leaves. She stops receiving; the others carry on.
+    REQUIRE(carol.cmd({{"cmd", "leave_room"}, {"room_id", room}})["ok"] == true);
+    carol.have("room removed", [&](const json& e) { return e["event"] == "room_removed" && e["room_id"] == room; });
+    auto three_members = [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == room && e["room"]["members"].size() == 3;
+    };
+    alice.wait("membership", three_members);
+    bob.wait("membership", three_members);
+    dave.wait("membership", three_members);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "after carol left"}})["ok"] == true);
+    bob.wait_message("after carol left");
+    dave.wait_message("after carol left");
+    REQUIRE(carol.cmd({{"cmd", "list_rooms"}})["data"]["rooms"].empty());
+    REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "am i still here"}})["ok"] == false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    for (const auto& e : carol.seen)
+        if (e["event"] == "event_received") REQUIRE(e["data"]["content"].value("body", "") != "after carol left");
+
+    // Two-person chats cannot gain members or be left.
+    json dm = alice.cmd({{"cmd", "start_chat"}, {"username", "bob"}});
+    std::string dm_room = dm["data"]["room"]["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "add_member"}, {"room_id", dm_room}, {"username", "dave"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", dm_room}})["ok"] == false);
 }

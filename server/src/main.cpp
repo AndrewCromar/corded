@@ -201,6 +201,8 @@ public:
                 case wire::FrameBody_LookupUser: on_lookup_user(*c, rid, *f.body.AsLookupUser()); break;
                 case wire::FrameBody_CreateRoom: on_create_room(*c, rid, *f.body.AsCreateRoom()); break;
                 case wire::FrameBody_ListRooms: on_list_rooms(*c, rid); break;
+                case wire::FrameBody_AddMember: on_add_member(*c, rid, *f.body.AsAddMember()); break;
+                case wire::FrameBody_LeaveRoom: on_leave_room(*c, rid, *f.body.AsLeaveRoom()); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
                     break;
@@ -356,6 +358,52 @@ private:
         c.reply(rid, std::move(info));
     }
 
+    // Sends the room's current membership to every member who is online.
+    void announce_room(const wire::RoomInfoT& info, const Bytes& except_user) {
+        for (const auto& m : info.members) {
+            if (m->user_id == except_user) continue;
+            if (auto dev = storage_.device_of_user(m->user_id)) push(dev->device_id, info);
+        }
+    }
+
+    void on_add_member(Conn& c, uint32_t rid, const wire::AddMemberT& q) {
+        if (!storage_.is_member(q.room_id, c.user_id)) {
+            c.fail(rid, err::Forbidden, "not a member of that room");
+            return;
+        }
+        if (storage_.is_direct(q.room_id)) {
+            c.fail(rid, err::Forbidden, "a two-person chat cannot gain members; start a group instead");
+            return;
+        }
+        if (!storage_.user_exists(q.user_id)) {
+            c.fail(rid, err::NotFound, "unknown user");
+            return;
+        }
+        storage_.add_member(q.room_id, q.user_id);
+        wire::RoomInfoT info = storage_.room_info(q.room_id);
+        if (info.members.size() > 64) {
+            storage_.remove_member(q.room_id, q.user_id);
+            c.fail(rid, err::Malformed, "a room holds at most 64 members");
+            return;
+        }
+        announce_room(info, c.user_id);
+        c.reply(rid, std::move(info));
+    }
+
+    void on_leave_room(Conn& c, uint32_t rid, const wire::LeaveRoomT& q) {
+        if (!storage_.is_member(q.room_id, c.user_id)) {
+            c.fail(rid, err::Forbidden, "not a member of that room");
+            return;
+        }
+        if (storage_.is_direct(q.room_id)) {
+            c.fail(rid, err::Forbidden, "a two-person chat cannot be left");
+            return;
+        }
+        storage_.remove_member(q.room_id, c.user_id);
+        announce_room(storage_.room_info(q.room_id), c.user_id);
+        c.reply(rid, wire::OkT{});
+    }
+
     void on_list_rooms(Conn& c, uint32_t rid) {
         wire::RoomListT list;
         for (const auto& room_id : storage_.rooms_of_user(c.user_id))
@@ -372,16 +420,19 @@ private:
             c.fail(rid, err::Forbidden, "not a member of that room");
             return;
         }
+        // Copies addressed to someone who is not (or no longer) in the room are
+        // dropped: a sender may not have heard yet that a member left.
+        wire::SendRoomEventT accepted;
+        accepted.room_id = ev.room_id;
+        accepted.event_id = ev.event_id;
         for (const auto& r : ev.recipients) {
             auto dev = r ? storage_.find_device(r->device_id) : std::nullopt;
-            if (!dev || !storage_.is_member(ev.room_id, dev->user_id) || r->ciphertext.empty()) {
-                c.fail(rid, err::Forbidden, "recipient is not in the room");
-                return;
-            }
+            if (!dev || !storage_.is_member(ev.room_id, dev->user_id) || r->ciphertext.empty()) continue;
+            accepted.recipients.push_back(std::make_unique<wire::RecipientT>(*r));
         }
-        StoredEvent stored = storage_.store_event(ev, c.user_id, c.device_id);
+        StoredEvent stored = storage_.store_event(accepted, c.user_id, c.device_id);
         if (!stored.existed) {
-            for (const auto& r : ev.recipients) {
+            for (const auto& r : accepted.recipients) {
                 wire::RoomEventT out;
                 out.room_id = ev.room_id;
                 out.seq = stored.seq;
