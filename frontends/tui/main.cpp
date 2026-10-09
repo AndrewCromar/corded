@@ -25,6 +25,7 @@ namespace {
 struct Message {
     std::string event_id, sender, body, status, type;
     std::string reply_to;
+    std::string thread_root;  // set on messages that belong to a thread
     uint64_t ts = 0;
     bool mine = false;
     bool edited = false;
@@ -229,6 +230,7 @@ private:
         m.ts = d.value("origin_ts", uint64_t{0});
         m.edited = d.value("edited", false);
         if (rel_kind == "reply") m.reply_to = rel_target;
+        if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
         else if (type == "m.text") m.body = d["content"].value("body", "");
         else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
@@ -385,6 +387,14 @@ private:
                     command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg}, {"reply_to", m->event_id}});
                 else
                     notice_ = "nothing to reply to yet";
+            } else if (cmd == "/thread" && !arg.empty() && room) {
+                // Continue the thread the last received message is in, or start
+                // one on that message.
+                if (const Message* m = last_from_other(*room))
+                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg},
+                             {"thread", m->thread_root.empty() ? m->event_id : m->thread_root}});
+                else
+                    notice_ = "nothing to start a thread on yet";
             } else if (cmd == "/react" && !arg.empty() && room) {
                 if (const Message* m = last_from_other(*room))
                     command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.reaction"},
@@ -439,12 +449,12 @@ private:
                    flex;
         }
         Elements lines;
-        for (const auto& m : room->messages) {
+        auto draw = [&](const Message& m, const std::string& indent) {
             if (!m.reply_to.empty()) {
                 std::string quoted = "(earlier message)";
                 for (const auto& other : room->messages)
                     if (other.event_id == m.reply_to) quoted = other.sender + ": " + snippet(other.body);
-                lines.push_back(text("        > " + quoted) | dim);
+                lines.push_back(text(indent + "        > " + quoted) | dim);
             }
             std::string mark;
             if (m.mine) mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)" : "";
@@ -452,9 +462,9 @@ private:
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             Element body = paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
-            lines.push_back(hbox({text(clock_time(m.ts) + " ") | dim, name, body | flex}));
+            lines.push_back(hbox({text(indent) | dim, text(clock_time(m.ts) + " ") | dim, name, body | flex}));
             if (auto it = room->reactions.find(m.event_id); it != room->reactions.end()) {
-                std::string r = "        ";
+                std::string r = indent + "        ";
                 bool any = false;
                 for (const auto& [key, ids] : it->second) {
                     if (ids.empty()) continue;
@@ -463,6 +473,19 @@ private:
                 }
                 if (any) lines.push_back(text(r) | color(Color::Yellow));
             }
+        };
+        for (const auto& m : room->messages) {
+            // Thread messages are drawn under the message that started the
+            // thread, unless that message is not on screen.
+            if (!m.thread_root.empty()) {
+                bool root_known = false;
+                for (const auto& other : room->messages)
+                    if (other.event_id == m.thread_root) root_known = true;
+                if (root_known) continue;
+            }
+            draw(m, "");
+            for (const auto& child : room->messages)
+                if (child.thread_root == m.event_id) draw(child, "   | ");
         }
         if (lines.empty()) lines.push_back(text("No messages yet. Say hello.") | dim | center);
         return vbox(std::move(lines)) | focusPositionRelative(0, 1) | yframe | flex;
@@ -500,6 +523,7 @@ private:
                               text("/name <text>       rename the open chat"),
                               text("/verify            show safety numbers for the people in this chat"),
                               text("/reply <text>      reply to the last message you received"),
+                              text("/thread <text>     reply in a thread under the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
                               text("/edit <text>       change your last message        /delete  remove it"),
                               text("/connect host:port connect to a server"),

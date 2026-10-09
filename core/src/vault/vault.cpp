@@ -443,6 +443,26 @@ std::vector<EventRow> Vault::timeline(ByteView room_id, uint32_t limit) {
     return out;
 }
 
+std::vector<EventRow> Vault::related(ByteView room_id, ByteView target, const std::string& kind) {
+    std::string sql = std::string("SELECT ") + kEventColumns +
+                      " FROM events WHERE room_id = ?1 AND event_id IN (SELECT event_id FROM relations "
+                      "WHERE room_id = ?1 AND target_event_id = ?2 AND kind = ?3) "
+                      "ORDER BY (seq IS NULL), seq, origin_ts";
+    auto st = db_.prepare(sql.c_str());
+    st.bind(1, room_id).bind(2, target).bind(3, kind);
+    std::vector<EventRow> out;
+    while (st.step()) out.push_back(read_event(st));
+    return out;
+}
+
+uint32_t Vault::related_count(ByteView room_id, ByteView target, const std::string& kind) {
+    auto st = db_.prepare("SELECT COUNT(*) FROM relations WHERE room_id = ? AND target_event_id = ? "
+                          "AND kind = ?");
+    st.bind(1, room_id).bind(2, target).bind(3, kind);
+    st.step();
+    return static_cast<uint32_t>(st.i64(0));
+}
+
 void Vault::set_edited_content(ByteView room_id, ByteView event_id, const std::string& content) {
     auto st = db_.prepare("UPDATE events SET edited_content = ? WHERE room_id = ? AND event_id = ?");
     st.bind(1, content).bind(2, room_id).bind(3, event_id).exec();

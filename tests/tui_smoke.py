@@ -138,6 +138,13 @@ def main():
         alice.expect("[+1]")
         print("ok  reaction shows on the other side")
 
+        bob.type("/thread threaded answer\r")
+        alice.expect("   | ")
+        alice.expect("threaded answer")
+        alice.type("/thread and another\r")
+        bob.expect("and another")
+        print("ok  thread replies are drawn under the message that started them")
+
         bob.type("this has a mistaek\r")
         alice.expect("this has a mistaek")
         bob.type("/edit this has no mistake\r")

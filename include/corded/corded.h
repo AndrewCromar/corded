@@ -22,7 +22,9 @@
  *   {"cmd":"set_room_name","room_id":"...","name":"new name"}
  *   {"cmd":"safety_numbers","room_id":"..."}
  *   {"cmd":"set_verified","user_id":"...","verified":true}
- *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>"}
+ *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>",
+ *    "thread":"<id of the message that started the thread, optional>"}
+ *   {"cmd":"fetch_thread","room_id":"...","event_id":"<thread's first message>"}
  *   {"cmd":"edit_event","room_id":"...","event_id":"...","body":"new text"}
  *   {"cmd":"delete_event","room_id":"...","event_id":"..."}
  *   {"cmd":"send_event","room_id":"...","type":"m.reaction","content":{...},

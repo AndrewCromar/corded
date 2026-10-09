@@ -100,6 +100,9 @@ public:
     void confirm_event(ByteView room_id, ByteView event_id, uint64_t seq, uint64_t server_ts);
     void set_event_status(ByteView room_id, ByteView event_id, const std::string& status);
     std::vector<EventRow> timeline(ByteView room_id, uint32_t limit);
+    // Events that point at `target` with the given relation kind, oldest first.
+    std::vector<EventRow> related(ByteView room_id, ByteView target, const std::string& kind);
+    uint32_t related_count(ByteView room_id, ByteView target, const std::string& kind);
     void set_edited_content(ByteView room_id, ByteView event_id, const std::string& content);
     void redact_event(ByteView room_id, ByteView event_id);  // erases the content for good
 

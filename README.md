@@ -87,6 +87,7 @@ and start typing. Things to try:
 | `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
 | `/verified <username>` | Marks someone as checked after comparing numbers |
 | `/reply <text>` | Replies to the last message you received |
+| `/thread <text>` | Replies in a thread under the last message you received |
 | `/react <emoji or text>` | Reacts to the last message you received |
 | `/help` | Shows the command list |
 | `/quit` | Leaves |
@@ -121,6 +122,7 @@ It does:
   return, in order. Clients reconnect on their own, and queued messages survive restarts.
 - An encrypted connection to the server: TLS 1.3, with the server's self-signed key
   pinned by the client, and sign-in bound to that TLS session.
+- Threads: replies that hang under the message that started them.
 - Editing and deleting your own messages.
 - Server protections: invite-only or closed registration, a per-connection rate limit
   that slows down floods, and a cap on connections per address.

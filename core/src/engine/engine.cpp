@@ -173,6 +173,8 @@ Engine::json Engine::event_json(const EventRow& e) {
     j["content"] = json::parse(e.edited_content.empty() ? e.content : e.edited_content, nullptr, false);
     if (j["content"].is_discarded()) j["content"] = json::object();
     j["edited"] = !e.edited_content.empty();
+    // How many messages hang off this one as a thread.
+    j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
     if (!e.rel_kind.empty()) {
         j["relation"] = {{"kind", e.rel_kind}, {"target", b64(e.rel_target)}};
@@ -322,6 +324,9 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                        {"content", {{"body", cmd.at("body")}}}};
             if (cmd.contains("reply_to"))
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
+            // A thread message points at the message that started the thread.
+            if (cmd.contains("thread"))
+                ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
             cmd_send_event(req, ev);
         } else if (name == "edit_event") {
             cmd_send_event(req, {{"room_id", cmd.at("room_id")},
@@ -334,6 +339,17 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                                  {"relation", {{"kind", "redact"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "send_event") {
             cmd_send_event(req, cmd);
+        } else if (name == "fetch_thread") {
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            Bytes root_id = need_b64(cmd, "event_id", 16);
+            auto root = vault_.event(room_id, root_id);
+            if (!root) {
+                fail(req, "not_found", "unknown message");
+                return;
+            }
+            json replies = json::array();
+            for (const auto& e : vault_.related(room_id, root_id, "thread")) replies.push_back(event_json(e));
+            ok(req, {{"room_id", b64(room_id)}, {"root", event_json(*root)}, {"thread", std::move(replies)}});
         } else if (name == "fetch_timeline") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
             json events = json::array();
@@ -453,7 +469,14 @@ void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string roo
 // come from the person who sent the original. Deletion is a request: this
 // client erases its copy, but cannot make anyone else forget.
 void Engine::apply_relation(const EventRow& e) {
-    if (e.rel_target.empty() || (e.rel_kind != "replace" && e.rel_kind != "redact")) return;
+    if (e.rel_target.empty()) return;
+    if (e.rel_kind == "thread") {
+        // The thread's first message gains a reply; tell frontends its count changed.
+        if (auto root = vault_.event(e.room_id, e.rel_target))
+            emit({{"event", "event_updated"}, {"room_id", b64(e.room_id)}, {"data", event_json(*root)}});
+        return;
+    }
+    if (e.rel_kind != "replace" && e.rel_kind != "redact") return;
     auto target = vault_.event(e.room_id, e.rel_target);
     if (!target || target->sender_user != e.sender_user) return;
     if (target->status == "redacted" || target->status == "undecryptable") return;
@@ -513,9 +536,9 @@ void Engine::cmd_send_event(uint64_t req, const json& cmd) {
         vault_.outbox_push(e.room_id, e.event_id);
         tx.commit();
     }
+    emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     apply_state(e);
     apply_relation(e);
-    emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     ok(req, {{"event_id", b64(e.event_id)}});
     pump_outbox();
 }
@@ -884,11 +907,12 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
         vault_.advance_cursor(ev.room_id, ev.seq);
         tx.commit();
     }
+    // Announce the event first, then whatever it changes.
+    emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
     if (decrypted) {
         apply_state(row);
         apply_relation(row);
     }
-    emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
 }
 
 void Engine::fail_outbox(const OutboxRow& row, const std::string& message) {

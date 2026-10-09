@@ -222,6 +222,25 @@ scenarios.
 | F6 | Pins, polls, disappearing messages | After F2 | M |
 | F7 | Multi-device linking, encrypted backup | After Stage 5; before 1.0 is desirable | L |
 
+## Prototype status
+
+Built in the prototype (`next` branch), each as an event type or relation kind with no
+change to the wire framing or the server, which is the claim this document set out to
+test:
+
+| Feature | How | Server change needed |
+|---|---|---|
+| Replies | `reply` relation | none |
+| Reactions | `m.reaction` with `annotation` relation | none |
+| Edits | `m.edit` with `replace` relation, original sender only | none |
+| Deletions | `m.redaction` with `redact` relation, original sender only | none |
+| Threads | `thread` relation, with a reply count on the first message | none |
+| Room names | `m.room.name` state event | none |
+| Custom event types | passed through to frontends marked as unknown | none |
+
+Not yet built: mentions, attachments, link previews, typing indicators, read receipts,
+presence, pins, polls, disappearing messages, multi-device.
+
 ## 5. Design obligations this places on the core stages
 
 - **Stage 1** specifies the event envelope, relation kinds, state events, ephemeral

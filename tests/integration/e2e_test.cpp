@@ -257,6 +257,32 @@ TEST_CASE("two clients talk end to end through a real server") {
     REQUIRE(custom["data"]["content"]["result"] == 17);
     REQUIRE(custom["data"]["fallback_text"] == "rolled a 17");
 
+    // Threads: messages hang off the one that started the thread.
+    {
+        json s = alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "shall we plan the trip?"}});
+        std::string root = s["data"]["event_id"];
+        bob.wait_message("shall we plan the trip?");
+        REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "yes, friday?"}, {"thread", root}})["ok"] == true);
+        json first = alice.wait_message("yes, friday?");
+        REQUIRE(first["data"]["relation"]["kind"] == "thread");
+        REQUIRE(first["data"]["relation"]["target"] == root);
+        REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "friday works"}, {"thread", root}})["ok"] == true);
+        bob.wait_message("friday works");
+        // The first message reports how many replies its thread has.
+        bob.wait("thread count", [&](const json& e) {
+            return e["event"] == "event_updated" && e["data"]["event_id"] == root && e["data"]["thread_count"] == 2;
+        });
+        for (Client* c : {&alice, &bob}) {
+            json th = c->cmd({{"cmd", "fetch_thread"}, {"room_id", room}, {"event_id", root}});
+            REQUIRE(th["ok"] == true);
+            REQUIRE(th["data"]["root"]["content"]["body"] == "shall we plan the trip?");
+            REQUIRE(th["data"]["root"]["thread_count"] == 2);
+            REQUIRE(th["data"]["thread"].size() == 2);
+            REQUIRE(th["data"]["thread"][0]["content"]["body"] == "yes, friday?");
+            REQUIRE(th["data"]["thread"][1]["content"]["body"] == "friday works");
+        }
+    }
+
     // Edits and deletions: only the original sender can change a message.
     {
         json s = alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "a typo hre"}});
