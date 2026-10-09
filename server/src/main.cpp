@@ -34,6 +34,8 @@ struct Options {
     // Each connection may send this many frames per second, with short bursts
     // above it. Faster senders are slowed down, not disconnected.
     double frames_per_second = 100, frame_burst = 200;
+    // Whether newcomers may ask existing members' clients for earlier messages.
+    bool history_sharing = true;
     int max_connections_per_address = 20;
 };
 
@@ -247,6 +249,7 @@ public:
                 case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
                 case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
                 case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
+                case wire::FrameBody_HistoryRequest: on_history_request(*c, rid, *f.body.AsHistoryRequest()); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
                     break;
@@ -298,6 +301,7 @@ private:
         info.name = name_;
         info.owner = storage_.owner();
         info.my_permissions = storage_.permissions(for_user);
+        info.history_sharing = options_.history_sharing;
         for (auto& r : storage_.roles()) info.roles.push_back(std::make_unique<wire::RoleT>(std::move(r)));
         return info;
     }
@@ -709,6 +713,36 @@ private:
         c.reply(rid, wire::OkT{});
     }
 
+    // The server cannot read history, so it only carries the question to
+    // members who are online. Whether they answer is up to each of them.
+    void on_history_request(Conn& c, uint32_t rid, const wire::HistoryRequestT& q) {
+        if (!options_.history_sharing) {
+            c.fail(rid, err::Forbidden, "this server does not allow sharing earlier messages");
+            return;
+        }
+        if (!storage_.is_member(q.room_id, c.user_id) || storage_.kind(q.room_id) == kDirect) {
+            c.fail(rid, err::Forbidden, "not a member of that room");
+            return;
+        }
+        wire::HistoryWantedT wanted;
+        wanted.room_id = q.room_id;
+        wanted.requester = c.user_id;
+        wanted.limit = std::min<uint32_t>(q.limit ? q.limit : 200, 200);
+        int asked = 0;
+        for (const auto& m : storage_.room_info(q.room_id).members) {
+            if (m->user_id == c.user_id || asked >= 2) continue;  // two answers are plenty
+            auto dev = storage_.device_of_user(m->user_id);
+            if (!dev || !online_.count(dev->device_id)) continue;
+            push(dev->device_id, wanted);
+            ++asked;
+        }
+        if (asked == 0) {
+            c.fail(rid, err::NotFound, "nobody who could share earlier messages is online right now");
+            return;
+        }
+        c.reply(rid, wire::OkT{});
+    }
+
     void on_kick(Conn& c, uint32_t rid, const wire::KickT& q) {
         if (!require(c, rid, perm::KickMembers)) return;
         if (!storage_.user_exists(q.user_id) || storage_.access_level(q.user_id) < 0) {
@@ -912,6 +946,8 @@ int main(int argc, char** argv) {
             opt.registration = Reg::Invite;
         } else if (a == "--invite-only") {
             opt.registration = Reg::Invite;
+        } else if (a == "--no-history-sharing") {
+            opt.history_sharing = false;
         } else if (a == "--closed") opt.registration = Reg::Closed;
         else if (a == "--owner") opt.owner_name = next();
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
@@ -920,6 +956,7 @@ int main(int argc, char** argv) {
                          "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME]\n"
                          "               [--invite-only | --invite-code CODE | --closed] [--owner USERNAME]\n"
                          "               [--verbose]\n\n"
+                         "  --no-history-sharing  newcomers cannot ask members for earlier messages\n"
                          "  --invite-only       new accounts need an invite made by a member (/invite in the\n"
                          "                      client); the named owner can always get in\n"
                          "  --name NAME         what this community is called\n"

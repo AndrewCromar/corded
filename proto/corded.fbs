@@ -50,7 +50,15 @@ table LeaveRoom { room_id: [ubyte]; }
 
 // ---- the community: one server is one community (see 04-community-model.md) ----
 // Sent after sign-in and again whenever it changes.
-table ServerInfo { name: string; owner: [ubyte]; my_permissions: uint64; roles: [Role]; }
+table ServerInfo {
+  name: string; owner: [ubyte]; my_permissions: uint64; roles: [Role];
+  history_sharing: bool = true;   // whether newcomers may ask members for old messages
+}
+// A newcomer asks for messages from before they joined. The server holds none
+// it can read, so it passes the request to members who are online; each of
+// their clients decides whether to answer.
+table HistoryRequest { room_id: [ubyte]; limit: uint32; }
+table HistoryWanted { room_id: [ubyte]; requester: [ubyte]; limit: uint32; }
 table GetMembers {}
 table MemberList { members: [Member]; }
 table NewRole { name: string; permissions: uint64; }
@@ -95,7 +103,8 @@ union FrameBody {
   BanUser, Kick, ServerInfo, GetMembers, MemberList,
   NewRole, EditRole, RemoveRole, GrantRole,
   CreateChannel, UpdateChannel, DeleteChannel, SetOverride,
-  NewInvite, Invite, RevokeInvite
+  NewInvite, Invite, RevokeInvite,
+  HistoryRequest, HistoryWanted
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

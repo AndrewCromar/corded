@@ -247,7 +247,9 @@ build on it.
 | C5 Several servers per vault | Core built on `next`: one session per server sharing one identity and vault; rooms and events tagged with their server. The TUI still shows one server at a time and has no switcher yet |
 | C6 Invites | Built on `next`: codes with use limits and expiry, revocation, `corded://` links carrying address, key and code |
 | C7 Moderation | Deleting others' messages is built on `next`. Pins are not. The server does not yet drop the stored ciphertext of a deleted message |
-| C8 to C10 | Not started |
+| C8 Sender keys | Not started |
+| C9 History for newcomers | Built on `next`: asked for automatically on joining a channel or group, relayed by the server to up to two online members, shared from their vaults as an encrypted envelope for the newcomer alone, with the server switch and the member switch |
+| C10 Polish, C11 Optional unencrypted servers | Not started |
 
 Simplifications in what is built, to be revisited: after any change to roles, channels or
 membership the server sends every online member a full fresh picture instead of a small

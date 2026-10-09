@@ -30,6 +30,7 @@ struct Message {
     bool mine = false;
     bool edited = false;
     bool disappearing = false;
+    bool from_history = false;  // handed over by another member, not received first-hand
 };
 
 struct Room {
@@ -212,6 +213,8 @@ private:
         } else if (kind == "server_pinned") {
             pin_notice_ = "First connection to this server. Its key " + ev.value("fingerprint", "") +
                           " is now remembered.";
+        } else if (kind == "history_received") {
+            notice_ = std::to_string(ev.value("count", 0)) + " earlier messages were shared with you";
         } else if (kind == "warning") {
             notice_ = ev.value("message", "");
         }
@@ -298,7 +301,7 @@ private:
         }
         // Edits and deletions are not lines of their own; they arrive again as
         // event_updated for the message they change.
-        if (type == "m.edit" || type == "m.redaction") return false;
+        if (type == "m.edit" || type == "m.redaction" || type == "m.history.share") return false;
         for (auto& m : room.messages) {
             if (m.event_id != id) continue;
             m.status = d.value("status", m.status);
@@ -313,6 +316,7 @@ private:
         m.ts = d.value("origin_ts", uint64_t{0});
         m.edited = d.value("edited", false);
         m.disappearing = d.value("expires_at", uint64_t{0}) != 0;
+        m.from_history = d.value("shared_history", false);
         if (rel_kind == "reply") m.reply_to = rel_target;
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
@@ -331,7 +335,14 @@ private:
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
         else m.body = "[unsupported message type: " + type + "]";
-        room.messages.push_back(std::move(m));
+        // Shared history is older than what is on screen: keep time order.
+        if (m.from_history) {
+            auto pos = std::find_if(room.messages.begin(), room.messages.end(),
+                                    [&](const Message& other) { return other.ts > m.ts; });
+            room.messages.insert(pos, std::move(m));
+        } else {
+            room.messages.push_back(std::move(m));
+        }
         return true;
     }
 
@@ -579,6 +590,12 @@ private:
                 else
                     command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg.substr(sp + 1)},
                              {"expires_in", seconds}});
+            } else if (cmd == "/history" && room) {
+                command({{"cmd", "request_history"}, {"room_id", room->id}});
+            } else if (cmd == "/share-history" && (arg == "on" || arg == "off")) {
+                command({{"cmd", "set_history_sharing"}, {"enabled", arg == "on"}});
+                notice_ = arg == "on" ? "you will share earlier messages with newcomers who ask"
+                                      : "you will not share earlier messages with newcomers";
             } else if (cmd == "/remove" && room) {
                 // Moderators: delete the last message someone else posted here.
                 if (const Message* m = last_from_other(*room))
@@ -678,6 +695,7 @@ private:
             if (m.mine) mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)" : "";
             if (m.edited) mark += " (edited)";
             if (m.disappearing) mark += " (disappears)";
+            if (m.from_history) mark += " (earlier, shared)";
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             Element body = paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
@@ -754,6 +772,7 @@ private:
                               text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
+                              text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),

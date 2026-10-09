@@ -125,6 +125,9 @@ private:
         });
     }
     void publish_prekeys();
+    void request_history(const Bytes& room_id, uint64_t req);  // req 0: nobody is waiting for the answer
+    void on_history_wanted(const wire::HistoryWantedT& wanted);
+    void accept_history(const EventRow& share);
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
     void fail_outbox(const OutboxRow& row, const std::string& message);
@@ -171,6 +174,8 @@ private:
     uint64_t my_permissions_ = 0;
     std::vector<RoleInfo> roles_;
     std::set<Bytes> bundle_requested_;
+    bool history_sharing_ = true;  // what the server allows
+    std::map<Bytes, uint64_t> history_asked_;  // room -> when we asked, in ms
 };
 
 class Engine {

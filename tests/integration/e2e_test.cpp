@@ -629,9 +629,11 @@ TEST_CASE("people can be added to a group and can leave it") {
     alice.wait_message("thanks all");
     bob.wait_message("thanks all");
     carol.wait_message("thanks all");
-    // Dave has nothing from before he joined.
+    // Dave was never sent the earlier message first-hand. If he has it, it is
+    // because a member chose to share history with him, and it says so.
     json dave_tl = dave.cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
-    for (const auto& e : dave_tl["data"]["events"]) REQUIRE(e["content"].value("body", "") != "before dave joined");
+    for (const auto& e : dave_tl["data"]["events"])
+        if (e["content"].value("body", "") == "before dave joined") REQUIRE(e["shared_history"] == true);
 
     // Carol leaves. She stops receiving; the others carry on.
     REQUIRE(carol.cmd({{"cmd", "leave_room"}, {"room_id", room}})["ok"] == true);
@@ -1162,4 +1164,122 @@ TEST_CASE("one client belongs to two servers at once") {
     REQUIRE(has(tl_a, "bob on alpha"));
     REQUIRE_FALSE(has(tl_a, "carol on beta"));
     REQUIRE(has(tl_b, "carol on beta"));
+}
+
+TEST_CASE("a newcomer is given earlier messages by a member who is willing") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; });
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+
+    // A conversation before Carol exists.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "old message one"}})["ok"] == true);
+    bob.wait_message("old message one");
+    json typo = bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "old mesage two"}});
+    alice.wait_message("old mesage two");
+    REQUIRE(bob.cmd({{"cmd", "edit_event"}, {"room_id", general}, {"event_id", typo["data"]["event_id"]}, {"body", "old message two"}})["ok"] == true);
+    json regret = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "deleted before carol"}});
+    bob.wait_message("deleted before carol");
+    REQUIRE(alice.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", regret["data"]["event_id"]}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "meant to disappear"}, {"expires_in", 600}})["ok"] == true);
+    bob.wait_message("meant to disappear");
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "old message three"}})["ok"] == true);
+    bob.wait_message("old message three");
+
+    auto bodies = [&](Client& c) {
+        std::vector<std::string> out;
+        json tl = c.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 500}});
+        for (const auto& e : tl["data"]["events"])
+            if (e["type"] == "m.text" && e["status"] == "ok") out.push_back(e["content"].value("body", ""));
+        return out;
+    };
+
+    // Carol joins. Her client asks by itself, and the members' clients answer.
+    Client carol((tmp.path / "carol").string());
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    json shared = carol.wait("shared history", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["content"].value("body", "") == "old message three";
+    });
+    REQUIRE(shared["data"]["shared_history"] == true);
+    REQUIRE(shared["data"]["sender_name"] == "alice");
+    std::vector<std::string> got;
+    for (int i = 0; i < 100; ++i) {
+        got = bodies(carol);
+        if (got.size() >= 3) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    // In order, with the edit applied, and without what was deleted or set to disappear.
+    REQUIRE(got == std::vector<std::string>{"old message one", "old message two", "old message three"});
+    // Envelopes never show up as messages.
+    json tl = carol.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 500}});
+    for (const auto& e : tl["data"]["events"]) REQUIRE(e["type"] != "m.history.share");
+    for (const auto& e : carol.seen)
+        if (e["event"] == "event_received") REQUIRE(e["data"]["type"] != "m.history.share");
+    // New messages still arrive first-hand and are not marked as shared.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "welcome carol"}})["ok"] == true);
+    REQUIRE(carol.wait_message("welcome carol")["data"]["shared_history"] == false);
+    // The server never saw any of it in the clear.
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "old message"));
+
+    // Members who have turned sharing off do not answer.
+    REQUIRE(alice.cmd({{"cmd", "set_history_sharing"}, {"enabled", false}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "set_history_sharing"}, {"enabled", false}})["ok"] == true);
+    REQUIRE(carol.cmd({{"cmd", "set_history_sharing"}, {"enabled", false}})["ok"] == true);
+    Client dave((tmp.path / "dave").string());
+    REQUIRE(dave.create("dave")["ok"] == true);
+    REQUIRE(dave.cmd(connect)["ok"] == true);
+    dave.wait_live();
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hello dave"}})["ok"] == true);
+    dave.wait_message("hello dave");
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    REQUIRE(bodies(dave) == std::vector<std::string>{"hello dave"});
+    // One member turning it back on is enough, when asked again.
+    REQUIRE(bob.cmd({{"cmd", "set_history_sharing"}, {"enabled", true}})["ok"] == true);
+    REQUIRE(dave.cmd({{"cmd", "request_history"}, {"room_id", general}})["ok"] == true);
+    dave.wait("history after asking again", [](const json& e) {
+        return e["event"] == "history_received" && e["count"].get<int>() >= 3;
+    });
+}
+
+TEST_CASE("a server can forbid sharing earlier messages") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--no-history-sharing");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    REQUIRE(alice.create("alice")["ok"] == true);
+    REQUIRE(alice.cmd(connect)["ok"] == true);
+    alice.wait_live();
+    std::string general = alice.have("#general", [](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+    })["room"]["room_id"];
+    // Nobody else is here yet, so this is stored with no recipients.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "before anyone joined"}})["ok"] == true);
+
+    REQUIRE(bob.create("bob")["ok"] == true);
+    REQUIRE(bob.cmd(connect)["ok"] == true);
+    bob.wait_live();
+    REQUIRE(bob.cmd({{"cmd", "server_info"}})["data"]["history_sharing"] == false);
+    json asked = bob.cmd({{"cmd", "request_history"}, {"room_id", general}});
+    REQUIRE(asked["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "after bob joined"}})["ok"] == true);
+    bob.wait_message("after bob joined");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (const auto& e : bob.seen)
+        if (e["event"] == "event_received")
+            REQUIRE(e["data"]["content"].value("body", "") != "before anyone joined");
 }

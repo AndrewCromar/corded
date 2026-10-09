@@ -55,6 +55,8 @@
  *    "thread":"<id of the message that started the thread, optional>",
  *    "expires_in":<seconds until this one message disappears, optional>}
  *   {"cmd":"set_disappearing","room_id":"...","seconds":3600}   (0 turns it off)
+ *   {"cmd":"request_history","room_id":"..."}       ask members for earlier messages
+ *   {"cmd":"set_history_sharing","enabled":false}   stop answering such requests
  *   {"cmd":"fetch_thread","room_id":"...","event_id":"<thread's first message>"}
  *   {"cmd":"edit_event","room_id":"...","event_id":"...","body":"new text"}
  *   {"cmd":"delete_event","room_id":"...","event_id":"..."}
@@ -65,7 +67,7 @@
  * Events (JSON objects, "event" names the event):
  *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
  *   room_removed,
- *   event_received, event_expired,
+ *   event_received, event_expired, history_received,
  *   event_updated, event_send_status, command_result, warning
  */
 #ifndef CORDED_H

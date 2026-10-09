@@ -48,13 +48,14 @@ EventRow read_event(db::Statement& st) {
     e.rel_key = st.text(15);
     e.edited_content = st.text(16);
     e.expires_at = st.u64(17);
+    e.shared_by = st.blob(18);
     return e;
 }
 
 constexpr const char* kEventColumns =
     "room_id, event_id, seq, type, type_version, sender_user, sender_device, origin_ts, "
     "server_ts, state_key, content, fallback_text, status, rel_kind, rel_target, rel_key, "
-    "edited_content, COALESCE(expires_at, 0)";
+    "edited_content, COALESCE(expires_at, 0), shared_by";
 
 }  // namespace
 
@@ -247,6 +248,12 @@ CREATE TABLE IF NOT EXISTS outbox (
         db_.exec("SELECT server_id FROM rooms LIMIT 0");
     } catch (const db::Error&) {
         db_.exec("ALTER TABLE rooms ADD COLUMN server_id INTEGER NOT NULL DEFAULT 1");
+    }
+    try {
+        db_.exec("SELECT shared_by FROM events LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE events ADD COLUMN shared_by BLOB");
+        db_.exec("ALTER TABLE outbox ADD COLUMN only_user BLOB");
     }
     // Added after the first prototype: rooms can carry a name.
     try {
@@ -474,7 +481,8 @@ bool Vault::insert_event(const EventRow& e) {
     auto st = db_.prepare(
         "INSERT OR IGNORE INTO events (room_id, event_id, seq, type, type_version, sender_user, "
         "sender_device, origin_ts, server_ts, state_key, content, fallback_text, status, rel_kind, "
-        "rel_target, rel_key, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        "rel_target, rel_key, expires_at, shared_by, edited_content) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     st.bind(1, e.room_id).bind(2, e.event_id);
     if (e.seq) st.bind(3, *e.seq);
     else st.bind_null(3);
@@ -486,6 +494,9 @@ bool Vault::insert_event(const EventRow& e) {
     st.bind(16, e.rel_key);
     if (e.expires_at) st.bind(17, e.expires_at);
     else st.bind_null(17);
+    if (e.shared_by.empty()) st.bind_null(18);
+    else st.bind(18, e.shared_by);
+    st.bind(19, e.edited_content);
     st.exec();
     if (db_.changes() == 0) return false;
     if (!e.rel_kind.empty() && !e.rel_target.empty()) {
@@ -567,15 +578,18 @@ void Vault::redact_event(ByteView room_id, ByteView event_id) {
     st.bind(1, room_id).bind(2, event_id).exec();
 }
 
-void Vault::outbox_push(ByteView room_id, ByteView event_id) {
-    auto st = db_.prepare("INSERT INTO outbox (room_id, event_id) VALUES (?, ?)");
-    st.bind(1, room_id).bind(2, event_id).exec();
+void Vault::outbox_push(ByteView room_id, ByteView event_id, ByteView only_user) {
+    auto st = db_.prepare("INSERT INTO outbox (room_id, event_id, only_user) VALUES (?, ?, ?)");
+    st.bind(1, room_id).bind(2, event_id);
+    if (only_user.empty()) st.bind_null(3);
+    else st.bind(3, only_user);
+    st.exec();
 }
 
 std::vector<OutboxRow> Vault::outbox() {
     std::vector<OutboxRow> out;
-    auto st = db_.prepare("SELECT local_id, room_id, event_id FROM outbox ORDER BY local_id");
-    while (st.step()) out.push_back({st.i64(0), st.blob(1), st.blob(2)});
+    auto st = db_.prepare("SELECT local_id, room_id, event_id, only_user FROM outbox ORDER BY local_id");
+    while (st.step()) out.push_back({st.i64(0), st.blob(1), st.blob(2), st.blob(3)});
     return out;
 }
 

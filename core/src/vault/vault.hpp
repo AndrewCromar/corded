@@ -53,6 +53,7 @@ struct EventRow {
     std::string content;  // JSON
     std::string edited_content;  // JSON of the latest accepted edit, if any
     uint64_t expires_at = 0;  // ms since epoch; 0 = never. The event is erased then
+    Bytes shared_by;  // set on history a member handed over, to that member's user id
     std::string fallback_text;
     std::string status;  // ok, pending, failed, undecryptable, redacted
     std::string rel_kind;
@@ -63,6 +64,7 @@ struct EventRow {
 struct OutboxRow {
     int64_t local_id = 0;
     Bytes room_id, event_id;
+    Bytes only_user;  // if set, the event goes to this one member, not the room
 };
 
 class Vault : public crypto::PrekeySource {
@@ -122,7 +124,7 @@ public:
     void set_edited_content(ByteView room_id, ByteView event_id, const std::string& content);
     void redact_event(ByteView room_id, ByteView event_id);  // erases the content for good
 
-    void outbox_push(ByteView room_id, ByteView event_id);
+    void outbox_push(ByteView room_id, ByteView event_id, ByteView only_user = {});
     std::vector<OutboxRow> outbox();
     void outbox_remove(int64_t local_id);
 

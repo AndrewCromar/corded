@@ -90,6 +90,8 @@ Talking:
 | `/add <username>`, `/leave`, `/name <text>` | Add someone to the open group, leave it, or rename it |
 | `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
 | `/verified <username>` | Marks someone as checked after comparing numbers |
+| `/history` | Asks members again for earlier messages in the open chat |
+| `/share-history on` or `off` | Whether your client shares earlier messages with newcomers who ask |
 | `/members`, `/roles` | Lists the server's members and roles |
 | `/help` | Shows the command list |
 | `/quit` | Leaves |
@@ -169,9 +171,15 @@ It does:
 - Invite links made from the client, with optional use limits.
 - Direct messages and private group chats alongside the channels. Group names are
   encrypted, so the server never learns them.
-- Messages in channels are end-to-end encrypted too. That has a consequence Discord users
-  will notice: **someone who joins later cannot read what was said before they joined**,
-  because it was never encrypted to them.
+- Messages in channels are end-to-end encrypted too, so the server cannot hand a newcomer
+  the history. Instead **a newcomer's client asks, and existing members' clients share the
+  earlier messages**, encrypted to the newcomer. It happens by itself on joining. The
+  server can forbid it (`cordedd --no-history-sharing`) and any member can opt out
+  (`/share-history off`), so a newcomer may or may not get history. Shared messages are
+  marked as such, deleted and disappearing messages are never shared, and someone who can
+  share needs to be online.
+- One client can be a member of several servers at once, with the same identity on each.
+  (The core supports it; the terminal client shows one server at a time for now.)
 - An encrypted local vault. Keys and message history are stored in an encrypted SQLite
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
@@ -189,7 +197,7 @@ It does:
 
 It does not, yet:
 
-- Belong to several servers from one client. One vault talks to one server for now.
+- Switch between servers in the terminal client.
 - Categories, nicknames, role colours, transferring ownership.
 - Scale to large channels. Each message is encrypted once per member, which is fine for
   dozens of people and too slow for hundreds; sender keys are planned for that.

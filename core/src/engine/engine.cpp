@@ -42,7 +42,8 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
-           type == "m.redaction" || type == "m.room.member" || type == "m.room.retention";
+           type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
+           type == "m.history.share";
 }
 
 }  // namespace
@@ -294,6 +295,7 @@ Session::json Session::server_json() {
             {"address", host_ + ":" + port_},
             {"name", server_name_},
             {"is_owner", owner},
+            {"history_sharing", history_sharing_},
             {"my_permissions", perm::to_names(my_permissions_)},
             {"roles", std::move(roles)}};
 }
@@ -317,6 +319,9 @@ Session::json Session::event_json(const EventRow& e) {
     if (j["content"].is_discarded()) j["content"] = json::object();
     j["edited"] = !e.edited_content.empty();
     j["expires_at"] = e.expires_at;
+    // Old messages a member handed over: the client is taking that member's
+    // word for who said what, so frontends should mark them.
+    j["shared_history"] = !e.shared_by.empty();
     // How many messages hang off this one as a thread.
     j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
@@ -622,6 +627,12 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (cmd.contains("thread"))
                 ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
             cmd_send_event(req, ev);
+        } else if (name == "request_history") {
+            request_history(need_b64(cmd, "room_id", 16), req);
+        } else if (name == "set_history_sharing") {
+            // Whether this client answers when a newcomer asks for earlier messages.
+            vault_.set_meta("share_history", cmd.value("enabled", true) ? "1" : "0");
+            ok(req);
         } else if (name == "set_disappearing") {
             // Messages sent in this room from now on disappear after `seconds`
             // (0 turns it off). Travels as an encrypted state event.
@@ -655,7 +666,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             Bytes room_id = need_b64(cmd, "room_id", 16);
             json events = json::array();
             for (const auto& e : vault_.timeline(room_id, cmd.value("limit", 200u)))
-                events.push_back(event_json(e));
+                if (e.type != "m.history.share") events.push_back(event_json(e));  // envelopes are not messages
             ok(req, {{"room_id", b64(room_id)}, {"events", std::move(events)}});
         } else {
             fail(req, "unknown_command", "unknown command: " + name);
@@ -1248,6 +1259,7 @@ void Session::on_frame(wire::FrameT& f) {
         case wire::FrameBody_AuthOk: on_auth_ok(*f.body.AsAuthOk()); break;
         case wire::FrameBody_RoomInfo: store_room(*f.body.AsRoomInfo()); break;
         case wire::FrameBody_ServerInfo: on_server_info(*f.body.AsServerInfo()); break;
+        case wire::FrameBody_HistoryWanted: on_history_wanted(*f.body.AsHistoryWanted()); break;
         case wire::FrameBody_RoomList: reconcile_rooms(*f.body.AsRoomList()); break;
         case wire::FrameBody_RoomEvent: on_room_event(*f.body.AsRoomEvent()); break;
         case wire::FrameBody_Error:
@@ -1340,6 +1352,7 @@ void Session::on_server_info(const wire::ServerInfoT& info) {
     server_name_ = info.name;
     server_owner_ = info.owner;
     my_permissions_ = info.my_permissions;
+    history_sharing_ = info.history_sharing;
     roles_.clear();
     for (const auto& r : info.roles)
         if (r) roles_.push_back({r->role_id, r->name, r->position, r->permissions, r->is_everyone});
@@ -1367,6 +1380,148 @@ void Session::reconcile_rooms(const wire::RoomListT& list) {
         }
         emit({{"event", "room_removed"}, {"room_id", b64(known.room_id)}});
     }
+}
+
+// ---------------------------------------------------------------- history
+// Messages from before someone joined were never encrypted to them. A newcomer
+// asks; members' clients that are willing hand the messages over, encrypted to
+// the newcomer alone. See master_plan/04-community-model.md, D-28.
+
+void Session::request_history(const Bytes& room_id, uint64_t req) {
+    if (conn_ != Conn::Live && conn_ != Conn::Syncing) {
+        if (req) fail(req, "not_connected", "not connected to a server");
+        return;
+    }
+    if (!history_sharing_) {
+        if (req) fail(req, "refused", "this server does not allow sharing earlier messages");
+        return;
+    }
+    history_asked_[room_id] = now_ms();
+    wire::HistoryRequestT q;
+    q.room_id = room_id;
+    q.limit = 200;
+    request(std::move(q), [this, req](wire::FrameT& r) {
+        if (!req) return;
+        if (r.body.type == wire::FrameBody_Ok) {
+            ok(req);
+            return;
+        }
+        auto* e = r.body.AsError();
+        fail(req, "refused", e ? e->message : "the server refused");
+    });
+}
+
+// Someone new wants earlier messages from a room we are in.
+void Session::on_history_wanted(const wire::HistoryWantedT& wanted) {
+    if (vault_.meta("share_history").value_or("1") == "0") return;  // this member opted out
+    auto room = vault_.room(wanted.room_id);
+    if (!room || room->server_id != id_ || room->kind == 1 || wanted.requester.size() != 32) return;
+    const Key32& me = vault_.identity().user.pk;
+    if (std::equal(wanted.requester.begin(), wanted.requester.end(), me.begin())) return;
+    bool is_member = false;
+    for (const auto& m : room->members)
+        if (m.user_id == wanted.requester) is_member = true;
+    if (!is_member) return;  // only people the server has told us are in the room
+
+    json batch = json::array();
+    auto flush = [&] {
+        if (batch.empty()) return;
+        EventRow e;
+        e.room_id = room->room_id;
+        e.event_id = new_event_id();
+        e.type = "m.history.share";
+        e.sender_user = to_bytes(me);
+        e.sender_device = to_bytes(vault_.identity().device.pk);
+        e.origin_ts = now_ms();
+        e.content = json{{"events", std::move(batch)}}.dump();
+        e.status = "pending";
+        e.expires_at = e.origin_ts + 3600 * 1000;  // the envelope itself need not be kept
+        db::Transaction tx(vault_.db());
+        vault_.insert_event(e);
+        vault_.outbox_push(e.room_id, e.event_id, wanted.requester);
+        tx.commit();
+        batch = json::array();
+    };
+    uint32_t limit = std::min<uint32_t>(wanted.limit ? wanted.limit : 200, 200);
+    for (const auto& e : vault_.timeline(room->room_id, limit)) {
+        // Never disappearing messages, deleted ones, unsent ones, or history
+        // envelopes themselves.
+        if (e.status != "ok" || e.expires_at != 0 || !e.seq || e.type == "m.history.share") continue;
+        json item = {{"event_id", b64(e.event_id)},
+                     {"type", e.type},
+                     {"type_version", e.type_version},
+                     {"sender_user", b64(e.sender_user)},
+                     {"sender_device", b64(e.sender_device)},
+                     {"origin_ts", e.origin_ts},
+                     {"server_ts", e.server_ts},
+                     {"seq", *e.seq},
+                     {"state_key", e.state_key},
+                     {"content", e.content},
+                     {"edited_content", e.edited_content},
+                     {"fallback_text", e.fallback_text}};
+        if (!e.rel_kind.empty())
+            item["relation"] = {{"kind", e.rel_kind}, {"target", b64(e.rel_target)}, {"key", e.rel_key}};
+        batch.push_back(std::move(item));
+        if (batch.size() >= 40) flush();
+    }
+    flush();
+    pump_outbox();
+}
+
+// A member answered our request. Only accepted if we asked, recently, and the
+// sender is in the room.
+void Session::accept_history(const EventRow& share) {
+    auto asked = history_asked_.find(share.room_id);
+    if (asked == history_asked_.end() || now_ms() - asked->second > 10 * 60 * 1000) return;
+    auto room = vault_.room(share.room_id);
+    if (!room) return;
+    bool from_member = false;
+    for (const auto& m : room->members)
+        if (m.user_id == share.sender_user) from_member = true;
+    if (!from_member) return;
+    json content = json::parse(share.content, nullptr, false);
+    if (!content.is_object() || !content.value("events", json()).is_array()) return;
+
+    std::vector<EventRow> added;
+    {
+        db::Transaction tx(vault_.db());
+        for (const auto& item : content["events"]) {
+            try {
+                EventRow e;
+                e.room_id = share.room_id;
+                e.event_id = need_b64(item, "event_id", 16);
+                if (vault_.has_event(e.room_id, e.event_id)) continue;
+                e.type = item.at("type").get<std::string>();
+                if (e.type.empty() || e.type == "m.history.share") continue;
+                e.type_version = item.value("type_version", uint16_t{1});
+                e.sender_user = need_b64(item, "sender_user", 32);
+                e.sender_device = need_b64(item, "sender_device", 32);
+                e.origin_ts = item.value("origin_ts", uint64_t{0});
+                e.server_ts = item.value("server_ts", uint64_t{0});
+                e.seq = item.at("seq").get<uint64_t>();
+                e.state_key = item.value("state_key", std::string{});
+                e.content = item.value("content", std::string{"{}"});
+                e.edited_content = item.value("edited_content", std::string{});
+                e.fallback_text = item.value("fallback_text", std::string{});
+                e.status = "ok";
+                e.shared_by = share.sender_user;
+                if (item.contains("relation")) {
+                    e.rel_kind = item["relation"].value("kind", std::string{});
+                    e.rel_target = need_b64(item["relation"], "target", 16);
+                    e.rel_key = item["relation"].value("key", std::string{});
+                }
+                if (e.content.size() > 256 * 1024) continue;
+                if (vault_.insert_event(e)) added.push_back(std::move(e));
+            } catch (const std::exception&) {
+                continue;  // one malformed entry does not spoil the rest
+            }
+        }
+        tx.commit();
+    }
+    for (const auto& e : added)
+        emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
+    if (!added.empty())
+        emit({{"event", "history_received"}, {"room_id", b64(share.room_id)}, {"count", added.size()}});
 }
 
 void Session::publish_prekeys() {
@@ -1413,11 +1568,14 @@ void Session::store_room(const wire::RoomInfoT& info) {
         emit({{"event", "room_removed"}, {"room_id", b64(info.room_id)}, {"reason", "removed"}});
         return;
     }
+    bool first_sight = !vault_.room(info.room_id).has_value();
     {
         db::Transaction tx(vault_.db());
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         tx.commit();
     }
+    // New to this room: ask whether anyone will share what was said before.
+    if (first_sight && info.kind != 1 && members.size() > 1) request_history(info.room_id, 0);
     if (auto room = vault_.room(info.room_id))
         emit({{"event", "room_updated"}, {"room", room_json(*room)}});
 }
@@ -1493,6 +1651,10 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
         vault_.insert_event(row);
         vault_.advance_cursor(ev.room_id, ev.seq);
         tx.commit();
+    }
+    if (decrypted && row.type == "m.history.share") {
+        accept_history(row);
+        return;  // the envelope is not a message; frontends never see it
     }
     // Announce the event first, then whatever it changes.
     emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
@@ -1585,6 +1747,18 @@ void Session::pump_outbox() {
             }
             pump_outbox();
         });
+    }
+    // Addressed to one member only (shared history): drop everyone else.
+    if (!row.only_user.empty()) {
+        bool present = std::find(others.begin(), others.end(), row.only_user) != others.end();
+        if (!present) {
+            vault_.outbox_remove(row.local_id);
+            pump_outbox();
+            return;
+        }
+        auto session = vault_.load_sessions(row.only_user);
+        waiting = !session || session->empty();
+        others = {row.only_user};
     }
     if (waiting) return;
     // A channel may have nobody else in it yet; the message still gets its place.
