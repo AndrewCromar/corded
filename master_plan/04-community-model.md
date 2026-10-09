@@ -234,6 +234,7 @@ build on it.
 | **C8** | **Sender keys for channels.** One encryption per message, keys shared over pairwise sessions, rotation when anyone loses access. | Core crypto, engine | Tests: membership-change matrix; a removed member's client cannot decrypt anything sent after removal |
 | **C9** | **History for newcomers** (D-28): request, server switch, member switch, sharing through another member's client. | Server, engine, TUI | Tests: a newcomer receives earlier messages; nothing is shared when the server or the member has it off; disappearing and deleted messages are never shared |
 | **C11** | **Optional unencrypted servers** (D-32): a per-server switch, off by default, with a clear marker in every client. | Server, engine, TUI | Tests: default stays encrypted; with the switch on, a newcomer reads history from the server and every client shows the marker |
+| **C12** | **Server scope** (D-33): `cordedd --scope machine`, `network` or `internet`. See "Server scope" below. | Server | Tests: machine scope refuses a connection from another address; network scope refuses a public address; internet scope will not start with open registration unless told to |
 | **C10** | **Polish that makes it feel like a community:** categories, channel topics, nicknames, role colours, `@role` mentions, unread and mention counts per channel, ownership transfer. | Server, engine, TUI | Per feature |
 
 ### Status
@@ -264,6 +265,32 @@ cannot be reordered after creation.
   release, when real migrations become mandatory.
 - The wire schema keeps growing by adding tables and union members only, so the change is
   additive at the protocol level even though behaviour changes.
+
+### Server scope (D-33)
+
+Requirement from the owner: the server should be configurable to its scope (this machine,
+the local network, or the internet), without opening security holes.
+
+Today the server listens on every network interface by default and lets anyone register,
+which is the widest and least safe combination. It can already be narrowed by hand
+(`--host 127.0.0.1` for this machine only; `--invite-only` or `--closed` for
+registration), and whether it is reachable from the internet depends on the router. The
+change makes the choice explicit and the defaults safe:
+
+| Scope | Listens on | Accepts connections from | Registration default |
+|---|---|---|---|
+| `machine` (default) | loopback only | this computer | open |
+| `network` | all interfaces | private and link-local addresses only; anything else is refused | open |
+| `internet` | all interfaces | anywhere | invite-only; open registration must be asked for explicitly |
+
+- The scope is printed at start-up, along with the address others should use.
+- `internet` scope tightens the limits that matter when strangers can reach the server:
+  lower connection and registration rates per address, a cap on accounts per address per
+  day, and handshake and idle timeouts.
+- Reaching a home server from the internet still needs the router to forward the port
+  (or a tunnel); the operator guide explains how, and the server cannot do that itself.
+- Exposure to the internet is where the unaudited state of the code matters most. The
+  guide says so plainly until an audit has happened.
 
 ## 7. Effect on the staged plan
 
