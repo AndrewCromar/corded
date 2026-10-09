@@ -1,0 +1,51 @@
+# Build output
+/build/
+/build-*/
+/out/
+/cmake-build-*/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+Testing/
+
+# vcpkg
+/vcpkg_installed/
+/vcpkg/
+
+# Compiled artefacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+
+# Runtime data and secrets: never commit these
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.vault
+*.key
+*.pem
+.env
+
+# Fuzzing and profiling
+/fuzz-corpus-local/
+crash-*
+leak-*
+*.profraw
+*.profdata
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.cache/
+.clangd/
