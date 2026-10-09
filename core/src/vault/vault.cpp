@@ -524,13 +524,16 @@ std::optional<EventRow> Vault::event(ByteView room_id, ByteView event_id) {
 }
 
 void Vault::confirm_event(ByteView room_id, ByteView event_id, uint64_t seq, uint64_t server_ts) {
-    auto st = db_.prepare("UPDATE events SET seq = ?, server_ts = ?, status = 'ok' "
+    // A message deleted before the server confirmed it stays deleted.
+    auto st = db_.prepare("UPDATE events SET seq = ?, server_ts = ?, "
+                          "status = CASE WHEN status = 'redacted' THEN status ELSE 'ok' END "
                           "WHERE room_id = ? AND event_id = ?");
     st.bind(1, seq).bind(2, server_ts).bind(3, room_id).bind(4, event_id).exec();
 }
 
 void Vault::set_event_status(ByteView room_id, ByteView event_id, const std::string& status) {
-    auto st = db_.prepare("UPDATE events SET status = ? WHERE room_id = ? AND event_id = ?");
+    auto st = db_.prepare("UPDATE events SET status = ? WHERE room_id = ? AND event_id = ? "
+                          "AND status != 'redacted'");
     st.bind(1, status).bind(2, room_id).bind(3, event_id).exec();
 }
 
