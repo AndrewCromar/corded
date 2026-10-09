@@ -1,0 +1,5 @@
+/* Only the C interface is visible outside libcorded. */
+CORDED_0 {
+  global: corded_*;
+  local: *;
+};

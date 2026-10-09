@@ -49,3 +49,9 @@ leak-*
 .DS_Store
 .cache/
 .clangd/
+
+# Local data from trying the prototype
+/server-data/
+/cordedd-data/
+/*-vault/
+vault.hdr

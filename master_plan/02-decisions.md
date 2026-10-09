@@ -169,6 +169,24 @@ integration, persistence, key distribution and verification.
 To be decided by the owner before Stage 4 starts. Stage 4's `CryptoProvider` interface
 is the same either way, so the choice does not affect Stages 2, 3 or 5.
 
+## Prototype notes
+
+A thin prototype (server, core, TUI; Linux only) was built ahead of the staged plan. It
+follows the decisions above except where noted here. Each item needs to be settled
+properly when its owning stage is reached.
+
+| Topic | What the prototype does | Why | Revisit in |
+|---|---|---|---|
+| D-11 vault encryption | SQLite3 Multiple Ciphers (ChaCha20-Poly1305) instead of SQLCipher | vcpkg's SQLCipher port only supports Windows | Stage 3 |
+| D-03 libsodium source | System libsodium by default; vcpkg copy behind the `vendored-sodium` manifest feature | The vcpkg port needs `autoconf-archive` installed on the host | Stage 0 |
+| D-07 transport security | Plain TCP, no TLS | Kept out to get a working prototype sooner | Stage 2 |
+| D-16 group rooms | Two-person rooms only (pairwise Double Ratchet) | Sender keys not built yet | Stage 4 |
+| D-15 devices | One device per user | As planned for first releases | F7 |
+| Stage 1 | Wire schema written directly as `proto/corded.fbs`, no prose specification | Prototype shortcut | Stage 1 |
+| Threading | One engine thread does both networking and engine work | Simpler; the two-thread split is still the plan | Stage 3 |
+| Servers per vault | One | Prototype shortcut | Stage 3 |
+| X3DH first message | Carried inside the first room event rather than as a separate to-device message | Avoids a second message path | Stage 4 |
+
 ## Gaps and contradictions in the blueprint
 
 | ID | Gap | Resolution | Owning stage |

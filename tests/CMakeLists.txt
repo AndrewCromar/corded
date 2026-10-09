@@ -13,3 +13,13 @@ target_compile_definitions(corded_integration_tests PRIVATE
   CORDEDD_PATH="$<TARGET_FILE:cordedd>")
 add_dependencies(corded_integration_tests cordedd)
 catch_discover_tests(corded_integration_tests)
+
+# Drives two real corded-tui processes in pseudo-terminals.
+if(CORDED_BUILD_TUI)
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_FOUND)
+    add_test(NAME tui_smoke
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_smoke.py ${CMAKE_BINARY_DIR}/bin)
+    set_tests_properties(tui_smoke PROPERTIES TIMEOUT 180)
+  endif()
+endif()

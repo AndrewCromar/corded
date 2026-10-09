@@ -66,6 +66,11 @@ add_custom_target(corded_proto_gen DEPENDS ${CORDED_GENERATED_DIR}/corded_genera
 add_library(corded_warnings INTERFACE)
 target_compile_options(corded_warnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
 
+# Keep C++ template statics out of libcorded's dynamic symbol table.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-gnu-unique>)
+endif()
+
 add_library(corded_common INTERFACE)
 add_dependencies(corded_common corded_proto_gen)
 target_include_directories(corded_common INTERFACE common/include ${CORDED_GENERATED_DIR})
@@ -88,7 +93,9 @@ add_library(corded SHARED core/src/abi/abi.cpp)
 target_compile_definitions(corded PRIVATE CORDED_BUILDING)
 target_include_directories(corded PUBLIC include)
 target_link_libraries(corded PRIVATE corded_core corded_warnings)
-target_link_options(corded PRIVATE -Wl,--exclude-libs,ALL)
+target_link_options(corded PRIVATE -Wl,--exclude-libs,ALL
+  -Wl,--version-script=${CMAKE_SOURCE_DIR}/core/corded.map)
+set_target_properties(corded PROPERTIES LINK_DEPENDS ${CMAKE_SOURCE_DIR}/core/corded.map)
 set_target_properties(corded PROPERTIES
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON VERSION ${PROJECT_VERSION} SOVERSION 0)
 
