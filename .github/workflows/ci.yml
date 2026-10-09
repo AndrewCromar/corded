@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, prototype, next]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux build and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar \
+            autoconf autoconf-archive automake libtool perl
+
+      # Dependencies are built by vcpkg; caching its binary archives keeps
+      # later runs fast.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      # Ubuntu's libsodium is too old (HKDF needs 1.0.19), so build it too.
+      - name: Build
+        run: ./build.sh -DVCPKG_MANIFEST_FEATURES=vendored-sodium
+
+      - name: Test
+        run: ctest --preset dev
+
+      - name: Check that libcorded exports only its C interface
+        run: |
+          extra=$(nm -D --defined-only build/dev/lib/libcorded.so | grep -v -E ' T corded_| A CORDED_0' || true)
+          if [ -n "$extra" ]; then echo "unexpected exported symbols:"; echo "$extra"; exit 1; fi

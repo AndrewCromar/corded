@@ -9,7 +9,7 @@ if [ ! -x external/vcpkg/vcpkg ]; then
   ./external/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 fi
 
-cmake --preset dev
+cmake --preset dev "$@"   # extra arguments are passed to CMake
 cmake --build --preset dev -j"$(nproc)"
 
 echo
