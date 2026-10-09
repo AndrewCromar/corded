@@ -4,6 +4,7 @@
   "builtin-baseline": "1e919a139d12f92047dddeef6c942600d091e7ac",
   "dependencies": [
     "asio",
+    "openssl",
     "flatbuffers",
     "sqlite3",
     "spdlog",

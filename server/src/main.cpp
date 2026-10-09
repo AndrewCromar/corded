@@ -1,11 +1,12 @@
 // cordedd: the Corded relay server. It authenticates devices, hands out prekey
 // bundles, tracks room membership, and stores and forwards ciphertext.
 //
-// Prototype limits: plain TCP (no TLS yet), open registration, one device per
-// user, a single I/O thread, no rate limiting.
+// Prototype limits: open registration, one device per user, a single I/O
+// thread, no rate limiting.
 #include "storage.hpp"
 
 #include "corded/common/sig.hpp"
+#include "corded/common/tls.hpp"
 
 #include <asio.hpp>
 #include <spdlog/spdlog.h>
@@ -24,7 +25,8 @@ class Server;
 
 class Conn : public std::enable_shared_from_this<Conn> {
 public:
-    Conn(tcp::socket sock, Server& server) : sock_(std::move(sock)), server_(server) {}
+    Conn(tcp::socket sock, asio::ssl::context& tls, Server& server)
+        : stream_(std::move(sock), tls), server_(server) {}
 
     asio::awaitable<void> run();
 
@@ -44,12 +46,13 @@ public:
         if (closed_) return;
         closed_ = true;
         asio::error_code ec;
-        sock_.close(ec);
+        stream_.lowest_layer().close(ec);
     }
 
     bool authed() const { return !device_id.empty(); }
 
     Bytes challenge;
+    Bytes tls_exporter;  // binds the sign-in signature to this TLS session
     Bytes device_id, user_id;
     std::string username;
 
@@ -63,7 +66,7 @@ private:
         writing_ = true;
         auto self = shared_from_this();
         auto buf = out_.front();
-        asio::async_write(sock_, asio::buffer(*buf), [self, buf](asio::error_code ec, size_t) {
+        asio::async_write(stream_, asio::buffer(*buf), [self, buf](asio::error_code ec, size_t) {
             if (ec) {
                 self->close();
                 return;
@@ -73,7 +76,7 @@ private:
         });
     }
 
-    tcp::socket sock_;
+    tls::Stream stream_;
     Server& server_;
     std::deque<std::shared_ptr<Bytes>> out_;
     bool writing_ = false;
@@ -85,13 +88,29 @@ class Server {
 public:
     Server(asio::io_context& io, const std::string& host, uint16_t port, const std::string& data_dir,
            std::string name)
-        : io_(io), acceptor_(io), storage_(data_dir + "/cordedd.db"), name_(std::move(name)) {
+        : io_(io),
+          acceptor_(io),
+          tls_(asio::ssl::context::tls_server),
+          storage_(data_dir + "/cordedd.db"),
+          name_(std::move(name)) {
+        // The server's identity is a self-signed certificate made on first
+        // start. Clients pin its fingerprint.
+        std::string cert = data_dir + "/tls-cert.pem", key = data_dir + "/tls-key.pem";
+        if (!std::filesystem::exists(cert) || !std::filesystem::exists(key)) {
+            tls::generate_self_signed(cert, key, name_);
+            spdlog::info("generated a new TLS identity in {}", data_dir);
+        }
+        tls::require_tls13(tls_);
+        tls_.use_certificate_chain_file(cert);
+        tls_.use_private_key_file(key, asio::ssl::context::pem);
+        fingerprint_ = b64(tls::file_fingerprint(cert));
         tcp::endpoint ep(asio::ip::make_address(host), port);
         acceptor_.open(ep.protocol());
         acceptor_.set_option(asio::socket_base::reuse_address(true));
         acceptor_.bind(ep);
         acceptor_.listen();
         spdlog::info("cordedd listening on {}:{}", host, acceptor_.local_endpoint().port());
+        spdlog::info("server fingerprint: {}", fingerprint_);
     }
 
     asio::awaitable<void> accept_loop() {
@@ -105,7 +124,7 @@ public:
                 continue;
             }
             sock.set_option(tcp::no_delay(true), ec);
-            auto conn = std::make_shared<Conn>(std::move(sock), *this);
+            auto conn = std::make_shared<Conn>(std::move(sock), tls_, *this);
             asio::co_spawn(io_, [conn] { return conn->run(); }, asio::detached);
         }
     }
@@ -193,7 +212,7 @@ private:
             return;
         }
         auto cert_msg = signed_message(kCtxDeviceCert, {r.device_id, r.dh_key});
-        auto auth_msg = signed_message(kCtxAuth, {c->challenge, to_bytes(name_)});
+        auto auth_msg = signed_message(kCtxAuth, {c->challenge, to_bytes(name_), c->tls_exporter});
         if (!verify_sig(r.user_id, cert_msg, r.cert) ||
             !verify_sig(r.device_id, auth_msg, r.signature)) {
             c->fail(rid, err::BadSignature, "signature check failed");
@@ -213,7 +232,7 @@ private:
 
     void on_authenticate(const std::shared_ptr<Conn>& c, uint32_t rid, const wire::AuthenticateT& a) {
         auto dev = storage_.find_device(a.device_id);
-        auto msg = signed_message(kCtxAuth, {c->challenge, to_bytes(name_)});
+        auto msg = signed_message(kCtxAuth, {c->challenge, to_bytes(name_), c->tls_exporter});
         // Same answer for an unknown device and a bad signature.
         if (!dev || !verify_sig(a.device_id, msg, a.signature)) {
             c->fail(rid, err::UnknownDevice, "authentication failed");
@@ -357,14 +376,18 @@ private:
 
     asio::io_context& io_;
     tcp::acceptor acceptor_;
+    asio::ssl::context tls_;
     Storage storage_;
     std::string name_;
+    std::string fingerprint_;
     std::map<Bytes, std::weak_ptr<Conn>> online_;
 };
 
 asio::awaitable<void> Conn::run() {
     auto self = shared_from_this();
     try {
+        co_await stream_.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+        tls_exporter = tls::exporter(stream_);
         challenge = random_bytes(32);
         wire::HelloT hello;
         hello.protocol_version = kProtocolVersion;
@@ -373,7 +396,7 @@ asio::awaitable<void> Conn::run() {
         reply(0, std::move(hello));
         for (;;) {
             std::array<uint8_t, 4> hdr;
-            co_await asio::async_read(sock_, asio::buffer(hdr), asio::use_awaitable);
+            co_await asio::async_read(stream_, asio::buffer(hdr), asio::use_awaitable);
             uint32_t n = decode_length(hdr.data());
             if (n == 0 || n > kMaxFrameBytes) {
                 fail(0, err::Malformed, "bad frame length");
@@ -381,7 +404,7 @@ asio::awaitable<void> Conn::run() {
                 break;
             }
             Bytes body(n);
-            co_await asio::async_read(sock_, asio::buffer(body), asio::use_awaitable);
+            co_await asio::async_read(stream_, asio::buffer(body), asio::use_awaitable);
             auto frame = decode_frame(body);
             if (!frame) {
                 fail(0, err::Malformed, "malformed frame");

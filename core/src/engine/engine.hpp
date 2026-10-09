@@ -4,6 +4,7 @@
 #pragma once
 
 #include "corded/common/frame.hpp"
+#include "corded/common/tls.hpp"
 #include "vault/vault.hpp"
 
 #include <asio.hpp>
@@ -66,6 +67,7 @@ private:
 
     // network
     void start_connect();
+    bool check_server_identity();
     void drop_connection(const std::string& reason);
     void schedule_reconnect();
     void read_header(uint64_t gen);
@@ -98,7 +100,8 @@ private:
     asio::io_context io_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     asio::ip::tcp::resolver resolver_;
-    asio::ip::tcp::socket socket_;
+    asio::ssl::context tls_ctx_;
+    std::shared_ptr<tls::Stream> stream_;  // one per connection attempt
     asio::steady_timer reconnect_timer_;
     std::thread thread_;
 
@@ -110,6 +113,8 @@ private:
     uint64_t conn_gen_ = 0;
     int backoff_s_ = 1;
     std::string host_, port_;
+    std::string server_fingerprint_;
+    Bytes tls_exporter_;
     Bytes challenge_auth_msg_;
     std::array<uint8_t, 4> hdr_{};
     Bytes body_;

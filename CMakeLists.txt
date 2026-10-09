@@ -18,6 +18,7 @@ option(CORDED_BUILD_TUI "Build the terminal client" ON)
 # ---- dependencies ---------------------------------------------------------
 find_package(Threads REQUIRED)
 find_package(asio CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -74,7 +75,9 @@ endif()
 add_library(corded_common INTERFACE)
 add_dependencies(corded_common corded_proto_gen)
 target_include_directories(corded_common INTERFACE common/include ${CORDED_GENERATED_DIR})
-target_link_libraries(corded_common INTERFACE flatbuffers::flatbuffers corded_sodium)
+target_link_libraries(corded_common INTERFACE
+  flatbuffers::flatbuffers corded_sodium asio::asio OpenSSL::SSL OpenSSL::Crypto)
+target_compile_definitions(corded_common INTERFACE ASIO_STANDALONE)
 
 # ---- core library ---------------------------------------------------------
 add_library(corded_core STATIC

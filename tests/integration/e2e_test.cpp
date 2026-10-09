@@ -327,3 +327,38 @@ TEST_CASE("a second user cannot take an existing username") {
     });
     REQUIRE(state["detail"].get<std::string>().find("taken") != std::string::npos);
 }
+
+TEST_CASE("a client refuses a server whose identity has changed") {
+    TempDir tmp;
+    int port = test_port() + 2;
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client erin((tmp.path / "erin").string());
+    REQUIRE(erin.create("erin")["ok"] == true);
+    std::string pinned;
+    {
+        Server genuine(port, (tmp.path / "genuine").string());
+        REQUIRE(erin.cmd(connect)["ok"] == true);
+        erin.wait_live();
+        for (const auto& e : erin.seen)
+            if (e["event"] == "server_pinned") pinned = e["fingerprint"];
+        REQUIRE(pinned.size() == 43);
+    }
+    // Something else now answers on the same address, with a different key.
+    Server impostor(port, (tmp.path / "impostor").string());
+    json refused = erin.wait("refusal", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("identity") != std::string::npos;
+    }, 20000);
+    REQUIRE(refused["detail"].get<std::string>().find(pinned) != std::string::npos);
+
+    // A wrong fingerprint given up front is refused on the first connection too.
+    Client frank((tmp.path / "frank").string());
+    REQUIRE(frank.create("frank")["ok"] == true);
+    json with_pin = connect;
+    with_pin["fingerprint"] = pinned;
+    REQUIRE(frank.cmd(with_pin)["ok"] == true);
+    frank.wait("refusal", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("identity") != std::string::npos;
+    });
+}

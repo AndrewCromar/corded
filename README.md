@@ -62,6 +62,11 @@ Then open three terminals in the `corded` directory.
 ./build/dev/bin/corded-tui --vault ./bob-vault --server localhost:7443 --name bob
 ```
 
+The server prints a line like `server fingerprint: C8sJ...` when it starts. That is its
+identity. A client remembers the fingerprint it sees the first time it connects and
+refuses to connect if it ever changes. To be strict from the first connection, pass it
+to the client with `--fingerprint <value>`.
+
 Each client asks you to choose a passphrase the first time (at least 8 characters, typed
 twice). Once both say `live`, type this in Alice's window:
 
@@ -101,14 +106,14 @@ It does:
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
   return, in order. Clients reconnect on their own, and queued messages survive restarts.
+- An encrypted connection to the server: TLS 1.3, with the server's self-signed key
+  pinned by the client, and sign-in bound to that TLS session.
 - Typed events with relations instead of plain strings. Replies and reactions already use
   this, and it is what threads, edits and the rest will be built on.
 - A frontend that uses only the public header, [`corded.h`](include/corded/corded.h).
 
 It does not, yet:
 
-- **Encrypt the connection to the server.** There is no TLS. Message content is still
-  end-to-end encrypted, but someone watching the network can see who is talking to whom.
 - Group chats with more than two people.
 - Verify contacts (safety numbers). The first key seen for a user is trusted.
 - More than one device per user, or more than one server per vault.

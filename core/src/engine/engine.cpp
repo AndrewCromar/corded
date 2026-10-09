@@ -53,9 +53,13 @@ Engine::Engine(EngineConfig config)
     : config_(std::move(config)),
       work_(asio::make_work_guard(io_)),
       resolver_(io_),
-      socket_(io_),
+      tls_ctx_(asio::ssl::context::tls_client),
       reconnect_timer_(io_) {
     if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
+    // The server is authenticated by its pinned fingerprint, checked after the
+    // handshake, so certificate-authority verification is switched off.
+    tls::require_tls13(tls_ctx_);
+    tls_ctx_.set_verify_mode(asio::ssl::verify_none);
     thread_ = std::thread([this] { io_.run(); });
     asio::post(io_, [this] { emit_vault_state(); });
 }
@@ -123,6 +127,8 @@ void Engine::set_conn(Conn c, const std::string& detail) {
     json j = {{"event", "connection_state"}, {"state", conn_name(static_cast<int>(c))}};
     if (!detail.empty()) j["detail"] = detail;
     if (!host_.empty()) j["server"] = host_ + ":" + port_;
+    if (!server_fingerprint_.empty() && c != Conn::Disconnected && c != Conn::Connecting)
+        j["fingerprint"] = server_fingerprint_;
     emit(std::move(j));
 }
 
@@ -297,7 +303,12 @@ void Engine::cmd_connect(uint64_t req, const json& cmd) {
         vault_.set_meta("server_port", port);
         vault_.set_meta("registered", "0");
         vault_.set_meta("prekeys_published", "0");
+        vault_.set_meta("server_fp", "");
     }
+    // An explicit fingerprint (from an invite) must match. "reset_pin" accepts
+    // whatever identity the server presents next; use it only on purpose.
+    if (cmd.contains("fingerprint")) vault_.set_meta("server_fp", cmd.at("fingerprint").get<std::string>());
+    else if (cmd.value("reset_pin", false)) vault_.set_meta("server_fp", "");
     host_ = host;
     port_ = port;
     want_connection_ = true;
@@ -383,24 +394,59 @@ void Engine::start_connect() {
     if (!want_connection_ || conn_ != Conn::Disconnected) return;
     uint64_t gen = ++conn_gen_;
     set_conn(Conn::Connecting);
-    resolver_.async_resolve(host_, port_, [this, gen](asio::error_code ec, tcp::resolver::results_type r) {
+    auto s = std::make_shared<tls::Stream>(io_, tls_ctx_);
+    stream_ = s;
+    resolver_.async_resolve(host_, port_, [this, gen, s](asio::error_code ec, tcp::resolver::results_type r) {
         if (gen != conn_gen_) return;
         if (ec) {
             drop_connection("cannot resolve server: " + ec.message());
             return;
         }
-        asio::async_connect(socket_, r, [this, gen](asio::error_code ec2, const tcp::endpoint&) {
+        asio::async_connect(s->lowest_layer(), r, [this, gen, s](asio::error_code ec2, const tcp::endpoint&) {
             if (gen != conn_gen_) return;
             if (ec2) {
                 drop_connection("cannot connect: " + ec2.message());
                 return;
             }
             asio::error_code ignored;
-            socket_.set_option(tcp::no_delay(true), ignored);
-            set_conn(Conn::Authenticating);
-            read_header(gen);
+            s->lowest_layer().set_option(tcp::no_delay(true), ignored);
+            s->async_handshake(asio::ssl::stream_base::client, [this, gen, s](asio::error_code ec3) {
+                if (gen != conn_gen_) return;
+                if (ec3) {
+                    drop_connection("secure connection failed: " + ec3.message());
+                    return;
+                }
+                if (!check_server_identity()) return;
+                set_conn(Conn::Authenticating);
+                read_header(gen);
+            });
         });
     });
+}
+
+// Trust on first use: the first fingerprint seen for a server is remembered,
+// and a different one later is refused outright.
+bool Engine::check_server_identity() {
+    std::string seen;
+    try {
+        seen = b64(tls::peer_fingerprint(*stream_));
+        tls_exporter_ = tls::exporter(*stream_);
+    } catch (const std::exception& e) {
+        drop_connection(std::string("secure connection failed: ") + e.what());
+        return false;
+    }
+    std::string pinned = vault_.meta("server_fp").value_or("");
+    if (pinned.empty()) {
+        vault_.set_meta("server_fp", seen);
+        emit({{"event", "server_pinned"}, {"server", host_ + ":" + port_}, {"fingerprint", seen}});
+    } else if (pinned != seen) {
+        want_connection_ = false;
+        drop_connection("the server's identity does not match the one saved for it (expected " +
+                        pinned + ", got " + seen + "); refusing to connect");
+        return false;
+    }
+    server_fingerprint_ = seen;
+    return true;
 }
 
 void Engine::drop_connection(const std::string& reason) {
@@ -409,7 +455,8 @@ void Engine::drop_connection(const std::string& reason) {
     conn_ = Conn::Disconnected;  // before the handlers below run, so they cannot send
     asio::error_code ec;
     resolver_.cancel();
-    socket_.close(ec);
+    if (stream_) stream_->lowest_layer().close(ec);
+    stream_.reset();  // callbacks still running hold their own reference
     reconnect_timer_.cancel();
     out_.clear();
     writing_ = false;
@@ -436,7 +483,8 @@ void Engine::schedule_reconnect() {
 }
 
 void Engine::read_header(uint64_t gen) {
-    asio::async_read(socket_, asio::buffer(hdr_), [this, gen](asio::error_code ec, size_t) {
+    auto s = stream_;
+    asio::async_read(*s, asio::buffer(hdr_), [this, gen, s](asio::error_code ec, size_t) {
         if (gen != conn_gen_) return;
         if (ec) {
             drop_connection("connection closed");
@@ -453,7 +501,8 @@ void Engine::read_header(uint64_t gen) {
 
 void Engine::read_body(uint64_t gen, uint32_t n) {
     body_.resize(n);
-    asio::async_read(socket_, asio::buffer(body_), [this, gen](asio::error_code ec, size_t) {
+    auto s = stream_;
+    asio::async_read(*s, asio::buffer(body_), [this, gen, s](asio::error_code ec, size_t) {
         if (gen != conn_gen_) return;
         if (ec) {
             drop_connection("connection closed");
@@ -486,7 +535,8 @@ void Engine::write_next(uint64_t gen) {
     }
     writing_ = true;
     auto buf = out_.front();
-    asio::async_write(socket_, asio::buffer(*buf), [this, gen, buf](asio::error_code ec, size_t) {
+    auto s = stream_;
+    asio::async_write(*s, asio::buffer(*buf), [this, gen, buf, s](asio::error_code ec, size_t) {
         if (gen != conn_gen_) return;
         if (ec) {
             drop_connection("connection closed");
@@ -527,7 +577,7 @@ void Engine::on_hello(const wire::HelloT& hello) {
         drop_connection("the server speaks a different protocol version");
         return;
     }
-    challenge_auth_msg_ = signed_message(kCtxAuth, {hello.challenge, to_bytes(hello.server_name)});
+    challenge_auth_msg_ = signed_message(kCtxAuth, {hello.challenge, to_bytes(hello.server_name), tls_exporter_});
     if (vault_.meta("registered") != "1") {
         send_register();
         return;

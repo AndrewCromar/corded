@@ -55,8 +55,11 @@ std::string snippet(const std::string& s, size_t n = 40) {
 
 class TuiApp {
 public:
-    TuiApp(std::string vault_dir, std::string server, std::string name)
-        : vault_dir_(std::move(vault_dir)), server_(std::move(server)), name_(std::move(name)) {}
+    TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint)
+        : vault_dir_(std::move(vault_dir)),
+          server_(std::move(server)),
+          name_(std::move(name)),
+          fingerprint_(std::move(fingerprint)) {}
 
     int run() {
         corded_config cfg{};
@@ -113,6 +116,7 @@ private:
             connection_ = ev.value("state", "");
             if (ev.contains("detail")) notice_ = ev.value("detail", "");
             if (ev.contains("server")) server_shown_ = ev.value("server", "");
+            if (ev.contains("fingerprint")) server_fp_ = ev.value("fingerprint", "");
             if (connection_ == "live") notice_.clear();
         } else if (kind == "room_updated") {
             const json& r = ev.at("room");
@@ -138,6 +142,9 @@ private:
             if (ev.value("status", "") == "failed") notice_ = "send failed: " + ev.value("message", "");
         } else if (kind == "command_result") {
             on_result(ev);
+        } else if (kind == "server_pinned") {
+            pin_notice_ = "First connection to this server. Its key " + ev.value("fingerprint", "") +
+                          " is now remembered.";
         } else if (kind == "warning") {
             notice_ = ev.value("message", "");
         }
@@ -239,7 +246,9 @@ private:
         auto colon = server.rfind(':');
         std::string host = colon == std::string::npos ? server : server.substr(0, colon);
         int port = colon == std::string::npos ? 7443 : std::atoi(server.substr(colon + 1).c_str());
-        command({{"cmd", "connect"}, {"host", host}, {"port", port}});
+        json cmd = {{"cmd", "connect"}, {"host", host}, {"port", port}};
+        if (!fingerprint_.empty()) cmd["fingerprint"] = fingerprint_;
+        command(cmd);
     }
 
     // ------------------------------------------------------------ actions
@@ -287,6 +296,7 @@ private:
         input_text_.clear();
         if (line.empty()) return;
         notice_.clear();
+        pin_notice_.clear();
         Room* room = current();
 
         if (line[0] == '/') {
@@ -392,6 +402,7 @@ private:
             text(" " + username_ + " "),
             text(connection_.empty() ? "offline" : connection_) | color(conn_color),
             text(server_shown_.empty() ? "" : "  " + server_shown_) | dim,
+            text(server_fp_.empty() || connection_ != "live" ? "" : "  TLS, key " + server_fp_.substr(0, 8)) | dim,
             filler(),
             text("end-to-end encrypted ") | dim,
         });
@@ -416,7 +427,7 @@ private:
                               text("/quit              leave        Tab: switch between chats and typing"),
                           }) |
                           border);
-        std::string footer = notice_.empty() ? "/help for commands" : notice_;
+        std::string footer = !notice_.empty() ? notice_ : !pin_notice_.empty() ? pin_notice_ : "/help for commands";
         all.push_back(text(" " + footer) | (notice_.empty() ? dim : color(Color::Yellow)));
         return vbox(std::move(all));
     }
@@ -456,7 +467,8 @@ private:
         if (creating_ && !name_.empty()) pass_input_->TakeFocus();
     }
 
-    std::string vault_dir_, server_, name_;
+    std::string vault_dir_, server_, name_, fingerprint_;
+    std::string server_fp_, pin_notice_;
     corded_engine* engine_ = nullptr;
     ScreenInteractive screen_ = ScreenInteractive::Fullscreen();
     std::atomic<bool> running_{true};
@@ -480,18 +492,22 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string vault, server, name;
+    std::string vault, server, name, fingerprint;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
         if (a == "--vault") vault = next();
         else if (a == "--server") server = next();
         else if (a == "--name") name = next();
+        else if (a == "--fingerprint") fingerprint = next();
         else {
-            std::printf("usage: corded-tui [--vault DIR] [--server HOST:PORT] [--name USERNAME]\n\n"
-                        "  --vault   where this identity is stored (default: ~/.corded/default)\n"
-                        "  --server  server to connect to, for example localhost:7443\n"
-                        "  --name    username to register when creating a new vault\n");
+            std::printf("usage: corded-tui [--vault DIR] [--server HOST:PORT] [--name USERNAME]\n"
+                        "                  [--fingerprint KEY]\n\n"
+                        "  --vault        where this identity is stored (default: ~/.corded/default)\n"
+                        "  --server       server to connect to, for example localhost:7443\n"
+                        "  --name         username to register when creating a new vault\n"
+                        "  --fingerprint  the server's key, as printed when cordedd starts; without\n"
+                        "                 it the key seen on first connection is trusted\n");
             return a == "--help" || a == "-h" ? 0 : 2;
         }
     }
@@ -499,5 +515,5 @@ int main(int argc, char** argv) {
         const char* home = std::getenv("HOME");
         vault = std::string(home ? home : ".") + "/.corded/default";
     }
-    return TuiApp(vault, server, name).run();
+    return TuiApp(vault, server, name, fingerprint).run();
 }
