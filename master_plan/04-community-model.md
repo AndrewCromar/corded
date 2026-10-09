@@ -5,6 +5,13 @@ way a Discord server is.** It has channels. One user owns it. The owner creates 
 gives them permissions and assigns them to members. Someone who wants to run two
 communities sets up two servers.
 
+The owner has since described the feel as closer to Slack than Discord, and really a mix
+of the two. That fits what is specified here: one community per server, channels as the
+main space, threads hanging off messages, direct messages and small private groups on the
+side, and one owner handing out roles. Where the two products differ, the choice is noted
+in the text. The main one still open is whether newcomers see earlier history, which
+both Slack and Discord allow and end-to-end encryption makes hard (section 3).
+
 This document defines that model and then lays out the plan for changing what has been
 built so far to match it. Where it disagrees with an older part of the plan, this document
 wins; the affected documents carry a pointer here.
