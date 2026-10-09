@@ -215,6 +215,8 @@ It does not, yet:
 - [Roadmap](master_plan/01-roadmap.md): every stage broken into steps
 - [Decisions](master_plan/02-decisions.md): choices made and gaps found in the blueprint
 - [Feature roadmap](master_plan/03-feature-roadmap.md): threads, replies, reactions and the rest
+- [Community model](master_plan/04-community-model.md): one server is one community; the change plan
+- [Operations and platforms](master_plan/05-operations-and-platforms.md): remote administration, several devices, Windows and mobile, a browser client
 - [Stage plans](master_plan/stages/): the detailed plan for each stage
 
 Code layout:

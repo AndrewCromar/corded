@@ -235,6 +235,10 @@ build on it.
 | **C9** | **History for newcomers** (D-28): request, server switch, member switch, sharing through another member's client. | Server, engine, TUI | Tests: a newcomer receives earlier messages; nothing is shared when the server or the member has it off; disappearing and deleted messages are never shared |
 | **C11** | **Optional unencrypted servers** (D-32): a per-server switch, off by default, with a clear marker in every client. | Server, engine, TUI | Tests: default stays encrypted; with the switch on, a newcomer reads history from the server and every client shows the marker |
 | **C12** | **Server scope** (D-33): `cordedd --scope machine`, `network` or `internet`. See "Server scope" below. | Server | Tests: machine scope refuses a connection from another address; network scope refuses a public address; internet scope will not start with open registration unless told to |
+| **C13** | **Several devices per person** (D-37): linking and recovery phrase, several devices per account on the server, a session per device. See [05-operations-and-platforms.md](05-operations-and-platforms.md), section 2. | Server, core crypto, engine, TUI | Tests: the same person on two devices receives everything on both; a removed device receives nothing further |
+| **C14** | **Windows build, then GUI on every platform** (D-38). Section 3 of the same document. | Build system, CI, new GUI | The terminal client runs natively on Windows; CI builds every platform |
+| **C15** | **Browser client** (D-39). Section 4 of the same document. | Server (WebSocket listener), core (WebAssembly build), new web frontend | A browser joins a server and talks to an installed client |
+| **C16** | **Remote administration** (D-34, D-35, D-36): settings stored in the server and editable from the client, housekeeping and scheduled restarts, `/reboot`, and signed remote `/update`. Section 1 of the same document. | Server, engine, TUI, release pipeline | Tests: a setting changed from the client survives a restart; a scheduled restart happens and clients return; an update with a bad signature is refused |
 | **C10** | **Polish that makes it feel like a community:** categories, channel topics, nicknames, role colours, `@role` mentions, unread and mention counts per channel, ownership transfer. | Server, engine, TUI | Per feature |
 
 ### Status
@@ -251,6 +255,8 @@ build on it.
 | C8 Sender keys | Not started |
 | C9 History for newcomers | Built on `next`: asked for automatically on joining a channel or group, relayed by the server to up to two online members, shared from their vaults as an encrypted envelope for the newcomer alone, with the server switch and the member switch |
 | C10 Polish, C11 Optional unencrypted servers | Not started |
+| C12 Server scope | Not started |
+| C13 Several devices, C14 Windows and GUI, C15 Browser client, C16 Remote administration | Not started; designed in [05-operations-and-platforms.md](05-operations-and-platforms.md) |
 
 Simplifications in what is built, to be revisited: after any change to roles, channels or
 membership the server sends every online member a full fresh picture instead of a small

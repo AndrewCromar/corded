@@ -9,6 +9,7 @@ and how the work is staged. The other documents hang off it:
 | [02-decisions.md](02-decisions.md) | Decisions made, and gaps or contradictions found in the blueprint |
 | [03-feature-roadmap.md](03-feature-roadmap.md) | Chat features (threads, replies, reactions, ...) mapped onto the design |
 | [04-community-model.md](04-community-model.md) | Each server is one Discord-style community: channels, an owner, roles and permissions. Includes the change plan. **Overrides older text where they differ** |
+| [05-operations-and-platforms.md](05-operations-and-platforms.md) | Running a server remotely (settings, maintenance, updates), one person on several devices, which platforms clients can run on, a browser client |
 | [stages/](stages/) | One detailed plan per stage |
 | [Blueprint PDF](Modular%20E2EE%20Messaging%20Platform%20-%20Technical%20Architecture%20Blueprint.pdf) | The original technical blueprint this plan is built from |
 

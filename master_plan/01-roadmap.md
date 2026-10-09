@@ -264,8 +264,19 @@ existing code are C1 to C10 in [04-community-model.md](04-community-model.md), s
 | C8 | Sender keys for channels |
 | C9 | History for newcomers (depends on D-28) |
 | C10 | Categories, topics, nicknames, role colours, role mentions, ownership transfer |
+| C11 | Optional unencrypted servers |
+| C12 | Server scope: machine, network, internet |
+| C13 | Several devices per person |
+| C14 | Windows build, then a GUI on every platform |
+| C15 | Browser client |
+| C16 | Remote administration: settings, maintenance, restart and update from the owner's client |
 
 These cut across Stages 1 to 5; section 7 of that document says what moves in each stage.
+C13 to C16 are designed in [05-operations-and-platforms.md](05-operations-and-platforms.md).
+
+Built so far: C1 to C4, C6, C7 (deletion), C9, and the core of C5. Checkpoints are tagged
+`prototype-v0`, `mvp-v1` and `mvp-v2`; `main` holds the latest tested state and `next` is
+the working branch.
 
 ## Feature milestones
 
