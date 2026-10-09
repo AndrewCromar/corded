@@ -135,25 +135,55 @@ void Engine::set_conn(Conn c, const std::string& detail) {
     emit(std::move(j));
 }
 
+Engine::json Engine::member_json(const MemberRow& m) {
+    bool me = m.user_id.size() == 32 &&
+              std::equal(m.user_id.begin(), m.user_id.end(), vault_.identity().user.pk.begin());
+    json roles = json::array();
+    for (uint32_t id : m.roles)
+        for (const auto& r : roles_)
+            if (r.id == id) roles.push_back(r.name);
+    return {{"user_id", b64(m.user_id)},
+            {"username", m.username},
+            {"me", me},
+            {"is_owner", m.is_owner},
+            {"is_admin", m.is_admin},
+            {"roles", std::move(roles)},
+            {"verified", !me && vault_.is_verified(m.user_id)}};
+}
+
 Engine::json Engine::room_json(const RoomRow& room) {
     json members = json::array();
     std::string title;
     for (const auto& m : room.members) {
-        bool me = ByteView(m.user_id).size() == 32 &&
-                  std::equal(m.user_id.begin(), m.user_id.end(), vault_.identity().user.pk.begin());
-        members.push_back({{"user_id", b64(m.user_id)},
-                           {"username", m.username},
-                           {"me", me},
-                           {"is_admin", m.is_admin},
-                           {"verified", !me && vault_.is_verified(m.user_id)}});
-        if (!me) title += (title.empty() ? "" : ", ") + m.username;
+        json j = member_json(m);
+        if (!j["me"].get<bool>()) title += (title.empty() ? "" : ", ") + m.username;
+        members.push_back(std::move(j));
     }
-    if (!room.name.empty()) title = room.name;
+    static const char* kinds[] = {"channel", "direct", "group"};
+    if (room.kind == 0) title = "#" + room.channel_name;
+    else if (!room.name.empty()) title = room.name;
     return {{"room_id", b64(room.room_id)},
             {"title", title.empty() ? "(empty room)" : title},
-            {"name", room.name},
-            {"is_group", room.members.size() > 2},
+            {"name", room.kind == 0 ? room.channel_name : room.name},
+            {"kind", kinds[room.kind >= 0 && room.kind <= 2 ? room.kind : 2]},
+            {"is_group", room.kind == 2},
             {"members", std::move(members)}};
+}
+
+// What this client knows about the community it is connected to.
+Engine::json Engine::server_json() {
+    json roles = json::array();
+    for (const auto& r : roles_)
+        roles.push_back({{"name", r.name},
+                         {"position", r.position},
+                         {"is_everyone", r.is_everyone},
+                         {"permissions", perm::to_names(r.permissions)}});
+    bool owner = server_owner_.size() == 32 &&
+                 std::equal(server_owner_.begin(), server_owner_.end(), vault_.identity().user.pk.begin());
+    return {{"name", server_name_},
+            {"is_owner", owner},
+            {"my_permissions", perm::to_names(my_permissions_)},
+            {"roles", std::move(roles)}};
 }
 
 Engine::json Engine::event_json(const EventRow& e) {
@@ -346,50 +376,11 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                     ok(req);
                 });
             });
-        } else if (name == "kick_member") {
-            Bytes room_id = need_b64(cmd, "room_id", 16);
-            std::string username = cmd.at("username").get<std::string>();
-            admin_action(req, username, [this, req, room_id, username](const Bytes& user_id) {
-                wire::KickMemberT kick;
-                kick.room_id = room_id;
-                kick.user_id = user_id;
-                request(std::move(kick), [this, req, room_id, username](wire::FrameT& r) {
-                    if (r.body.type != wire::FrameBody_RoomInfo) {
-                        auto* e = r.body.AsError();
-                        fail(req, "forbidden", e ? e->message : "could not remove that person");
-                        return;
-                    }
-                    store_room(*r.body.AsRoomInfo());
-                    cmd_send_event(next_request_++, {{"room_id", b64(room_id)},
-                                                     {"type", "m.room.member"},
-                                                     {"content", {{"action", "removed"}, {"username", username}}}});
-                    ok(req);
-                });
-            });
-        } else if (name == "ban_user" || name == "set_admin") {
-            std::string username = cmd.at("username").get<std::string>();
-            bool flag = cmd.value(name == "ban_user" ? "banned" : "admin", true);
-            admin_action(req, username, [this, req, name, flag](const Bytes& user_id) {
-                auto done = [this, req](wire::FrameT& r) {
-                    if (r.body.type == wire::FrameBody_Ok) {
-                        ok(req);
-                        return;
-                    }
-                    auto* e = r.body.AsError();
-                    fail(req, "forbidden", e ? e->message : "the server refused");
-                };
-                if (name == "ban_user") {
-                    wire::BanUserT ban;
-                    ban.user_id = user_id;
-                    ban.banned = flag;
-                    request(std::move(ban), done);
-                } else {
-                    wire::SetAdminT set;
-                    set.user_id = user_id;
-                    set.admin = flag;
-                    request(std::move(set), done);
-                }
-            });
+        } else if (name == "server_info" || name == "member_list" || name == "create_role" ||
+                   name == "edit_role" || name == "delete_role" || name == "grant_role" ||
+                   name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
+                   name == "set_channel_access" || name == "kick" || name == "ban_user") {
+            community_command(req, name, cmd);
         } else if (name == "leave_room") {
             if (conn_ != Conn::Live) {
                 fail(req, "not_connected", "not connected to a server");
@@ -500,7 +491,109 @@ void Engine::cmd_start_chat(uint64_t req, const json& cmd) {
     lookup_next(req, names, std::make_shared<wire::CreateRoomT>(), "");
 }
 
-// Shared start of the administrator commands: find the person by username.
+// Commands for running a community. The server decides whether we may; these
+// only translate names into ids and report the answer.
+void Engine::community_command(uint64_t req, const std::string& name, const json& cmd) {
+    if (name == "server_info") {
+        ok(req, server_json());
+        return;
+    }
+    if (conn_ != Conn::Live) {
+        fail(req, "not_connected", "not connected to a server");
+        return;
+    }
+    auto permission_bits = [](const json& list) {
+        uint64_t bits = 0;
+        for (const auto& n : list) {
+            uint64_t bit = perm::from_name(n.get<std::string>());
+            if (!bit) throw std::invalid_argument("unknown permission: " + n.get<std::string>());
+            bits |= bit;
+        }
+        return bits;
+    };
+    auto role_id = [this](const std::string& role_name) -> uint32_t {
+        for (const auto& r : roles_)
+            if (r.name == role_name) return r.id;
+        throw std::invalid_argument("no role called " + role_name);
+    };
+
+    if (name == "member_list") {
+        request(wire::GetMembersT{}, [this, req](wire::FrameT& r) {
+            auto* list = r.body.AsMemberList();
+            if (!list) {
+                fail(req, "refused", "could not fetch the member list");
+                return;
+            }
+            json members = json::array();
+            for (const auto& m : list->members)
+                if (m) members.push_back(member_json({m->user_id, m->username, m->is_admin, m->is_owner, m->roles}));
+            ok(req, {{"members", std::move(members)}});
+        });
+    } else if (name == "create_role") {
+        wire::NewRoleT q;
+        q.name = cmd.at("name").get<std::string>();
+        q.permissions = permission_bits(cmd.value("permissions", json::array()));
+        simple_request(req, std::move(q));
+    } else if (name == "edit_role") {
+        wire::EditRoleT q;
+        q.role_id = role_id(cmd.at("role").get<std::string>());
+        q.name = cmd.value("name", std::string{});
+        q.permissions = permission_bits(cmd.at("permissions"));
+        simple_request(req, std::move(q));
+    } else if (name == "delete_role") {
+        wire::RemoveRoleT q;
+        q.role_id = role_id(cmd.at("role").get<std::string>());
+        simple_request(req, std::move(q));
+    } else if (name == "grant_role") {
+        uint32_t id = role_id(cmd.at("role").get<std::string>());
+        bool grant = cmd.value("grant", true);
+        admin_action(req, cmd.at("username").get<std::string>(), [this, req, id, grant](const Bytes& user_id) {
+            wire::GrantRoleT q;
+            q.user_id = user_id;
+            q.role_id = id;
+            q.assign = grant;
+            simple_request(req, std::move(q));
+        });
+    } else if (name == "create_channel") {
+        wire::CreateChannelT q;
+        q.name = cmd.at("name").get<std::string>();
+        simple_request(req, std::move(q));
+    } else if (name == "rename_channel") {
+        wire::UpdateChannelT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.name = cmd.at("name").get<std::string>();
+        simple_request(req, std::move(q));
+    } else if (name == "delete_channel") {
+        wire::DeleteChannelT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        simple_request(req, std::move(q));
+    } else if (name == "set_channel_access") {
+        // An exception for one role in one channel, e.g. deny view_channel to
+        // @everyone and allow it to "staff" to make a private channel.
+        wire::SetOverrideT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.role_id = role_id(cmd.at("role").get<std::string>());
+        q.allow = permission_bits(cmd.value("allow", json::array()));
+        q.deny = permission_bits(cmd.value("deny", json::array()));
+        simple_request(req, std::move(q));
+    } else if (name == "kick") {
+        admin_action(req, cmd.at("username").get<std::string>(), [this, req](const Bytes& user_id) {
+            wire::KickT q;
+            q.user_id = user_id;
+            simple_request(req, std::move(q));
+        });
+    } else if (name == "ban_user") {
+        bool banned = cmd.value("banned", true);
+        admin_action(req, cmd.at("username").get<std::string>(), [this, req, banned](const Bytes& user_id) {
+            wire::BanUserT q;
+            q.user_id = user_id;
+            q.banned = banned;
+            simple_request(req, std::move(q));
+        });
+    }
+}
+
+// Shared start of the commands that act on a person: find them by username.
 // The server decides whether we are allowed; this only resolves the name.
 void Engine::admin_action(uint64_t req, const std::string& username,
                           std::function<void(const Bytes& user_id)> then) {
@@ -836,6 +929,8 @@ void Engine::on_frame(wire::FrameT& f) {
         case wire::FrameBody_Hello: on_hello(*f.body.AsHello()); break;
         case wire::FrameBody_AuthOk: on_auth_ok(*f.body.AsAuthOk()); break;
         case wire::FrameBody_RoomInfo: store_room(*f.body.AsRoomInfo()); break;
+        case wire::FrameBody_ServerInfo: on_server_info(*f.body.AsServerInfo()); break;
+        case wire::FrameBody_RoomList: reconcile_rooms(*f.body.AsRoomList()); break;
         case wire::FrameBody_RoomEvent: on_room_event(*f.body.AsRoomEvent()); break;
         case wire::FrameBody_Error:
             emit({{"event", "warning"}, {"message", "server: " + f.body.AsError()->message}});
@@ -865,6 +960,14 @@ void Engine::on_hello(const wire::HelloT& hello) {
             // The server does not know us (for example its data was reset).
             vault_.set_meta("prekeys_published", "0");
             send_register();
+            return;
+        }
+        if (e->code == err::Kicked) {
+            // Removed from the community. Do not walk straight back in: the
+            // person has to choose to rejoin, which registers again.
+            vault_.set_meta("registered", "0");
+            want_connection_ = false;
+            drop_connection("you were removed from this server; connect again to rejoin");
             return;
         }
         want_connection_ = false;
@@ -899,22 +1002,7 @@ void Engine::on_auth_ok(const wire::AuthOkT& auth) {
     publish_prekeys();
     request(wire::ListRoomsT{}, [this](wire::FrameT& f) {
         if (f.body.type == wire::FrameBody_Error) return;
-        if (auto* list = f.body.AsRoomList()) {
-            std::set<Bytes> current;
-            for (const auto& room : list->rooms) {
-                if (!room) continue;
-                store_room(*room);
-                current.insert(room->room_id);
-            }
-            // Anything the server no longer lists is a room we have left.
-            for (const auto& known : vault_.rooms()) {
-                if (current.count(known.room_id)) continue;
-                db::Transaction tx(vault_.db());
-                vault_.delete_room(known.room_id);
-                tx.commit();
-                emit({{"event", "room_removed"}, {"room_id", b64(known.room_id)}});
-            }
-        }
+        if (auto* list = f.body.AsRoomList()) reconcile_rooms(*list);
         wire::SyncT sync;
         for (const auto& room : vault_.rooms()) {
             auto cur = std::make_unique<wire::CursorT>();
@@ -928,6 +1016,39 @@ void Engine::on_auth_ok(const wire::AuthOkT& auth) {
             pump_outbox();
         });
     });
+}
+
+void Engine::on_server_info(const wire::ServerInfoT& info) {
+    server_name_ = info.name;
+    server_owner_ = info.owner;
+    my_permissions_ = info.my_permissions;
+    roles_.clear();
+    for (const auto& r : info.roles)
+        if (r) roles_.push_back({r->role_id, r->name, r->position, r->permissions, r->is_everyone});
+    json j = server_json();
+    j["event"] = "server_info";
+    emit(std::move(j));
+}
+
+// The server's list is the truth about which rooms we are in: store what it
+// lists and drop what it does not (a channel we can no longer see, a group we
+// were removed from).
+void Engine::reconcile_rooms(const wire::RoomListT& list) {
+    std::set<Bytes> current;
+    for (const auto& room : list.rooms) {
+        if (!room) continue;
+        store_room(*room);
+        current.insert(room->room_id);
+    }
+    for (const auto& known : vault_.rooms()) {
+        if (current.count(known.room_id)) continue;
+        {
+            db::Transaction tx(vault_.db());
+            vault_.delete_room(known.room_id);
+            tx.commit();
+        }
+        emit({{"event", "room_removed"}, {"room_id", b64(known.room_id)}});
+    }
 }
 
 void Engine::publish_prekeys() {
@@ -959,7 +1080,8 @@ void Engine::store_room(const wire::RoomInfoT& info) {
     if (info.room_id.size() != 16) return;
     std::vector<MemberRow> members;
     for (const auto& m : info.members)
-        if (m && m->user_id.size() == 32) members.push_back({m->user_id, m->username, m->is_admin});
+        if (m && m->user_id.size() == 32)
+            members.push_back({m->user_id, m->username, m->is_admin, m->is_owner, m->roles});
     // A member list without us means we were removed from the room.
     const Key32& me = vault_.identity().user.pk;
     bool still_in = false;
@@ -975,7 +1097,7 @@ void Engine::store_room(const wire::RoomInfoT& info) {
     }
     {
         db::Transaction tx(vault_.db());
-        vault_.upsert_room(info.room_id, members);
+        vault_.upsert_room(info.room_id, members, info.kind, info.name);
         tx.commit();
     }
     if (auto room = vault_.room(info.room_id))
@@ -1139,7 +1261,8 @@ void Engine::pump_outbox() {
         });
     }
     if (waiting) return;
-    if (others.empty()) {
+    // A channel may have nobody else in it yet; the message still gets its place.
+    if (others.empty() && room->kind != 0) {
         fail_outbox(row, "nobody else is in this room");
         pump_outbox();
         return;

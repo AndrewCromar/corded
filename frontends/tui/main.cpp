@@ -33,6 +33,7 @@ struct Message {
 
 struct Room {
     std::string id, title;
+    std::string kind = "direct";  // channel, direct or group
     std::vector<Message> messages;
     // target event id -> reaction key -> ids of the reaction events
     std::map<std::string, std::map<std::string, std::set<std::string>>> reactions;
@@ -122,15 +123,24 @@ private:
             if (connection_ == "live") notice_.clear();
         } else if (kind == "room_updated") {
             const json& r = ev.at("room");
-            Room& room = room_for(r.value("room_id", ""));
-            room.title = r.value("title", "?");
-            refresh_titles();
+            std::string id = r.value("room_id", "");
+            {
+                Room& room = room_for(id);
+                room.title = r.value("title", "?");
+                room.kind = r.value("kind", "direct");
+            }
+            refresh_titles();  // re-sorts, so look the room up again
+            Room& room = room_for(id);
             if (!room.loaded) {
                 room.loaded = true;
                 command({{"cmd", "fetch_timeline"}, {"room_id", room.id}, {"limit", 500}});
             }
-        } else if (kind == "account") {
-            is_admin_ = ev.value("is_admin", false);
+        } else if (kind == "server_info") {
+            server_name_ = ev.value("name", "");
+            is_owner_ = ev.value("is_owner", false);
+            permissions_.clear();
+            for (const auto& p : ev.value("my_permissions", json::array())) permissions_.insert(p.get<std::string>());
+            roles_ = ev.value("roles", json::array());
         } else if (kind == "room_removed") {
             if (ev.value("reason", "") == "removed") notice_ = "you were removed from a chat";
             std::string id = ev.value("room_id", "");
@@ -193,6 +203,19 @@ private:
             room_for(id).title = ev["data"]["room"].value("title", "?");
             refresh_titles();
             select_room(id);
+            return;
+        }
+        if (ok && ev["data"].contains("members")) {
+            Elements rows = {text("Members of " + (server_name_.empty() ? std::string("this server") : server_name_)) | bold};
+            for (const auto& m : ev["data"]["members"]) {
+                std::string roles;
+                for (const auto& r : m.value("roles", json::array())) roles += " [" + r.get<std::string>() + "]";
+                rows.push_back(hbox({text(m.value("username", "?")) | bold,
+                                     text(m.value("is_owner", false) ? "  owner" : "") | color(Color::Magenta),
+                                     text(roles) | color(Color::Cyan)}));
+            }
+            info_box_ = vbox(std::move(rows)) | border;
+            show_info_ = true;
             return;
         }
         if (ok && ev["data"].contains("safety_numbers")) {
@@ -260,8 +283,13 @@ private:
     Room& room_for(const std::string& id) {
         for (auto& r : rooms_)
             if (r.id == id) return r;
-        rooms_.push_back(Room{id, "...", {}, {}, 0, false});
+        Room fresh;
+        fresh.id = id;
+        fresh.title = "...";
+        rooms_.push_back(std::move(fresh));
         refresh_titles();
+        for (auto& r : rooms_)
+            if (r.id == id) return r;
         return rooms_.back();
     }
     Room* current() {
@@ -269,10 +297,22 @@ private:
         selected_ = std::clamp(selected_, 0, static_cast<int>(rooms_.size()) - 1);
         return &rooms_[static_cast<size_t>(selected_)];
     }
+    // Channels first, then everything else, each alphabetical. The open chat
+    // stays open even though its position may change.
     void refresh_titles() {
+        std::string open = (selected_ >= 0 && selected_ < static_cast<int>(rooms_.size()))
+                               ? rooms_[static_cast<size_t>(selected_)].id
+                               : "";
+        std::stable_sort(rooms_.begin(), rooms_.end(), [](const Room& a, const Room& b) {
+            bool ac = a.kind == "channel", bc = b.kind == "channel";
+            return ac != bc ? ac : a.title < b.title;
+        });
         titles_.clear();
-        for (const auto& r : rooms_)
+        for (size_t i = 0; i < rooms_.size(); ++i) {
+            const Room& r = rooms_[i];
+            if (r.id == open) selected_ = static_cast<int>(i);
             titles_.push_back(r.title + (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
+        }
     }
     void select_room(const std::string& id) {
         for (size_t i = 0; i < rooms_.size(); ++i)
@@ -342,6 +382,7 @@ private:
         notice_.clear();
         pin_notice_.clear();
         show_verify_ = false;
+        show_info_ = false;
         Room* room = current();
 
         if (line[0] == '/') {
@@ -371,12 +412,81 @@ private:
                 json c = {{"cmd", "create_room"}, {"usernames", names}};
                 if (!room_name.empty()) c["name"] = room_name;
                 chat_request_ = command(c);
-            } else if (cmd == "/kick" && !arg.empty() && room) {
-                command({{"cmd", "kick_member"}, {"room_id", room->id}, {"username", arg}});
+            } else if (cmd == "/open" && !arg.empty()) {
+                // Open the first chat whose name contains the text.
+                auto lower = [](std::string v) {
+                    for (auto& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    return v;
+                };
+                bool found = false;
+                for (const auto& r : rooms_)
+                    if (!found && lower(r.title).find(lower(arg)) != std::string::npos) {
+                        select_room(r.id);
+                        found = true;
+                    }
+                if (!found) notice_ = "no chat matches \"" + arg + "\"";
+            } else if (cmd == "/kick" && !arg.empty()) {
+                command({{"cmd", "kick"}, {"username", arg}});
             } else if ((cmd == "/ban" || cmd == "/unban") && !arg.empty()) {
                 command({{"cmd", "ban_user"}, {"username", arg}, {"banned", cmd == "/ban"}});
-            } else if ((cmd == "/admin" || cmd == "/unadmin") && !arg.empty()) {
-                command({{"cmd", "set_admin"}, {"username", arg}, {"admin", cmd == "/admin"}});
+            } else if (cmd == "/members") {
+                command({{"cmd", "member_list"}});
+            } else if (cmd == "/roles") {
+                Elements rows = {text("Roles") | bold};
+                for (const auto& r : roles_) {
+                    std::string perms;
+                    for (const auto& p : r.value("permissions", json::array())) perms += " " + p.get<std::string>();
+                    rows.push_back(hbox({text(r.value("name", "?")) | bold | color(Color::Cyan), text(perms) | dim}));
+                }
+                info_box_ = vbox(std::move(rows)) | border;
+                show_info_ = true;
+            } else if (cmd == "/channel" && !arg.empty()) {
+                // /channel new <name> | rename <name> | delete | private <role> | readonly | open
+                auto sp = arg.find(' ');
+                std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
+                bool on_channel = room && room->kind == "channel";
+                if (sub == "new" && !rest.empty()) {
+                    command({{"cmd", "create_channel"}, {"name", rest}});
+                } else if (!on_channel) {
+                    notice_ = "open a channel first";
+                } else if (sub == "rename" && !rest.empty()) {
+                    command({{"cmd", "rename_channel"}, {"room_id", room->id}, {"name", rest}});
+                } else if (sub == "delete") {
+                    command({{"cmd", "delete_channel"}, {"room_id", room->id}});
+                } else if (sub == "private" && !rest.empty()) {
+                    command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"},
+                             {"deny", {"view_channel"}}});
+                    command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", rest},
+                             {"allow", {"view_channel"}}});
+                } else if (sub == "readonly") {
+                    command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"},
+                             {"deny", {"send_messages"}}});
+                } else if (sub == "open") {
+                    command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"}});
+                } else {
+                    notice_ = "/channel new <name> | rename <name> | delete | private <role> | readonly | open";
+                }
+            } else if (cmd == "/role" && !arg.empty()) {
+                // /role new <name> [permission ...] | delete <name> | give <user> <role> | take <user> <role>
+                std::vector<std::string> words;
+                for (size_t pos = 0; pos < arg.size();) {
+                    size_t end = arg.find(' ', pos);
+                    if (end == std::string::npos) end = arg.size();
+                    if (end > pos) words.push_back(arg.substr(pos, end - pos));
+                    pos = end + 1;
+                }
+                if (words.size() >= 2 && words[0] == "new") {
+                    json perms = json::array();
+                    for (size_t i = 2; i < words.size(); ++i) perms.push_back(words[i]);
+                    command({{"cmd", "create_role"}, {"name", words[1]}, {"permissions", perms}});
+                } else if (words.size() == 2 && words[0] == "delete") {
+                    command({{"cmd", "delete_role"}, {"role", words[1]}});
+                } else if (words.size() == 3 && (words[0] == "give" || words[0] == "take")) {
+                    command({{"cmd", "grant_role"}, {"username", words[1]}, {"role", words[2]},
+                             {"grant", words[0] == "give"}});
+                } else {
+                    notice_ = "/role new <name> [permission ...] | delete <name> | give <user> <role> | take <user> <role>";
+                }
             } else if (cmd == "/add" && !arg.empty() && room) {
                 command({{"cmd", "add_member"}, {"room_id", room->id}, {"username", arg}});
             } else if (cmd == "/leave" && room) {
@@ -525,8 +635,9 @@ private:
                                                                                    : Color::Yellow;
         Element header = hbox({
             text(" corded ") | bold | inverted,
+            text(server_name_.empty() ? "" : " " + server_name_ + " ") | bold,
             text(" " + username_ + " "),
-            text(is_admin_ ? "admin " : "") | color(Color::Magenta),
+            text(is_owner_ ? "owner " : permissions_.count("administrator") ? "admin " : "") | color(Color::Magenta),
             text(connection_.empty() ? "offline" : connection_) | color(conn_color),
             text(server_shown_.empty() ? "" : "  " + server_shown_) | dim,
             text(server_fp_.empty() || connection_ != "live" ? "" : "  TLS, key " + server_fp_.substr(0, 8)) | dim,
@@ -534,7 +645,7 @@ private:
             text("end-to-end encrypted ") | dim,
         });
         Room* room = current();
-        Element left = vbox({text("Chats") | bold, separator(),
+        Element left = vbox({text(server_name_.empty() ? "Chats" : server_name_) | bold, separator(),
                              rooms_.empty() ? text("(none)") | dim : room_menu_->Render() | yframe | flex}) |
                        size(WIDTH, EQUAL, 24);
         Element right = vbox({
@@ -558,10 +669,12 @@ private:
                               text("/edit <text>       change your last message        /delete  remove it"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
-                              text(is_admin_ ? "admin: /kick <user>  /ban <user>  /unban <user>  /admin <user>  /unadmin <user>"
-                                             : "") | color(Color::Magenta),
+                              text("/open <name>       open a channel or chat by name      /members  /roles"),
+                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
+                              text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                           }) |
                           border);
+        if (show_info_) all.push_back(info_box_);
         if (show_verify_) {
             Elements rows = {text("Safety numbers") | bold,
                              text("Compare with each person over a channel you trust (in person, "
@@ -632,7 +745,11 @@ private:
     std::vector<Room> rooms_;
     std::vector<std::string> titles_;
     int selected_ = 0;
-    bool show_help_ = false, show_verify_ = false, is_admin_ = false;
+    bool show_help_ = false, show_verify_ = false, show_info_ = false, is_owner_ = false;
+    std::string server_name_;
+    std::set<std::string> permissions_;
+    json roles_ = json::array();
+    Element info_box_ = text("");
     json verify_list_ = json::array();
 
     Component root_, name_input_, pass_input_, pass2_input_, input_, room_menu_;

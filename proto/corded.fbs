@@ -3,7 +3,9 @@
 namespace corded.wire;
 
 table KeyEntry { id: uint32; key: [ubyte]; }
-table Member { user_id: [ubyte]; username: string; is_admin: bool; }
+// is_admin: the owner, or anyone holding the administrator permission.
+table Member { user_id: [ubyte]; username: string; is_admin: bool; is_owner: bool; roles: [uint32]; }
+table Role { role_id: uint32; name: string; position: int32; permissions: uint64; is_everyone: bool; }
 table Recipient { device_id: [ubyte]; ciphertext: [ubyte]; }
 table Cursor { room_id: [ubyte]; seq: uint64; }
 
@@ -36,15 +38,33 @@ table UserInfo { user_id: [ubyte]; username: string; }
 
 // ---- rooms ----
 table CreateRoom { members: [Member]; }   // only user_id is read
-table RoomInfo { room_id: [ubyte]; members: [Member]; created_at: uint64; is_direct: bool; }
+// kind: 0 = channel of the server, 1 = direct message, 2 = group. For a channel,
+// `members` is everyone who can currently view it and `name` is its name.
+table RoomInfo {
+  room_id: [ubyte]; members: [Member]; created_at: uint64; is_direct: bool;
+  kind: ubyte; name: string;
+}
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
 table LeaveRoom { room_id: [ubyte]; }
 
-// ---- server administrators only ----
-table KickMember { room_id: [ubyte]; user_id: [ubyte]; }
-table BanUser { user_id: [ubyte]; banned: bool; }      // a banned user cannot sign in
-table SetAdmin { user_id: [ubyte]; admin: bool; }
+// ---- the community: one server is one community (see 04-community-model.md) ----
+// Sent after sign-in and again whenever it changes.
+table ServerInfo { name: string; owner: [ubyte]; my_permissions: uint64; roles: [Role]; }
+table GetMembers {}
+table MemberList { members: [Member]; }
+table NewRole { name: string; permissions: uint64; }
+table EditRole { role_id: uint32; name: string; permissions: uint64; }
+table RemoveRole { role_id: uint32; }
+table GrantRole { user_id: [ubyte]; role_id: uint32; assign: bool; }
+table CreateChannel { name: string; }
+table UpdateChannel { room_id: [ubyte]; name: string; }
+table DeleteChannel { room_id: [ubyte]; }
+// Per-channel exception for one role: bits in `allow` are granted there, bits in
+// `deny` are taken away. Both zero removes the exception.
+table SetOverride { room_id: [ubyte]; role_id: uint32; allow: uint64; deny: uint64; }
+table Kick { user_id: [ubyte]; }                      // remove from the server; may rejoin
+table BanUser { user_id: [ubyte]; banned: bool; }     // a banned user cannot sign in
 table ListRooms {}
 table RoomList { rooms: [RoomInfo]; }
 
@@ -65,7 +85,9 @@ union FrameBody {
   CreateRoom, RoomInfo, ListRooms, RoomList,
   SendRoomEvent, SendOk, RoomEvent, Sync, SyncComplete,
   AddMember, LeaveRoom,
-  KickMember, BanUser, SetAdmin
+  BanUser, Kick, ServerInfo, GetMembers, MemberList,
+  NewRole, EditRole, RemoveRole, GrantRole,
+  CreateChannel, UpdateChannel, DeleteChannel, SetOverride
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

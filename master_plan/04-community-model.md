@@ -190,7 +190,7 @@ whose resolved permissions include `VIEW_CHANNEL` there.
 |---|---|
 | Server | `ServerInfo` (name, owner, my permissions), `UpdateServer` |
 | Members | `MemberList`, `MemberUpdated` (push), `SetNickname`, `Kick`, `Ban`, `Unban` |
-| Roles | `RoleList`, `CreateRole`, `UpdateRole`, `DeleteRole`, `AssignRole`, `RemoveRole` |
+| Roles | `NewRole`, `EditRole`, `RemoveRole`, `GrantRole` (roles are listed in `ServerInfo`) |
 | Channels | `ChannelList`, `CreateChannel`, `UpdateChannel`, `DeleteChannel`, `SetOverride`, `ChannelUpdated` (push) |
 | Invites | `CreateInvite`, `ListInvites`, `RevokeInvite` |
 | Direct messages | `OpenDirect`, `CreateGroup` (today's `CreateRoom`) |
@@ -227,6 +227,21 @@ build on it.
 | **C8** | **Sender keys for channels.** One encryption per message, keys shared over pairwise sessions, rotation when anyone loses access. | Core crypto, engine | Tests: membership-change matrix; a removed member's client cannot decrypt anything sent after removal |
 | **C9** | **History for newcomers**, according to the choice made for D-28. | Depends on the choice | Depends on the choice |
 | **C10** | **Polish that makes it feel like a community:** categories, channel topics, nicknames, role colours, `@role` mentions, unread and mention counts per channel, ownership transfer. | Server, engine, TUI | Per feature |
+
+### Status
+
+| Step | State |
+|---|---|
+| C1 Owner and roles | Built on `next` |
+| C2 Channels | Built on `next` |
+| C3 Channel permission overrides | Built on `next` (private and read-only channels) |
+| C4 Client and TUI | Built on `next` (engine commands and TUI commands; no dedicated management screens) |
+| C5 to C10 | Not started |
+
+Simplifications in what is built, to be revisited: after any change to roles, channels or
+membership the server sends every online member a full fresh picture instead of a small
+update; a member's roles are only refreshed in channel member lists; role positions
+cannot be reordered after creation.
 
 ### Compatibility while changing
 

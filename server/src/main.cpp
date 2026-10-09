@@ -28,8 +28,9 @@ struct Options {
     // Who may create an account: anyone, only people with the invite code, or nobody.
     enum class Registration { Open, Invite, Closed } registration = Registration::Open;
     std::string invite_code;
-    // Accounts with every permission, named by whoever runs the server.
-    std::set<std::string> admins;
+    // The account that owns this community. If empty, the first person to
+    // register becomes the owner.
+    std::string owner_name;
     // Each connection may send this many frames per second, with short bursts
     // above it. Faster senders are slowed down, not disconnected.
     double frames_per_second = 100, frame_burst = 200;
@@ -136,9 +137,11 @@ public:
         acceptor_.listen();
         spdlog::info("cordedd listening on {}:{}", host, acceptor_.local_endpoint().port());
         spdlog::info("server fingerprint: {}", fingerprint_);
-        for (const auto& admin : options_.admins) {
-            storage_.promote_by_username(admin);
-            spdlog::info("administrator: {}", admin);
+        if (!options_.owner_name.empty()) {
+            if (auto user = storage_.lookup_user(options_.owner_name)) storage_.set_info("owner", user->user_id);
+            spdlog::info("owner: {}", options_.owner_name);
+        } else if (storage_.owner().empty()) {
+            spdlog::info("no owner yet: the first person to register will own this server");
         }
         spdlog::info("registration: {}", options_.registration == Options::Registration::Open     ? "open to anyone"
                                          : options_.registration == Options::Registration::Invite ? "invite code required"
@@ -215,9 +218,17 @@ public:
                 case wire::FrameBody_ListRooms: on_list_rooms(*c, rid); break;
                 case wire::FrameBody_AddMember: on_add_member(*c, rid, *f.body.AsAddMember()); break;
                 case wire::FrameBody_LeaveRoom: on_leave_room(*c, rid, *f.body.AsLeaveRoom()); break;
-                case wire::FrameBody_KickMember: on_kick_member(*c, rid, *f.body.AsKickMember()); break;
                 case wire::FrameBody_BanUser: on_ban_user(*c, rid, *f.body.AsBanUser()); break;
-                case wire::FrameBody_SetAdmin: on_set_admin(*c, rid, *f.body.AsSetAdmin()); break;
+                case wire::FrameBody_Kick: on_kick(*c, rid, *f.body.AsKick()); break;
+                case wire::FrameBody_GetMembers: on_get_members(*c, rid); break;
+                case wire::FrameBody_NewRole: on_create_role(*c, rid, *f.body.AsNewRole()); break;
+                case wire::FrameBody_EditRole: on_update_role(*c, rid, *f.body.AsEditRole()); break;
+                case wire::FrameBody_RemoveRole: on_delete_role(*c, rid, *f.body.AsRemoveRole()); break;
+                case wire::FrameBody_GrantRole: on_assign_role(*c, rid, *f.body.AsGrantRole()); break;
+                case wire::FrameBody_CreateChannel: on_create_channel(*c, rid, *f.body.AsCreateChannel()); break;
+                case wire::FrameBody_UpdateChannel: on_update_channel(*c, rid, *f.body.AsUpdateChannel()); break;
+                case wire::FrameBody_DeleteChannel: on_delete_channel(*c, rid, *f.body.AsDeleteChannel()); break;
+                case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
                     break;
@@ -248,13 +259,48 @@ private:
         c->user_id = dev.user_id;
         c->username = dev.username;
         online_[dev.device_id] = c;
-        spdlog::info("{} connected{}", dev.username, dev.access_level == kAdmin ? " (administrator)" : "");
+        // Ownership: the operator's choice wins; otherwise the first to arrive.
+        bool named = !options_.owner_name.empty() && dev.username == options_.owner_name;
+        if (named ? !storage_.is_owner(dev.user_id) : (options_.owner_name.empty() && storage_.owner().empty())) {
+            storage_.set_info("owner", dev.user_id);
+            spdlog::info("{} now owns this server", dev.username);
+        }
+        spdlog::info("{} connected{}", dev.username, storage_.is_owner(dev.user_id) ? " (owner)" : "");
         wire::AuthOkT ok;
         ok.user_id = dev.user_id;
         ok.username = dev.username;
-        ok.is_admin = dev.access_level == kAdmin;
+        ok.is_admin = (storage_.permissions(dev.user_id) & perm::Administrator) != 0;
         ok.server_ts = now_ms();
         c->reply(0, std::move(ok));
+        c->reply(0, server_info(dev.user_id));
+    }
+
+    wire::ServerInfoT server_info(const Bytes& for_user) {
+        wire::ServerInfoT info;
+        info.name = name_;
+        info.owner = storage_.owner();
+        info.my_permissions = storage_.permissions(for_user);
+        for (auto& r : storage_.roles()) info.roles.push_back(std::make_unique<wire::RoleT>(std::move(r)));
+        return info;
+    }
+
+    wire::RoomListT room_list(const Bytes& for_user) {
+        wire::RoomListT list;
+        for (const auto& room_id : storage_.rooms_of_user(for_user))
+            list.rooms.push_back(std::make_unique<wire::RoomInfoT>(storage_.room_info(room_id)));
+        return list;
+    }
+
+    // Roles, channels or membership changed: give everyone online a fresh
+    // picture of the community and of what they can see. Simple rather than
+    // clever; fine for communities of modest size.
+    void broadcast_state() {
+        for (auto& [device, weak] : online_) {
+            auto conn = weak.lock();
+            if (!conn) continue;
+            conn->reply(0, server_info(conn->user_id));
+            conn->reply(0, room_list(conn->user_id));
+        }
     }
 
     void on_register(const std::shared_ptr<Conn>& c, uint32_t rid, const wire::RegisterT& r) {
@@ -265,7 +311,14 @@ private:
         }
         // People who already have an account may always come back; only new
         // accounts are subject to the registration policy.
-        if (!storage_.find_device(r.device_id)) {
+        auto before = storage_.find_device(r.device_id);
+        if (before && before->access_level == kBanned) {
+            c->fail(rid, err::Forbidden, "this account is banned from the server");
+            return;
+        }
+        // Someone who was kicked may come back, on the same terms as a newcomer.
+        bool rejoining = before && before->access_level == kKicked;
+        if (!before || rejoining) {
             using Reg = Options::Registration;
             bool allowed = options_.registration == Reg::Open;
             if (options_.registration == Reg::Invite)
@@ -295,16 +348,13 @@ private:
             c->fail(rid, err::Forbidden, "device belongs to another user");
             return;
         }
-        if (dev->access_level == kBanned) {
-            c->fail(rid, err::Forbidden, "this account is banned from the server");
-            return;
-        }
-        // The operator named this username as an administrator.
-        if (options_.admins.count(dev->username) && dev->access_level != kAdmin) {
-            storage_.set_access_level(dev->user_id, kAdmin);
-            dev->access_level = kAdmin;
+        if (rejoining) {
+            storage_.set_access_level(dev->user_id, kUser);
+            dev->access_level = kUser;
         }
         mark_online(c, *dev);
+        // A new member changes who is in every channel they can see.
+        if (!before || rejoining) broadcast_state();
     }
 
     void on_authenticate(const std::shared_ptr<Conn>& c, uint32_t rid, const wire::AuthenticateT& a) {
@@ -317,6 +367,11 @@ private:
         }
         if (dev->access_level == kBanned) {
             c->fail(rid, err::Forbidden, "this account is banned from the server");
+            return;
+        }
+        if (dev->access_level == kKicked) {
+            // Their client registers again, which is how a kicked member rejoins.
+            c->fail(rid, err::Kicked, "you were removed from this server");
             return;
         }
         mark_online(c, *dev);
@@ -357,7 +412,7 @@ private:
     void on_create_room(Conn& c, uint32_t rid, const wire::CreateRoomT& q) {
         std::set<Bytes> members{c.user_id};
         for (const auto& m : q.members) {
-            if (!m || !storage_.user_exists(m->user_id)) {
+            if (!m || !storage_.user_exists(m->user_id) || storage_.access_level(m->user_id) < 0) {
                 c.fail(rid, err::NotFound, "unknown member");
                 return;
             }
@@ -400,8 +455,8 @@ private:
             c.fail(rid, err::Forbidden, "not a member of that room");
             return;
         }
-        if (storage_.is_direct(q.room_id)) {
-            c.fail(rid, err::Forbidden, "a two-person chat cannot gain members; start a group instead");
+        if (storage_.kind(q.room_id) != kGroup) {
+            c.fail(rid, err::Forbidden, "only a group can gain members this way");
             return;
         }
         if (!storage_.user_exists(q.user_id)) {
@@ -424,8 +479,8 @@ private:
             c.fail(rid, err::Forbidden, "not a member of that room");
             return;
         }
-        if (storage_.is_direct(q.room_id)) {
-            c.fail(rid, err::Forbidden, "a two-person chat cannot be left");
+        if (storage_.kind(q.room_id) != kGroup) {
+            c.fail(rid, err::Forbidden, "only a group can be left this way");
             return;
         }
         storage_.remove_member(q.room_id, c.user_id);
@@ -433,91 +488,234 @@ private:
         c.reply(rid, wire::OkT{});
     }
 
-    // Administrator status is read from storage on every use, so removing it
-    // takes effect at once.
-    bool require_admin(Conn& c, uint32_t rid) {
-        if (storage_.access_level(c.user_id) == kAdmin) return true;
-        c.fail(rid, err::Forbidden, "only a server administrator can do that");
+    // ---------------------------------------------------------- community
+    // Permissions are read from storage on every request, so a change takes
+    // effect at once.
+
+    bool require(Conn& c, uint32_t rid, uint64_t permission) {
+        if (storage_.permissions(c.user_id) & permission) return true;
+        c.fail(rid, err::Forbidden, "you do not have permission to do that");
         return false;
     }
-
-    void on_kick_member(Conn& c, uint32_t rid, const wire::KickMemberT& q) {
-        if (!require_admin(c, rid)) return;
-        if (!storage_.is_member(q.room_id, c.user_id)) {
-            c.fail(rid, err::Forbidden, "you are not in that room");
-            return;
+    // Nobody acts on the owner, on themselves, or on someone of equal or higher rank.
+    bool outranks(Conn& c, uint32_t rid, const Bytes& target) {
+        if (target != c.user_id && !storage_.is_owner(target) &&
+            storage_.rank(c.user_id) > storage_.rank(target))
+            return true;
+        c.fail(rid, err::Forbidden, "you cannot do that to someone of equal or higher rank");
+        return false;
+    }
+    static bool valid_name(const std::string& s, size_t max) {
+        if (s.empty() || s.size() > max) return false;
+        for (unsigned char ch : s)
+            if (ch < 0x20 || ch == 0x7F) return false;
+        return true;
+    }
+    void drop_connection_of(const Bytes& user_id, const std::string& why) {
+        auto dev = storage_.device_of_user(user_id);
+        if (!dev) return;
+        auto it = online_.find(dev->device_id);
+        if (it == online_.end()) return;
+        if (auto conn = it->second.lock()) {
+            conn->fail(0, err::Forbidden, why);
+            conn->close_when_flushed();
         }
-        if (storage_.is_direct(q.room_id) || !storage_.is_member(q.room_id, q.user_id) ||
-            q.user_id == c.user_id) {
-            c.fail(rid, err::Forbidden, "that person cannot be removed from this room");
-            return;
-        }
-        storage_.remove_member(q.room_id, q.user_id);
-        wire::RoomInfoT info = storage_.room_info(q.room_id);
-        announce_room(info, c.user_id);
-        // The removed person gets the new member list too, which no longer has them.
-        if (auto dev = storage_.device_of_user(q.user_id)) push(dev->device_id, info);
-        c.reply(rid, std::move(info));
+        online_.erase(it);
     }
 
-    void on_ban_user(Conn& c, uint32_t rid, const wire::BanUserT& q) {
-        if (!require_admin(c, rid)) return;
-        if (!storage_.user_exists(q.user_id)) {
-            c.fail(rid, err::NotFound, "unknown user");
+    void on_get_members(Conn& c, uint32_t rid) {
+        wire::MemberListT list;
+        for (const auto& id : storage_.member_ids())
+            if (auto m = storage_.member(id)) list.members.push_back(std::move(m));
+        c.reply(rid, std::move(list));
+    }
+
+    void on_create_role(Conn& c, uint32_t rid, const wire::NewRoleT& q) {
+        if (!require(c, rid, perm::ManageRoles)) return;
+        // Nobody can hand out a permission they do not hold themselves.
+        if (!valid_name(q.name, 32) || (q.permissions & ~storage_.permissions(c.user_id)) ||
+            (q.permissions & ~perm::All)) {
+            c.fail(rid, err::Forbidden, "bad role name, or permissions you do not hold yourself");
             return;
         }
-        int level = storage_.access_level(q.user_id);
-        if (q.user_id == c.user_id || level == kAdmin) {
-            c.fail(rid, err::Forbidden, "an administrator cannot be banned; remove their admin status first");
-            return;
-        }
-        storage_.set_access_level(q.user_id, q.banned ? kBanned : kUser);
-        if (q.banned) {
-            if (auto dev = storage_.device_of_user(q.user_id)) {
-                auto it = online_.find(dev->device_id);
-                if (it != online_.end())
-                    if (auto conn = it->second.lock()) {
-                        conn->fail(0, err::Forbidden, "this account is banned from the server");
-                        conn->close_when_flushed();
-                    }
+        for (const auto& r : storage_.roles())
+            if (r.name == q.name) {
+                c.fail(rid, err::NameTaken, "a role with that name already exists");
+                return;
             }
-        }
-        spdlog::info("{} {} a user", c.username, q.banned ? "banned" : "unbanned");
+        storage_.create_role(q.name, q.permissions);
+        broadcast_state();
         c.reply(rid, wire::OkT{});
     }
 
-    void on_set_admin(Conn& c, uint32_t rid, const wire::SetAdminT& q) {
-        if (!require_admin(c, rid)) return;
+    // The role must exist and rank below the person changing it.
+    std::optional<wire::RoleT> manageable_role(Conn& c, uint32_t rid, uint32_t role_id, bool allow_everyone) {
+        auto role = storage_.role(role_id);
+        if (!role || (role->is_everyone && !allow_everyone)) {
+            c.fail(rid, err::NotFound, "no such role");
+            return std::nullopt;
+        }
+        if (!storage_.is_owner(c.user_id) && role->position >= storage_.rank(c.user_id)) {
+            c.fail(rid, err::Forbidden, "that role is not below your own");
+            return std::nullopt;
+        }
+        return role;
+    }
+
+    void on_update_role(Conn& c, uint32_t rid, const wire::EditRoleT& q) {
+        if (!require(c, rid, perm::ManageRoles)) return;
+        auto role = manageable_role(c, rid, q.role_id, true);
+        if (!role) return;
+        std::string name = role->is_everyone || q.name.empty() ? role->name : q.name;
+        uint64_t mine = storage_.permissions(c.user_id);
+        // Bits the editor does not hold may stay as they are but cannot be added.
+        if (!valid_name(name, 32) || (q.permissions & ~perm::All) ||
+            ((q.permissions & ~role->permissions) & ~mine)) {
+            c.fail(rid, err::Forbidden, "bad role name, or permissions you do not hold yourself");
+            return;
+        }
+        storage_.update_role(q.role_id, name, q.permissions);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_delete_role(Conn& c, uint32_t rid, const wire::RemoveRoleT& q) {
+        if (!require(c, rid, perm::ManageRoles)) return;
+        if (!manageable_role(c, rid, q.role_id, false)) return;
+        storage_.delete_role(q.role_id);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_assign_role(Conn& c, uint32_t rid, const wire::GrantRoleT& q) {
+        if (!require(c, rid, perm::ManageRoles)) return;
+        if (!manageable_role(c, rid, q.role_id, false)) return;
+        if (storage_.access_level(q.user_id) < 0 || !storage_.user_exists(q.user_id)) {
+            c.fail(rid, err::NotFound, "that person is not a member of this server");
+            return;
+        }
+        // The owner may give roles to anyone, including themselves.
+        if (!storage_.is_owner(c.user_id) && !outranks(c, rid, q.user_id)) return;
+        storage_.assign_role(q.user_id, q.role_id, q.assign);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_create_channel(Conn& c, uint32_t rid, const wire::CreateChannelT& q) {
+        if (!require(c, rid, perm::ManageChannels)) return;
+        if (!valid_username(q.name)) {
+            c.fail(rid, err::Malformed, "channel names use a-z, 0-9, _ and -, up to 32 characters");
+            return;
+        }
+        if (storage_.channel_name_taken(q.name)) {
+            c.fail(rid, err::NameTaken, "a channel with that name already exists");
+            return;
+        }
+        Bytes room_id = storage_.create_channel(q.name);
+        broadcast_state();
+        c.reply(rid, storage_.room_info(room_id));
+    }
+
+    bool channel_exists(Conn& c, uint32_t rid, const Bytes& room_id) {
+        if (storage_.kind(room_id) == kChannel) return true;
+        c.fail(rid, err::NotFound, "no such channel");
+        return false;
+    }
+
+    void on_update_channel(Conn& c, uint32_t rid, const wire::UpdateChannelT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        if (!valid_username(q.name) || storage_.channel_name_taken(q.name)) {
+            c.fail(rid, err::Malformed, "that channel name is not valid or is already used");
+            return;
+        }
+        storage_.rename_channel(q.room_id, q.name);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_delete_channel(Conn& c, uint32_t rid, const wire::DeleteChannelT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        if (storage_.channels().size() <= 1) {
+            c.fail(rid, err::Forbidden, "a server keeps at least one channel");
+            return;
+        }
+        storage_.delete_channel(q.room_id);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_set_override(Conn& c, uint32_t rid, const wire::SetOverrideT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        // Exceptions are limited to what makes sense per channel.
+        constexpr uint64_t allowed = perm::ViewChannel | perm::SendMessages | perm::AddReactions |
+                                     perm::AttachFiles | perm::MentionEveryone | perm::ManageMessages;
+        if (!storage_.role(q.role_id) || ((q.allow | q.deny) & ~allowed) || (q.allow & q.deny)) {
+            c.fail(rid, err::Malformed, "unknown role or unsupported permission for a channel");
+            return;
+        }
+        storage_.set_override(q.room_id, q.role_id, q.allow, q.deny);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_kick(Conn& c, uint32_t rid, const wire::KickT& q) {
+        if (!require(c, rid, perm::KickMembers)) return;
+        if (!storage_.user_exists(q.user_id) || storage_.access_level(q.user_id) < 0) {
+            c.fail(rid, err::NotFound, "that person is not a member of this server");
+            return;
+        }
+        if (!outranks(c, rid, q.user_id)) return;
+        storage_.kick(q.user_id);
+        drop_connection_of(q.user_id, "you were removed from this server");
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_ban_user(Conn& c, uint32_t rid, const wire::BanUserT& q) {
+        if (!require(c, rid, perm::BanMembers)) return;
         if (!storage_.user_exists(q.user_id)) {
             c.fail(rid, err::NotFound, "unknown user");
             return;
         }
-        if (q.user_id == c.user_id) {
-            c.fail(rid, err::Forbidden, "you cannot change your own administrator status");
+        if (!q.banned) {
+            // Lifting a ban makes them a member again, with no roles.
+            if (storage_.access_level(q.user_id) == kBanned) {
+                storage_.set_access_level(q.user_id, kUser);
+                broadcast_state();
+            }
+            c.reply(rid, wire::OkT{});
             return;
         }
-        if (storage_.access_level(q.user_id) == kBanned) {
-            c.fail(rid, err::Forbidden, "that account is banned");
-            return;
-        }
-        storage_.set_access_level(q.user_id, q.admin ? kAdmin : kUser);
+        if (!outranks(c, rid, q.user_id)) return;
+        storage_.kick(q.user_id);
+        storage_.set_access_level(q.user_id, kBanned);
+        drop_connection_of(q.user_id, "this account is banned from the server");
+        spdlog::info("{} banned a member", c.username);
+        broadcast_state();
         c.reply(rid, wire::OkT{});
     }
 
     void on_list_rooms(Conn& c, uint32_t rid) {
-        wire::RoomListT list;
-        for (const auto& room_id : storage_.rooms_of_user(c.user_id))
-            list.rooms.push_back(std::make_unique<wire::RoomInfoT>(storage_.room_info(room_id)));
-        c.reply(rid, std::move(list));
+        c.reply(rid, room_list(c.user_id));
     }
 
     void on_send_room_event(Conn& c, uint32_t rid, const wire::SendRoomEventT& ev) {
-        if (ev.room_id.size() != 16 || ev.event_id.size() != 16 || ev.recipients.empty()) {
+        if (ev.room_id.size() != 16 || ev.event_id.size() != 16) {
             c.fail(rid, err::Malformed, "bad event");
             return;
         }
         if (!storage_.is_member(ev.room_id, c.user_id)) {
             c.fail(rid, err::Forbidden, "not a member of that room");
+            return;
+        }
+        bool channel = storage_.kind(ev.room_id) == kChannel;
+        if (channel && !(storage_.permissions(c.user_id, ev.room_id) & perm::SendMessages)) {
+            c.fail(rid, err::Forbidden, "you cannot post in this channel");
+            return;
+        }
+        // A channel may have nobody else in it yet; other rooms always do.
+        if (ev.recipients.empty() && !channel) {
+            c.fail(rid, err::Malformed, "bad event");
             return;
         }
         // Copies addressed to someone who is not (or no longer) in the room are
@@ -661,14 +859,15 @@ int main(int argc, char** argv) {
             opt.invite_code = next();
             opt.registration = Reg::Invite;
         } else if (a == "--closed") opt.registration = Reg::Closed;
-        else if (a == "--admin") opt.admins.insert(next());
+        else if (a == "--owner") opt.owner_name = next();
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
         else {
             std::fprintf(stderr,
                          "usage: cordedd [--host ADDR] [--port N] [--data DIR] [--name NAME]\n"
-                         "               [--invite-code CODE | --closed] [--admin USERNAME]... [--verbose]\n\n"
-                         "  --admin USERNAME    make this account a server administrator with every\n"
-                         "                      permission; may be given more than once\n"
+                         "               [--invite-code CODE | --closed] [--owner USERNAME] [--verbose]\n\n"
+                         "  --name NAME         what this community is called\n"
+                         "  --owner USERNAME    the account that owns this server and has every\n"
+                         "                      permission; without it, the first to register owns it\n"
                          "  --invite-code CODE  only people who give this code can create an account\n"
                          "  --closed            nobody can create an account; existing users still sign in\n");
             return a == "--help" ? 0 : 2;

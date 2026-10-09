@@ -115,34 +115,38 @@ def main():
             t.expect("live", timeout=30)
             return t
 
+        # The first person to register owns the server.
         alice = start("alice")
         bob = start("bob")
-        print("ok  both clients created vaults and went live")
+        alice.expect("#general")
+        alice.expect("owner")
+        bob.expect("#general")
+        print("ok  both clients joined the server and see #general; the first one owns it")
+
+        alice.type("hi everyone\r")
+        bob.expect("hi everyone")
+        print("ok  channel message reaches the other member")
 
         alice.type("/chat bob\r")
         alice.expect("Say hello")
         alice.type("hello from alice\r")
+        bob.expect("alice (1)")
+        bob.type("/open alice\r")
         bob.expect("hello from alice")
-        print("ok  alice -> bob")
+        print("ok  direct message: unread marker, then /open shows it")
 
         bob.type("hi back from bob\r")
         alice.expect("hi back from bob")
-        print("ok  bob -> alice")
-
         alice.type("/reply replying to you\r")
         bob.expect("replying to you")
         bob.expect("> bob: hi back from bob")
-        print("ok  reply shows the quoted message")
-
         bob.type("/react +1\r")
         alice.expect("[+1]")
-        print("ok  reaction shows on the other side")
+        print("ok  reply and reaction")
 
         bob.type("/thread threaded answer\r")
         alice.expect("   | ")
         alice.expect("threaded answer")
-        alice.type("/thread and another\r")
-        bob.expect("and another")
         print("ok  thread replies are drawn under the message that started them")
 
         bob.type("this has a mistaek\r")
@@ -163,22 +167,50 @@ def main():
         alice.type("/group bob carol : Weekend plans\r")
         alice.expect("Weekend plans")
         alice.type("hi group\r")
-        carol.expect("Weekend plans")
+        carol.expect("Weekend plans (")
+        carol.type("/open weekend\r")
         carol.expect("hi group")
-        bob.expect("Weekend plans (")  # shown as unread in bob's chat list
         carol.type("carol is here\r")
         alice.expect("carol is here")
-        print("ok  group chat with three people, named room, unread marker")
-
         carol.type("/leave\r")
-        carol.expect("No conversations yet")
         alice.expect("left the chat")
-        print("ok  leaving a group removes it for the leaver and tells the others")
+        print("ok  group chat: named, unread marker, and leaving")
 
-        # Restart alice: unlock the existing vault and see the history again.
+        # Running the community.
+        alice.type("/channel new dev\r")
+        bob.expect("#dev")
+        carol.expect("#dev")
+        alice.type("/open dev\r")
+        alice.type("first post in dev\r")
+        bob.type("/open dev\r")
+        bob.expect("first post in dev")
+        alice.type("/role new mods kick_members manage_messages\r")
+        alice.type("/role give bob mods\r")
+        alice.type("/members\r")
+        alice.expect("[mods]")
+        print("ok  owner creates a channel and a role, and gives the role to a member")
+
+        alice.type("/channel private mods\r")
+        time.sleep(1.5)
+        carol.pump(0.5)
+        carol.clear()
+        carol.type("/help\r")   # forces a redraw of the whole screen
+        carol.pump(1.0)
+        assert "#general" in carol.screen, "carol's screen did not redraw"
+        assert "#dev" not in carol.screen, "a private channel is still visible to a non-member"
+        bob.clear()
+        bob.type("/help\r")
+        bob.pump(1.0)
+        assert "#dev" in bob.screen, "the role holder lost the private channel"
+        carol.type("/channel new nope\r")
+        carol.expect("do not have permission")
+        print("ok  private channel hidden from others; ordinary members cannot manage")
+
+        # Restart alice: unlock the existing vault and see everything again.
         alice.type("/quit\r")
         os.waitpid(alice.pid, 0)
         clients.remove(alice)
+        bob.type("/open alice\r")
         bob.type("sent while alice was away\r")
         alice = Tui(f"{bindir}/corded-tui", ["--vault", f"{tmp}/alice"])
         clients.append(alice)
@@ -186,11 +218,10 @@ def main():
         alice.type("wrong passphrase\r")
         alice.expect("wrong passphrase", timeout=30)
         alice.type("a long passphrase\r")
-        alice.expect("Weekend plans", timeout=30)
-        # The missed message shows in the open chat, or as an unread count if
-        # the other chat happens to be the open one.
+        alice.expect("#general", timeout=30)
+        alice.expect("owner", timeout=30)
         alice.expect_any(["sent while alice was away", "bob (1)"], timeout=30)
-        print("ok  restart: wrong passphrase refused, history restored, missed message delivered")
+        print("ok  restart: wrong passphrase refused, channels and ownership restored, missed message delivered")
         print("PASS")
     finally:
         try:

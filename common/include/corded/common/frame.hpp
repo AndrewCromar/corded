@@ -24,6 +24,7 @@ inline constexpr uint16_t UnknownDevice = 201;
 inline constexpr uint16_t NotAuthenticated = 202;
 inline constexpr uint16_t NameTaken = 203;
 inline constexpr uint16_t RegistrationClosed = 204;
+inline constexpr uint16_t Kicked = 205;
 inline constexpr uint16_t Forbidden = 300;
 inline constexpr uint16_t NotFound = 400;
 inline constexpr uint16_t Internal = 500;

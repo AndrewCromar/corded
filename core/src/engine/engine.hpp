@@ -4,6 +4,7 @@
 #pragma once
 
 #include "corded/common/frame.hpp"
+#include "corded/common/perms.hpp"
 #include "corded/common/tls.hpp"
 #include "vault/vault.hpp"
 
@@ -95,6 +96,23 @@ private:
     void on_auth_ok(const wire::AuthOkT& ok);
     void admin_action(uint64_t req, const std::string& username,
                       std::function<void(const Bytes& user_id)> then);
+    void on_server_info(const wire::ServerInfoT& info);
+    void reconcile_rooms(const wire::RoomListT& list);
+    void community_command(uint64_t req, const std::string& name, const json& cmd);
+    json server_json();
+    json member_json(const MemberRow& m);
+    // Sends a request whose answer is either Ok or an error.
+    template <typename T>
+    void simple_request(uint64_t req, T&& body) {
+        request(std::forward<T>(body), [this, req](wire::FrameT& r) {
+            if (r.body.type == wire::FrameBody_Ok || r.body.type == wire::FrameBody_RoomInfo) {
+                ok(req);
+                return;
+            }
+            auto* e = r.body.AsError();
+            fail(req, "refused", e ? e->message : "the server refused");
+        });
+    }
     void publish_prekeys();
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
@@ -132,6 +150,18 @@ private:
     std::map<uint32_t, Handler> pending_;
     bool sending_ = false;
     bool is_admin_ = false;  // what the server said at sign-in
+    // The community this server is, as last told by the server.
+    struct RoleInfo {
+        uint32_t id = 0;
+        std::string name;
+        int32_t position = 0;
+        uint64_t permissions = 0;
+        bool is_everyone = false;
+    };
+    std::string server_name_;
+    Bytes server_owner_;
+    uint64_t my_permissions_ = 0;
+    std::vector<RoleInfo> roles_;
     std::set<Bytes> bundle_requested_;
 
     // event queue (shared with caller threads)

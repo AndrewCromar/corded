@@ -645,7 +645,8 @@ TEST_CASE("people can be added to a group and can leave it") {
     REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "after carol left"}})["ok"] == true);
     bob.wait_message("after carol left");
     dave.wait_message("after carol left");
-    REQUIRE(carol.cmd({{"cmd", "list_rooms"}})["data"]["rooms"].empty());
+    json carol_rooms = carol.cmd({{"cmd", "list_rooms"}})["data"]["rooms"];
+    for (const auto& r : carol_rooms) REQUIRE(r["room_id"] != room);
     REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "am i still here"}})["ok"] == false);
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     for (const auto& e : carol.seen)
@@ -658,65 +659,174 @@ TEST_CASE("people can be added to a group and can leave it") {
     REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", dm_room}})["ok"] == false);
 }
 
-TEST_CASE("the account named at server start is an administrator") {
+TEST_CASE("a server is one community with an owner and roles and channels") {
     TempDir tmp;
     int port = test_port();
-    Server server(port, (tmp.path / "server").string(), "--admin", "alice");
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
     json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
     Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
-        carol((tmp.path / "carol").string()), dave((tmp.path / "dave").string());
-    auto account = [](const json& e) { return e["event"] == "account"; };
-    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}, {&dave, "dave"}}) {
+        carol((tmp.path / "carol").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    auto room_named = [](const std::string& title) {
+        return [title](const json& e) { return e["event"] == "room_updated" && e["room"]["title"] == title; };
+    };
+    auto room_gone = [](const std::string& id) {
+        return [id](const json& e) { return e["event"] == "room_removed" && e["room_id"] == id; };
+    };
+    auto refused = [](const json& r) { return r["ok"] == false; };
+    auto sees = [&](Client& c, const std::string& title) {
+        json rooms = c.cmd({{"cmd", "list_rooms"}})["data"]["rooms"];  // keep the result alive
+        for (const auto& r : rooms)
+            if (r["title"] == title) return true;
+        return false;
+    };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}}) {
         REQUIRE(client->create(name)["ok"] == true);
         REQUIRE(client->cmd(connect)["ok"] == true);
-        // Only the named account is told it is an administrator.
-        REQUIRE(client->wait("account", account)["is_admin"] == (std::string(name) == "alice"));
-        client->have("live", [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; });
-    }
-    json made = alice.cmd({{"cmd", "create_room"}, {"usernames", {"bob", "carol", "dave"}}});
-    std::string room = made["data"]["room"]["room_id"];
-    for (const auto& m : made["data"]["room"]["members"]) REQUIRE(m["is_admin"] == (m["username"] == "alice"));
-    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "hello all"}})["ok"] == true);
-    for (Client* c : {&bob, &carol, &dave}) c->wait_message("hello all");
-
-    // An ordinary member is refused every administrator action.
-    for (const json& attempt : {json{{"cmd", "kick_member"}, {"room_id", room}, {"username", "carol"}},
-                                json{{"cmd", "ban_user"}, {"username", "carol"}},
-                                json{{"cmd", "set_admin"}, {"username", "bob"}},
-                                json{{"cmd", "set_admin"}, {"username", "carol"}}}) {
-        json r = bob.cmd(attempt);
-        REQUIRE(r["ok"] == false);
-        REQUIRE(r["error"]["message"].get<std::string>().find("administrator") != std::string::npos);
+        client->have("live", live);
     }
 
-    // The administrator removes Carol from the room.
-    REQUIRE(alice.cmd({{"cmd", "kick_member"}, {"room_id", room}, {"username", "carol"}})["ok"] == true);
-    json removed = carol.wait("removal", [&](const json& e) { return e["event"] == "room_removed" && e["room_id"] == room; });
-    REQUIRE(removed["reason"] == "removed");
-    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "carol is gone"}})["ok"] == true);
-    bob.wait_message("carol is gone");
-    dave.wait_message("carol is gone");
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    for (const auto& e : carol.seen)
-        if (e["event"] == "event_received") REQUIRE(e["data"]["content"].value("body", "") != "carol is gone");
+    // Everyone lands in #general without anyone adding them.
+    std::string general;
+    for (Client* c : {&alice, &bob, &carol}) {
+        json room = c->have("#general", room_named("#general"))["room"];
+        REQUIRE(room["kind"] == "channel");
+        general = room["room_id"];
+    }
+    alice.have("three in #general", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 3;
+    });
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "welcome to the server"}})["ok"] == true);
+    bob.wait_message("welcome to the server");
+    carol.wait_message("welcome to the server");
 
-    // The administrator bans Bob: he is disconnected and cannot sign back in.
-    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}})["ok"] == true);
-    json banned = bob.wait("ban", [](const json& e) {
+    // The account named at start-up owns the server.
+    json info = alice.cmd({{"cmd", "server_info"}})["data"];
+    REQUIRE(info["is_owner"] == true);
+    REQUIRE(info["roles"].size() == 1);
+    REQUIRE(info["roles"][0]["name"] == "@everyone");
+    REQUIRE(bob.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == false);
+
+    // Ordinary members cannot run the place.
+    REQUIRE(refused(bob.cmd({{"cmd", "create_channel"}, {"name", "bobs-channel"}})));
+    REQUIRE(refused(bob.cmd({{"cmd", "create_role"}, {"name", "boss"}, {"permissions", {"administrator"}}})));
+    REQUIRE(refused(bob.cmd({{"cmd", "kick"}, {"username", "carol"}})));
+    REQUIRE(refused(bob.cmd({{"cmd", "ban_user"}, {"username", "carol"}})));
+    REQUIRE(refused(bob.cmd({{"cmd", "delete_channel"}, {"room_id", general}})));
+
+    // The owner makes a channel and a role, and gives the role to Bob.
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "staff-room"}})["ok"] == true);
+    std::string staff_room;
+    for (Client* c : {&alice, &bob, &carol})
+        staff_room = c->have("#staff-room", room_named("#staff-room"))["room"]["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "create_role"}, {"name", "staff"}, {"permissions", {"kick_members", "manage_messages"}}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "grant_role"}, {"username", "bob"}, {"role", "staff"}})["ok"] == true);
+    bob.have("role arrives", [](const json& e) {
+        if (e["event"] != "server_info") return false;
+        for (const auto& p : e["my_permissions"]) if (p == "kick_members") return true;
+        return false;
+    });
+    {
+        json members = alice.cmd({{"cmd", "member_list"}})["data"]["members"];
+        REQUIRE(members.size() == 3);
+        for (const auto& m : members) {
+            REQUIRE(m["is_owner"] == (m["username"] == "alice"));
+            REQUIRE(m["roles"].size() == (m["username"] == "bob" ? 1u : 0u));
+        }
+    }
+
+    // A private channel: hidden from @everyone, visible to staff.
+    REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "@everyone"}, {"deny", {"view_channel"}}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "staff"}, {"allow", {"view_channel"}}})["ok"] == true);
+    carol.have("staff-room hidden", room_gone(staff_room));
+    // Bob loses it for a moment between the two changes, then gets it back.
+    auto eventually = [](const std::function<bool()>& check) {
+        for (int i = 0; i < 100; ++i) {
+            if (check()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return false;
+    };
+    REQUIRE(eventually([&] { return sees(bob, "#staff-room"); }));
+    REQUIRE_FALSE(sees(carol, "#staff-room"));
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", staff_room}, {"body", "staff only business"}})["ok"] == true);
+    bob.wait_message("staff only business");
+    REQUIRE(refused(carol.cmd({{"cmd", "send_text"}, {"room_id", staff_room}, {"body", "let me in"}})));
+
+    // A read-only channel: everyone sees it, only the owner can post.
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "announcements"}})["ok"] == true);
+    std::string news;
+    for (Client* c : {&alice, &bob, &carol})
+        news = c->have("#announcements", room_named("#announcements"))["room"]["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", news}, {"role", "@everyone"}, {"deny", {"send_messages"}}})["ok"] == true);
+    json blocked = carol.cmd({{"cmd", "send_text"}, {"room_id", news}, {"body", "can i post here"}});
+    REQUIRE(blocked["ok"] == true);  // queued locally; the server is what refuses it
+    REQUIRE(carol.wait_sent(blocked["data"]["event_id"])["status"] == "failed");
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", news}, {"body", "read this, everyone"}})["ok"] == true);
+    bob.wait_message("read this, everyone");
+    carol.wait_message("read this, everyone");
+
+    // Bob's role lets him remove Carol, but not the owner.
+    REQUIRE(refused(bob.cmd({{"cmd", "kick"}, {"username", "alice"}})));
+    REQUIRE(bob.cmd({{"cmd", "kick"}, {"username", "carol"}})["ok"] == true);
+    carol.wait("kicked", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("removed from this server") != std::string::npos;
+    }, 20000);
+    alice.have("two in #general", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    // She does not walk straight back in, but she may rejoin on purpose.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["members"].size() == 2);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.wait_live();
+    REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["members"].size() == 3);
+
+    // A ban sticks until it is lifted.
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "carol"}})["ok"] == true);
+    auto banned = [](const json& e) {
         return e["event"] == "connection_state" && e["state"] == "disconnected" &&
                e.value("detail", "").find("banned") != std::string::npos;
-    }, 20000);
-    REQUIRE(banned["detail"].get<std::string>().find("sign-in failed") != std::string::npos);
-    // Unbanned, he can connect again.
-    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}, {"banned", false}})["ok"] == true);
-    REQUIRE(bob.cmd(connect)["ok"] == true);
-    bob.wait_live();
+    };
+    carol.wait("banned", banned, 20000);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.wait("still banned", banned, 20000);
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "carol"}, {"banned", false}})["ok"] == true);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.wait_live();
 
-    // Administrators can make others administrators, but cannot be banned.
-    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "dave"}})["ok"] == true);
-    REQUIRE(dave.cmd({{"cmd", "ban_user"}, {"username", "alice"}})["ok"] == false);
-    REQUIRE(dave.cmd({{"cmd", "kick_member"}, {"room_id", room}, {"username", "bob"}})["ok"] == true);
-    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "dave"}, {"admin", false}})["ok"] == true);
-    REQUIRE(dave.cmd({{"cmd", "ban_user"}, {"username", "bob"}})["ok"] == false);
-    REQUIRE(alice.cmd({{"cmd", "set_admin"}, {"username", "alice"}, {"admin", false}})["ok"] == false);
+    // Taking the role away takes the private channel with it.
+    REQUIRE(alice.cmd({{"cmd", "delete_role"}, {"role", "staff"}})["ok"] == true);
+    bob.have("staff-room gone", room_gone(staff_room));
+    REQUIRE(refused(bob.cmd({{"cmd", "kick"}, {"username", "carol"}})));
+
+    // Channels can be renamed and deleted, but the last one stays.
+    REQUIRE(alice.cmd({{"cmd", "rename_channel"}, {"room_id", news}, {"name", "news"}})["ok"] == true);
+    bob.have("#news", room_named("#news"));
+    REQUIRE(alice.cmd({{"cmd", "delete_channel"}, {"room_id", news}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "delete_channel"}, {"room_id", staff_room}})["ok"] == true);
+    REQUIRE(refused(alice.cmd({{"cmd", "delete_channel"}, {"room_id", general}})));
+
+    // None of the channel traffic is readable on the server.
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "staff only business"));
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "welcome to the server"));
+}
+
+TEST_CASE("without a named owner the first person to register owns the server") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string());
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client first((tmp.path / "first").string()), second((tmp.path / "second").string());
+    REQUIRE(first.create("first")["ok"] == true);
+    REQUIRE(first.cmd(connect)["ok"] == true);
+    first.wait_live();
+    REQUIRE(second.create("second")["ok"] == true);
+    REQUIRE(second.cmd(connect)["ok"] == true);
+    second.wait_live();
+    REQUIRE(first.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == true);
+    REQUIRE(second.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == false);
+    REQUIRE(first.cmd({{"cmd", "create_channel"}, {"name", "off-topic"}})["ok"] == true);
+    REQUIRE(second.cmd({{"cmd", "create_channel"}, {"name", "nope"}})["ok"] == false);
 }

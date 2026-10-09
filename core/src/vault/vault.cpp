@@ -227,6 +227,14 @@ CREATE TABLE IF NOT EXISTS outbox (
     } catch (const db::Error&) {
         db_.exec("ALTER TABLE members ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
     }
+    try {
+        db_.exec("SELECT kind FROM rooms LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE rooms ADD COLUMN kind INTEGER NOT NULL DEFAULT 2");
+        db_.exec("ALTER TABLE rooms ADD COLUMN channel_name TEXT NOT NULL DEFAULT ''");
+        db_.exec("ALTER TABLE members ADD COLUMN is_owner INTEGER NOT NULL DEFAULT 0");
+        db_.exec("ALTER TABLE members ADD COLUMN roles TEXT NOT NULL DEFAULT ''");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -334,33 +342,53 @@ void Vault::set_verified(ByteView user_id, bool verified) {
     }
 }
 
-void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members) {
+void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members, int kind,
+                        const std::string& channel_name) {
     auto st = db_.prepare("INSERT OR IGNORE INTO rooms (room_id) VALUES (?)");
     st.bind(1, room_id).exec();
+    if (kind >= 0) {
+        auto up = db_.prepare("UPDATE rooms SET kind = ?, channel_name = ? WHERE room_id = ?");
+        up.bind(1, kind).bind(2, channel_name).bind(3, room_id).exec();
+    }
     if (members.empty()) return;
     auto del = db_.prepare("DELETE FROM members WHERE room_id = ?");
     del.bind(1, room_id).exec();
     for (const auto& m : members) {
-        auto ins = db_.prepare("INSERT OR REPLACE INTO members (room_id, user_id, username, is_admin) "
-                               "VALUES (?,?,?,?)");
-        ins.bind(1, room_id).bind(2, m.user_id).bind(3, m.username).bind(4, m.is_admin ? 1 : 0).exec();
+        std::string roles;
+        for (uint32_t r : m.roles) roles += (roles.empty() ? "" : ",") + std::to_string(r);
+        auto ins = db_.prepare("INSERT OR REPLACE INTO members (room_id, user_id, username, is_admin, "
+                               "is_owner, roles) VALUES (?,?,?,?,?,?)");
+        ins.bind(1, room_id).bind(2, m.user_id).bind(3, m.username).bind(4, m.is_admin ? 1 : 0)
+            .bind(5, m.is_owner ? 1 : 0).bind(6, roles).exec();
     }
 }
 
 std::optional<RoomRow> Vault::room(ByteView room_id) {
     RoomRow r;
     {
-        auto st = db_.prepare("SELECT acked_seq, name FROM rooms WHERE room_id = ?");
+        auto st = db_.prepare("SELECT acked_seq, name, kind, channel_name FROM rooms WHERE room_id = ?");
         st.bind(1, room_id);
         if (!st.step()) return std::nullopt;
         r.room_id = to_bytes(room_id);
         r.acked_seq = st.u64(0);
         r.name = st.text(1);
+        r.kind = static_cast<int>(st.i64(2));
+        r.channel_name = st.text(3);
     }
-    auto st = db_.prepare("SELECT user_id, username, is_admin FROM members WHERE room_id = ? "
-                          "ORDER BY username");
+    auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles FROM members "
+                          "WHERE room_id = ? ORDER BY username");
     st.bind(1, room_id);
-    while (st.step()) r.members.push_back({st.blob(0), st.text(1), st.i64(2) != 0});
+    while (st.step()) {
+        MemberRow m{st.blob(0), st.text(1), st.i64(2) != 0, st.i64(3) != 0, {}};
+        std::string roles = st.text(4);
+        for (size_t pos = 0; pos < roles.size();) {
+            size_t end = roles.find(',', pos);
+            if (end == std::string::npos) end = roles.size();
+            m.roles.push_back(static_cast<uint32_t>(std::stoul(roles.substr(pos, end - pos))));
+            pos = end + 1;
+        }
+        r.members.push_back(std::move(m));
+    }
     return r;
 }
 

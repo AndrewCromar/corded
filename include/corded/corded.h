@@ -22,10 +22,24 @@
  *   {"cmd":"set_room_name","room_id":"...","name":"new name"}
  *   {"cmd":"add_member","room_id":"...","username":"dave"}     (groups only)
  *   {"cmd":"leave_room","room_id":"..."}                        (groups only)
- *  Server administrators only (the server refuses anyone else):
- *   {"cmd":"kick_member","room_id":"...","username":"dave"}
+ *  Running the community (the server refuses anyone without the permission):
+ *   {"cmd":"server_info"}
+ *   {"cmd":"member_list"}
+ *   {"cmd":"create_channel","name":"announcements"}
+ *   {"cmd":"rename_channel","room_id":"...","name":"news"}
+ *   {"cmd":"delete_channel","room_id":"..."}
+ *   {"cmd":"set_channel_access","room_id":"...","role":"@everyone",
+ *    "allow":[],"deny":["view_channel"]}
+ *   {"cmd":"create_role","name":"moderator","permissions":["kick_members","manage_messages"]}
+ *   {"cmd":"edit_role","role":"moderator","permissions":["kick_members"]}
+ *   {"cmd":"delete_role","role":"moderator"}
+ *   {"cmd":"grant_role","username":"dave","role":"moderator","grant":true}
+ *   {"cmd":"kick","username":"dave"}
  *   {"cmd":"ban_user","username":"dave","banned":true}
- *   {"cmd":"set_admin","username":"dave","admin":true}
+ *  Permission names: view_channel, send_messages, add_reactions, attach_files,
+ *  mention_everyone, manage_messages, manage_channels, manage_roles,
+ *  manage_nicknames, kick_members, ban_members, create_invite, manage_server,
+ *  administrator.
  *   {"cmd":"safety_numbers","room_id":"..."}
  *   {"cmd":"set_verified","user_id":"...","verified":true}
  *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>",
@@ -38,7 +52,8 @@
  *   {"cmd":"fetch_timeline","room_id":"...","limit":200}
  *
  * Events (JSON objects, "event" names the event):
- *   vault_state, connection_state, account, server_pinned, room_updated, room_removed,
+ *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
+ *   room_removed,
  *   event_received,
  *   event_updated, event_send_status, command_result, warning
  */

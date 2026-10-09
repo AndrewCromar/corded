@@ -19,8 +19,10 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 - **Frontends ("distros")** are separate applications (terminal, desktop, mobile, bots) that
   load the core as a shared library. They render state and send user actions. They never
   touch key material or sockets.
-- **The server** is an untrusted relay. It routes and stores opaque ciphertext, enforces
-  membership, and is meant to be small enough to run on a Raspberry Pi or a $3 VPS.
+- **The server** is one community, the way a Discord server is: it has channels, an owner,
+  and roles with permissions. If you want two communities, you run two servers. It routes
+  and stores ciphertext it cannot read, and is meant to be small enough to run on a
+  Raspberry Pi or a $3 VPS.
 
 ## Status
 
@@ -44,13 +46,13 @@ cd corded
 
 Then open three terminals in the `corded` directory.
 
-**Terminal 1, the server:**
+**Terminal 1, the server.** Name the community and say who owns it:
 
 ```sh
-./build/dev/bin/cordedd --port 7443 --data ./server-data
+./build/dev/bin/cordedd --port 7443 --data ./server-data --name "My Server" --owner alice
 ```
 
-**Terminal 2, Alice:**
+**Terminal 2, Alice (the owner):**
 
 ```sh
 ./build/dev/bin/corded-tui --vault ./alice-vault --server localhost:7443 --name alice
@@ -68,44 +70,51 @@ refuses to connect if it ever changes. To be strict from the first connection, p
 to the client with `--fingerprint <value>`.
 
 Each client asks you to choose a passphrase the first time (at least 8 characters, typed
-twice). Once both say `live`, type this in Alice's window:
+twice). Once both say `live` they are both in `#general`, so just start typing.
 
-```
-/chat bob
-```
-
-and start typing. Things to try:
+Talking:
 
 | Type | What it does |
 |---|---|
-| any text | Sends a message to the open chat |
-| `/chat <username>` | Starts or opens a chat with someone on the same server |
-| `/edit <text>` | Changes your last message |
-| `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
-| `/group bob carol : Weekend plans` | Starts a group chat; the part after the colon is an optional name |
-| `/name <text>` | Renames the open chat |
-| `/add <username>` | Adds someone to the open group |
-| `/leave` | Leaves the open group |
-| `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
-| `/verified <username>` | Marks someone as checked after comparing numbers |
+| any text | Sends a message to the open channel or chat |
+| `/open <name>` | Opens a channel or chat whose name contains the text |
+| `/chat <username>` | Starts or opens a direct message with another member |
 | `/reply <text>` | Replies to the last message you received |
 | `/thread <text>` | Replies in a thread under the last message you received |
 | `/react <emoji or text>` | Reacts to the last message you received |
+| `/edit <text>` | Changes your last message |
+| `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
+| `/group bob carol : Weekend plans` | Starts a private group chat; the part after the colon is an optional name |
+| `/add <username>`, `/leave`, `/name <text>` | Add someone to the open group, leave it, or rename it |
+| `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
+| `/verified <username>` | Marks someone as checked after comparing numbers |
+| `/members`, `/roles` | Lists the server's members and roles |
 | `/help` | Shows the command list |
 | `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
 
-To make yourself the server's administrator, name your account when you start it:
+Running the server. The owner can do all of these; anyone else needs a role that grants
+the matching permission:
 
-```sh
-./build/dev/bin/cordedd --port 7443 --data ./server-data --admin alice
-```
+| Type | What it does |
+|---|---|
+| `/channel new <name>` | Creates a channel |
+| `/channel rename <name>`, `/channel delete` | Renames or deletes the open channel |
+| `/channel private <role>` | Hides the open channel from everyone except that role |
+| `/channel readonly` | Only people with extra permissions can post in the open channel |
+| `/channel open` | Removes those restrictions |
+| `/role new <name> [permission ...]` | Creates a role, for example `/role new mods kick_members manage_messages` |
+| `/role give <user> <role>`, `/role take <user> <role>` | Gives or takes away a role |
+| `/role delete <name>` | Deletes a role |
+| `/kick <user>` | Removes someone from the server; they can rejoin |
+| `/ban <user>`, `/unban <user>` | Blocks or restores someone's access |
 
-Whoever registers as `alice` (or already has) is then an administrator. In the client,
-administrators get `/kick <user>` (remove someone from the open group), `/ban <user>` and
-`/unban <user>` (block or restore someone's access to the server), and `/admin <user>`
-and `/unadmin <user>` (give or take away administrator status). `--admin` can be given
-several times. An administrator still cannot read chats they are not in.
+Permissions a role can carry: `view_channel`, `send_messages`, `add_reactions`,
+`attach_files`, `mention_everyone`, `manage_messages`, `manage_channels`, `manage_roles`,
+`manage_nicknames`, `kick_members`, `ban_members`, `create_invite`, `manage_server`,
+`administrator`. Nobody can give out a permission they do not hold, or act on someone
+ranked at or above themselves, and nobody can act on the owner. If you start the server
+without `--owner`, the first person to register owns it.
 
 By default anyone who can reach the server can create an account. To restrict that,
 start it with `--invite-code <code>` (at least 8 characters) and give the code to the
@@ -128,9 +137,14 @@ It does:
 
 - Real end-to-end encryption: X3DH key agreement and the Double Ratchet, built on
   libsodium. The server stores only ciphertext, and a test checks that.
-- Group chats. Each message is encrypted separately for every member, and room names are
-  encrypted too, so the server never learns them. People can be added later and can
-  leave; someone added later cannot read what was said before they joined.
+- A community per server: channels that every member sees, an owner, and roles with
+  permissions. Channels can be made private to a role or read-only. Members can be kicked
+  and banned by people whose role allows it.
+- Direct messages and private group chats alongside the channels. Group names are
+  encrypted, so the server never learns them.
+- Messages in channels are end-to-end encrypted too. That has a consequence Discord users
+  will notice: **someone who joins later cannot read what was said before they joined**,
+  because it was never encrypted to them.
 - An encrypted local vault. Keys and message history are stored in an encrypted SQLite
   database unlocked by your passphrase (Argon2id).
 - Store-and-forward. Messages sent while the other person is offline arrive when they
@@ -139,8 +153,6 @@ It does:
   pinned by the client, and sign-in bound to that TLS session.
 - Threads: replies that hang under the message that started them.
 - Editing and deleting your own messages.
-- A server administrator, named by whoever starts the server, who can remove people from
-  groups, ban and unban accounts, and make other administrators.
 - Server protections: invite-only or closed registration, a per-connection rate limit
   that slows down floods, and a cap on connections per address.
 - Safety numbers, so two people can check that nobody is sitting between them.
@@ -150,14 +162,19 @@ It does:
 
 It does not, yet:
 
-- Room-level roles. Anyone in a group can add people and rename it; only a server
-  administrator can remove someone.
-- The rest of the administrator powers in the plan: deleting rooms, and managing invites
-  and registration from the client instead of the server's command line.
+- Belong to several servers from one client. One vault talks to one server for now.
+- Invite links, and managing invites and registration from the client; those are still
+  server command-line flags.
+- Let a moderator delete someone else's message, categories, nicknames, role colours,
+  transferring ownership.
+- Scale to large channels. Each message is encrypted once per member, which is fine for
+  dozens of people and too slow for hundreds; sender keys are planned for that.
+- Hide channel names, role names or the member list from the server. Only message
+  content is hidden.
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
-- More than one device per user, or more than one server per vault.
+- More than one device per user.
 - Run anywhere but Linux.
 
 ## Where to look

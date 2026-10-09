@@ -4,6 +4,9 @@
 
 #include "corded/common/db.hpp"
 #include "corded/common/frame.hpp"
+#include "corded/common/perms.hpp"
+
+#include <set>
 
 #include <chrono>
 #include <optional>
@@ -18,7 +21,9 @@ inline uint64_t now_ms() {
 }
 
 // users.access_level
-inline constexpr int kBanned = -1, kUser = 0, kAdmin = 1;
+inline constexpr int kKicked = -2, kBanned = -1, kUser = 0;
+// rooms.kind
+inline constexpr int kChannel = 0, kDirect = 1, kGroup = 2;
 
 struct DeviceRow {
     Bytes device_id, user_id, dh_key, cert;
@@ -76,6 +81,22 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE users ADD COLUMN access_level INTEGER NOT NULL DEFAULT 0");
         }
+        db_.exec(R"sql(
+CREATE TABLE IF NOT EXISTS server_info (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS roles (
+    role_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, position INTEGER NOT NULL,
+    permissions INTEGER NOT NULL, is_everyone INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS member_roles (
+    user_id BLOB NOT NULL REFERENCES users(user_id), role_id INTEGER NOT NULL REFERENCES roles(role_id),
+    PRIMARY KEY (user_id, role_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS channel_overrides (
+    room_id BLOB NOT NULL REFERENCES rooms(room_id), role_id INTEGER NOT NULL REFERENCES roles(role_id),
+    allow INTEGER NOT NULL, deny INTEGER NOT NULL,
+    PRIMARY KEY (room_id, role_id)
+) WITHOUT ROWID;
+)sql");
         // Added after the first prototype: two-person chats are marked, so a
         // group that shrinks to two people is not mistaken for one.
         try {
@@ -85,6 +106,23 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
             db_.exec("UPDATE rooms SET is_direct = 1 WHERE "
                      "(SELECT COUNT(*) FROM memberships m WHERE m.room_id = rooms.room_id) = 2");
         }
+        try {
+            db_.exec("SELECT kind FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN kind INTEGER NOT NULL DEFAULT 2");
+            db_.exec("ALTER TABLE rooms ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+            db_.exec("UPDATE rooms SET kind = 1 WHERE is_direct = 1");
+        }
+        // A community always has the @everyone role and at least one channel.
+        {
+            auto st = db_.prepare("SELECT 1 FROM roles WHERE is_everyone = 1");
+            if (!st.step()) {
+                auto ins = db_.prepare("INSERT INTO roles (name, position, permissions, is_everyone) "
+                                       "VALUES ('@everyone', 0, ?, 1)");
+                ins.bind(1, perm::Default).exec();
+            }
+        }
+        if (channels().empty()) create_channel("general");
     }
 
     std::optional<DeviceRow> find_device(ByteView device_id) {
@@ -200,10 +238,17 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         st.bind(1, level).bind(2, user_id).exec();
     }
 
-    // Used at start-up to promote the administrators the operator named.
-    void promote_by_username(std::string_view username) {
-        auto st = db_.prepare("UPDATE users SET access_level = 1 WHERE username = ?");
-        st.bind(1, username).exec();
+    // Removes someone from the community. They may join again, subject to the
+    // registration policy, and start with no roles.
+    void kick(ByteView user_id) {
+        db::Transaction tx(db_);
+        set_access_level(user_id, kKicked);
+        auto roles_del = db_.prepare("DELETE FROM member_roles WHERE user_id = ?");
+        roles_del.bind(1, user_id).exec();
+        auto groups = db_.prepare("DELETE FROM memberships WHERE user_id = ? AND room_id IN "
+                                  "(SELECT room_id FROM rooms WHERE kind = 2)");
+        groups.bind(1, user_id).exec();
+        tx.commit();
     }
 
     bool user_exists(ByteView user_id) {
@@ -212,7 +257,193 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         return st.step();
     }
 
+    // ------------------------------------------------------------ community
+
+    std::optional<Bytes> info(const std::string& key) {
+        auto st = db_.prepare("SELECT value FROM server_info WHERE key = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return st.blob(0);
+    }
+    void set_info(const std::string& key, ByteView value) {
+        auto st = db_.prepare("INSERT OR REPLACE INTO server_info (key, value) VALUES (?, ?)");
+        st.bind(1, key).bind(2, value).exec();
+    }
+    Bytes owner() { return info("owner").value_or(Bytes{}); }
+    bool is_owner(ByteView user_id) {
+        Bytes o = owner();
+        return !o.empty() && o.size() == user_id.size() && std::equal(o.begin(), o.end(), user_id.begin());
+    }
+
+    std::vector<wire::RoleT> roles() {
+        std::vector<wire::RoleT> out;
+        auto st = db_.prepare("SELECT role_id, name, position, permissions, is_everyone FROM roles "
+                              "ORDER BY position DESC, role_id");
+        while (st.step()) {
+            wire::RoleT r;
+            r.role_id = static_cast<uint32_t>(st.i64(0));
+            r.name = st.text(1);
+            r.position = static_cast<int32_t>(st.i64(2));
+            r.permissions = st.u64(3);
+            r.is_everyone = st.i64(4) != 0;
+            out.push_back(std::move(r));
+        }
+        return out;
+    }
+    std::optional<wire::RoleT> role(uint32_t role_id) {
+        for (auto& r : roles())
+            if (r.role_id == role_id) return r;
+        return std::nullopt;
+    }
+    uint32_t create_role(const std::string& name, uint64_t permissions) {
+        auto st = db_.prepare("INSERT INTO roles (name, position, permissions) VALUES "
+                              "(?, (SELECT COALESCE(MAX(position), 0) + 1 FROM roles), ?)");
+        st.bind(1, name).bind(2, permissions).exec();
+        return static_cast<uint32_t>(db_.last_insert_rowid());
+    }
+    void update_role(uint32_t role_id, const std::string& name, uint64_t permissions) {
+        auto st = db_.prepare("UPDATE roles SET name = ?, permissions = ? WHERE role_id = ?");
+        st.bind(1, name).bind(2, permissions).bind(3, role_id).exec();
+    }
+    void delete_role(uint32_t role_id) {
+        db::Transaction tx(db_);
+        for (const char* sql : {"DELETE FROM member_roles WHERE role_id = ?",
+                                "DELETE FROM channel_overrides WHERE role_id = ?",
+                                "DELETE FROM roles WHERE role_id = ? AND is_everyone = 0"}) {
+            auto st = db_.prepare(sql);
+            st.bind(1, role_id).exec();
+        }
+        tx.commit();
+    }
+    void assign_role(ByteView user_id, uint32_t role_id, bool assign) {
+        auto st = db_.prepare(assign ? "INSERT OR IGNORE INTO member_roles (user_id, role_id) VALUES (?, ?)"
+                                     : "DELETE FROM member_roles WHERE user_id = ? AND role_id = ?");
+        st.bind(1, user_id).bind(2, role_id).exec();
+    }
+    // The roles a member holds, always including @everyone.
+    std::vector<wire::RoleT> roles_of(ByteView user_id) {
+        std::vector<wire::RoleT> out;
+        auto st = db_.prepare("SELECT role_id, name, position, permissions, is_everyone FROM roles "
+                              "WHERE is_everyone = 1 OR role_id IN "
+                              "(SELECT role_id FROM member_roles WHERE user_id = ?)");
+        st.bind(1, user_id);
+        while (st.step()) {
+            wire::RoleT r;
+            r.role_id = static_cast<uint32_t>(st.i64(0));
+            r.name = st.text(1);
+            r.position = static_cast<int32_t>(st.i64(2));
+            r.permissions = st.u64(3);
+            r.is_everyone = st.i64(4) != 0;
+            out.push_back(std::move(r));
+        }
+        return out;
+    }
+    // Rank used for "can only act on people below you". The owner outranks all.
+    int64_t rank(ByteView user_id) {
+        if (is_owner(user_id)) return INT64_MAX;
+        int64_t top = 0;
+        for (const auto& r : roles_of(user_id)) top = std::max<int64_t>(top, r.position);
+        return top;
+    }
+    // Server-wide permissions.
+    uint64_t permissions(ByteView user_id) {
+        if (is_owner(user_id)) return perm::All;
+        uint64_t bits = 0;
+        for (const auto& r : roles_of(user_id)) bits |= r.permissions;
+        return (bits & perm::Administrator) ? perm::All : bits;
+    }
+    // Permissions inside one channel, after that channel's exceptions.
+    uint64_t permissions(ByteView user_id, ByteView room_id) {
+        uint64_t bits = permissions(user_id);
+        if (bits & perm::Administrator) return perm::All;
+        uint64_t allow = 0, deny = 0;
+        for (const auto& r : roles_of(user_id)) {
+            auto st = db_.prepare("SELECT allow, deny FROM channel_overrides WHERE room_id = ? AND role_id = ?");
+            st.bind(1, room_id).bind(2, r.role_id);
+            if (!st.step()) continue;
+            if (r.is_everyone) {
+                bits = (bits & ~st.u64(1)) | st.u64(0);
+            } else {
+                allow |= st.u64(0);
+                deny |= st.u64(1);
+            }
+        }
+        return (bits & ~deny) | allow;
+    }
+    void set_override(ByteView room_id, uint32_t role_id, uint64_t allow, uint64_t deny) {
+        if (allow == 0 && deny == 0) {
+            auto st = db_.prepare("DELETE FROM channel_overrides WHERE room_id = ? AND role_id = ?");
+            st.bind(1, room_id).bind(2, role_id).exec();
+            return;
+        }
+        auto st = db_.prepare("INSERT OR REPLACE INTO channel_overrides (room_id, role_id, allow, deny) "
+                              "VALUES (?,?,?,?)");
+        st.bind(1, room_id).bind(2, role_id).bind(3, allow).bind(4, deny).exec();
+    }
+
+    // Everyone who belongs to the community (not banned, not kicked).
+    std::vector<Bytes> member_ids() {
+        std::vector<Bytes> out;
+        auto st = db_.prepare("SELECT user_id FROM users WHERE access_level >= 0 ORDER BY username");
+        while (st.step()) out.push_back(st.blob(0));
+        return out;
+    }
+    std::unique_ptr<wire::MemberT> member(ByteView user_id) {
+        auto st = db_.prepare("SELECT username FROM users WHERE user_id = ?");
+        st.bind(1, user_id);
+        if (!st.step()) return nullptr;
+        auto m = std::make_unique<wire::MemberT>();
+        m->user_id = to_bytes(user_id);
+        m->username = st.text(0);
+        m->is_owner = is_owner(user_id);
+        m->is_admin = (permissions(user_id) & perm::Administrator) != 0;
+        for (const auto& r : roles_of(user_id))
+            if (!r.is_everyone) m->roles.push_back(r.role_id);
+        return m;
+    }
+
+    int kind(ByteView room_id) {
+        auto st = db_.prepare("SELECT kind FROM rooms WHERE room_id = ?");
+        st.bind(1, room_id);
+        return st.step() ? static_cast<int>(st.i64(0)) : -1;
+    }
+    std::vector<Bytes> channels() {
+        std::vector<Bytes> out;
+        auto st = db_.prepare("SELECT room_id FROM rooms WHERE kind = 0 ORDER BY created_at, name");
+        while (st.step()) out.push_back(st.blob(0));
+        return out;
+    }
+    Bytes create_channel(const std::string& name) {
+        Bytes room_id = random_bytes(16);
+        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct, kind, name) "
+                              "VALUES (?, ?, 0, 0, ?)");
+        st.bind(1, room_id).bind(2, now_ms()).bind(3, name).exec();
+        return room_id;
+    }
+    void rename_channel(ByteView room_id, const std::string& name) {
+        auto st = db_.prepare("UPDATE rooms SET name = ? WHERE room_id = ? AND kind = 0");
+        st.bind(1, name).bind(2, room_id).exec();
+    }
+    void delete_channel(ByteView room_id) {
+        db::Transaction tx(db_);
+        for (const char* sql : {"DELETE FROM room_events WHERE room_id = ?",
+                                "DELETE FROM channel_overrides WHERE room_id = ?",
+                                "DELETE FROM rooms WHERE room_id = ? AND kind = 0"}) {
+            auto st = db_.prepare(sql);
+            st.bind(1, room_id).exec();
+        }
+        tx.commit();
+    }
+    bool channel_name_taken(const std::string& name) {
+        auto st = db_.prepare("SELECT 1 FROM rooms WHERE kind = 0 AND name = ?");
+        st.bind(1, name);
+        return st.step();
+    }
+
+    // A channel's members are whoever can view it; other rooms list theirs.
     bool is_member(ByteView room_id, ByteView user_id) {
+        if (kind(room_id) == kChannel)
+            return access_level(user_id) >= 0 && (permissions(user_id, room_id) & perm::ViewChannel);
         auto st = db_.prepare("SELECT 1 FROM memberships WHERE room_id = ? AND user_id = ?");
         st.bind(1, room_id).bind(2, user_id);
         return st.step();
@@ -222,29 +453,38 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
         wire::RoomInfoT info;
         info.room_id = to_bytes(room_id);
         {
-            auto st = db_.prepare("SELECT created_at, is_direct FROM rooms WHERE room_id = ?");
+            auto st = db_.prepare("SELECT created_at, kind, name FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
-                info.is_direct = st.i64(1) != 0;
+                info.kind = static_cast<uint8_t>(st.i64(1));
+                info.is_direct = info.kind == kDirect;
+                info.name = st.text(2);
             }
         }
-        auto st = db_.prepare("SELECT u.user_id, u.username, u.access_level FROM memberships m "
-                              "JOIN users u ON u.user_id = m.user_id WHERE m.room_id = ? "
-                              "ORDER BY u.username");
-        st.bind(1, room_id);
-        while (st.step()) {
-            auto m = std::make_unique<wire::MemberT>();
-            m->user_id = st.blob(0);
-            m->username = st.text(1);
-            m->is_admin = st.i64(2) == kAdmin;
-            info.members.push_back(std::move(m));
+        if (info.kind == kChannel) {
+            for (const auto& user : member_ids())
+                if (permissions(user, room_id) & perm::ViewChannel)
+                    if (auto m = member(user)) info.members.push_back(std::move(m));
+            return info;
         }
+        std::vector<Bytes> ids;
+        {
+            auto st = db_.prepare("SELECT u.user_id FROM memberships m JOIN users u ON u.user_id = m.user_id "
+                                  "WHERE m.room_id = ? ORDER BY u.username");
+            st.bind(1, room_id);
+            while (st.step()) ids.push_back(st.blob(0));
+        }
+        for (const auto& id : ids)
+            if (auto m = member(id)) info.members.push_back(std::move(m));
         return info;
     }
 
+    // Channels the user can view, then their direct messages and groups.
     std::vector<Bytes> rooms_of_user(ByteView user_id) {
         std::vector<Bytes> out;
+        for (const auto& ch : channels())
+            if (permissions(user_id, ch) & perm::ViewChannel) out.push_back(ch);
         auto st = db_.prepare("SELECT room_id FROM memberships WHERE user_id = ?");
         st.bind(1, user_id);
         while (st.step()) out.push_back(st.blob(0));
@@ -265,8 +505,9 @@ CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
     Bytes create_room(const std::vector<Bytes>& members) {
         Bytes room_id = random_bytes(16);
         db::Transaction tx(db_);
-        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct) VALUES (?, ?, ?)");
-        st.bind(1, room_id).bind(2, now_ms()).bind(3, members.size() == 2 ? 1 : 0).exec();
+        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct, kind) VALUES (?, ?, ?, ?)");
+        st.bind(1, room_id).bind(2, now_ms()).bind(3, members.size() == 2 ? 1 : 0)
+            .bind(4, members.size() == 2 ? kDirect : kGroup).exec();
         for (const auto& m : members) {
             auto ins = db_.prepare("INSERT OR IGNORE INTO memberships (room_id, user_id) VALUES (?,?)");
             ins.bind(1, room_id).bind(2, m).exec();

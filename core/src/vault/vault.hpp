@@ -26,12 +26,16 @@ public:
 struct MemberRow {
     Bytes user_id;
     std::string username;
-    bool is_admin = false;  // a server administrator
+    bool is_admin = false;  // the owner, or holds the administrator permission
+    bool is_owner = false;
+    std::vector<uint32_t> roles;  // role ids, not counting @everyone
 };
 
 struct RoomRow {
     Bytes room_id;
     std::string name;  // empty until someone names the room
+    int kind = 2;      // 0 channel of the server, 1 direct message, 2 group
+    std::string channel_name;  // for channels, the name the server gives
     uint64_t acked_seq = 0;
     std::vector<MemberRow> members;
 };
@@ -89,7 +93,9 @@ public:
     bool is_verified(ByteView user_id);
     void set_verified(ByteView user_id, bool verified);
 
-    void upsert_room(ByteView room_id, const std::vector<MemberRow>& members);
+    // kind < 0 leaves the stored kind and channel name alone.
+    void upsert_room(ByteView room_id, const std::vector<MemberRow>& members, int kind = -1,
+                     const std::string& channel_name = "");
     std::vector<RoomRow> rooms();
     std::optional<RoomRow> room(ByteView room_id);
     void advance_cursor(ByteView room_id, uint64_t seq);
