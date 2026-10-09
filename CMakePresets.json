@@ -9,7 +9,6 @@
       "toolchainFile": "${sourceDir}/external/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed"
       }
     },

@@ -456,7 +456,7 @@ private:
             auto space = line.find(' ');
             std::string cmd = line.substr(0, space);
             std::string arg = space == std::string::npos ? "" : line.substr(space + 1);
-            if (cmd == "/quit" || cmd == "/q") {
+            if (cmd == "/quit" || cmd == "/exit" || cmd == "/q") {
                 screen_.Exit();
             } else if (cmd == "/chat" && !arg.empty()) {
                 chat_request_ = command({{"cmd", "start_chat"}, {"username", arg}});
@@ -771,7 +771,7 @@ private:
                               text("/edit <text>       change your last message        /delete  remove it"),
                               text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
-                              text("/quit              leave        Tab: switch between chats and typing"),
+                              text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),

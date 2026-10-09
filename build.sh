@@ -4,6 +4,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# On ARM (a Raspberry Pi, for example) vcpkg has no prebuilt helper tools and
+# must use the system's cmake and ninja.
+case "$(uname -m)" in
+  aarch64|arm64|armv7l) export VCPKG_FORCE_SYSTEM_BINARIES=1 ;;
+esac
+
 git submodule update --init --depth 1 external/vcpkg
 if [ ! -x external/vcpkg/vcpkg ]; then
   ./external/vcpkg/bootstrap-vcpkg.sh -disableMetrics

@@ -94,7 +94,7 @@ Talking:
 | `/share-history on` or `off` | Whether your client shares earlier messages with newcomers who ask |
 | `/members`, `/roles` | Lists the server's members and roles |
 | `/help` | Shows the command list |
-| `/quit` | Leaves |
+| `/exit` or `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
 
 Running the server. The owner can do all of these; anyone else needs a role that grants
