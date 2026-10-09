@@ -35,6 +35,7 @@ struct RoomRow {
     Bytes room_id;
     std::string name;  // empty until someone names the room
     int kind = 2;      // 0 channel of the server, 1 direct message, 2 group
+    uint64_t ttl_s = 0;  // if set, new messages here disappear after this many seconds
     std::string channel_name;  // for channels, the name the server gives
     uint64_t acked_seq = 0;
     std::vector<MemberRow> members;
@@ -50,6 +51,7 @@ struct EventRow {
     std::string state_key;
     std::string content;  // JSON
     std::string edited_content;  // JSON of the latest accepted edit, if any
+    uint64_t expires_at = 0;  // ms since epoch; 0 = never. The event is erased then
     std::string fallback_text;
     std::string status;  // ok, pending, failed, undecryptable, redacted
     std::string rel_kind;
@@ -101,6 +103,9 @@ public:
     void advance_cursor(ByteView room_id, uint64_t seq);
     void set_room_name(ByteView room_id, const std::string& name);
     void delete_room(ByteView room_id);  // the room, its members and its history
+    void set_room_ttl(ByteView room_id, uint64_t seconds);
+    // Erases every event whose time has come and returns (room id, event id) of each.
+    std::vector<std::pair<Bytes, Bytes>> expire_events(uint64_t now_ms);
 
     bool insert_event(const EventRow& e);  // false if the event id is already stored
     bool has_event(ByteView room_id, ByteView event_id);

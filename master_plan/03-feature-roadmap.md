@@ -236,10 +236,12 @@ test:
 | Deletions | `m.redaction` with `redact` relation, original sender only | none |
 | Threads | `thread` relation, with a reply count on the first message | none |
 | Room names | `m.room.name` state event | none |
+| Moderator deletion | `m.redaction` honoured from members whose role grants `manage_messages` | none |
+| Disappearing messages | `expires_at` on an event; `m.room.retention` state event for a whole chat | an expiry time on the send frame, so the server can drop its copy (as this document planned) |
 | Custom event types | passed through to frontends marked as unknown | none |
 
 Not yet built: mentions, attachments, link previews, typing indicators, read receipts,
-presence, pins, polls, disappearing messages, multi-device.
+presence, pins, polls, multi-device.
 
 ## 5. Design obligations this places on the core stages
 

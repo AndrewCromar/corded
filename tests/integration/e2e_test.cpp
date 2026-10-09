@@ -971,3 +971,86 @@ TEST_CASE("invite codes run out and can be revoked on an invite-only server") {
     REQUIRE(first.unlock()["ok"] == true);
     first.wait_live();
 }
+
+TEST_CASE("disappearing messages are erased everywhere when their time comes") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; });
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    auto in_timeline = [&](Client& c, const std::string& body) {
+        json tl = c.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 500}});
+        for (const auto& e : tl["data"]["events"])
+            if (e["content"].value("body", "") == body) return true;
+        return false;
+    };
+    auto expired = [](const std::string& id) {
+        return [id](const json& e) { return e["event"] == "event_expired" && e["event_id"] == id; };
+    };
+
+    // One message with its own timer.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "this stays"}})["ok"] == true);
+    json once = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "this will vanish"}, {"expires_in", 2}});
+    std::string once_id = once["data"]["event_id"];
+    json got = bob.wait_message("this will vanish");
+    REQUIRE(got["data"]["expires_at"].get<uint64_t>() > 0);
+    REQUIRE(in_timeline(bob, "this will vanish"));
+    alice.wait("expiry", expired(once_id), 8000);
+    bob.have("expiry", expired(once_id));
+    for (Client* c : {&alice, &bob}) {
+        REQUIRE_FALSE(in_timeline(*c, "this will vanish"));
+        REQUIRE(in_timeline(*c, "this stays"));
+    }
+
+    // A whole channel set to disappear. Bob has no say in a channel...
+    REQUIRE(bob.cmd({{"cmd", "set_disappearing"}, {"room_id", general}, {"seconds", 1}})["ok"] == true);
+    // ...but the owner does, and from then on everyone's messages there expire.
+    REQUIRE(alice.cmd({{"cmd", "set_disappearing"}, {"room_id", general}, {"seconds", 2}})["ok"] == true);
+    auto ttl_is = [&](uint64_t seconds) {
+        return [&, seconds](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["room_id"] == general &&
+                   e["room"]["disappear_after"] == seconds;
+        };
+    };
+    bob.wait("channel timer", ttl_is(2));
+    for (const auto& e : alice.seen)
+        if (e["event"] == "room_updated" && e["room"]["room_id"] == general)
+            REQUIRE(e["room"]["disappear_after"] != 1);
+    json auto_gone = bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "gone on its own"}});
+    alice.wait_message("gone on its own");
+    alice.wait("expiry", expired(auto_gone["data"]["event_id"]), 8000);
+    REQUIRE_FALSE(in_timeline(alice, "gone on its own"));
+    REQUIRE(in_timeline(alice, "this stays"));  // sent before the timer was set
+
+    // Turned off again, messages are kept.
+    REQUIRE(alice.cmd({{"cmd", "set_disappearing"}, {"room_id", general}, {"seconds", 0}})["ok"] == true);
+    bob.wait("timer off", ttl_is(0));
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "kept again"}})["ok"] == true);
+    alice.wait_message("kept again");
+
+    // The server drops its copy too: someone offline past the deadline never gets it.
+    bob.close();
+    json missed = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "expired before bob returned"}, {"expires_in", 1}});
+    REQUIRE(alice.wait_sent(missed["data"]["event_id"])["status"] == "sent");
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "still waiting for bob"}})["ok"] == true);
+    std::this_thread::sleep_for(std::chrono::seconds(8));  // past the server's sweep
+    bob.open();
+    REQUIRE(bob.unlock()["ok"] == true);
+    bob.wait_message("still waiting for bob");
+    for (const auto& e : bob.seen)
+        if (e["event"] == "event_received")
+            REQUIRE(e["data"]["content"].value("body", "") != "expired before bob returned");
+    REQUIRE_FALSE(in_timeline(bob, "expired before bob returned"));
+}

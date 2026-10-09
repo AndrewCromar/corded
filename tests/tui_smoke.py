@@ -157,6 +157,21 @@ def main():
         alice.expect("[deleted]")
         print("ok  edit and delete show on the other side")
 
+        alice.type("/once 2s this one vanishes\r")
+        bob.expect("this one vanishes (disappears)")
+        time.sleep(3.5)
+        bob.clear()
+        bob.type("/help\r")
+        bob.pump(1.0)
+        assert "hi back from bob" in bob.screen, "bob's screen did not redraw"
+        assert "this one vanishes" not in bob.screen, "a disappearing message is still on screen"
+        bob.type("/help\r")
+        alice.type("/disappear 1h\r")
+        bob.expect("messages disappear after 1h")
+        alice.type("/disappear off\r")
+        bob.expect("turned off disappearing messages")
+        print("ok  disappearing messages: one message, and a whole chat")
+
         alice.type("/verify\r")
         alice.expect("Safety numbers")
         alice.type("/verified bob\r")

@@ -70,6 +70,9 @@ private:
     void apply_state(const EventRow& e);
     void apply_relation(const EventRow& e);
     bool can_moderate(const RoomRow& room, ByteView user_id);
+    bool has_permission(const RoomRow& room, ByteView user_id, uint64_t permission);
+    void sweep_expired();
+    void schedule_sweep();
     void cmd_send_event(uint64_t req, const json& cmd);
     void after_unlock();
 
@@ -130,6 +133,7 @@ private:
     asio::ssl::context tls_ctx_;
     std::shared_ptr<tls::Stream> stream_;  // one per connection attempt
     asio::steady_timer reconnect_timer_;
+    asio::steady_timer sweep_timer_;
     std::thread thread_;
 
     Vault vault_;

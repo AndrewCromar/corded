@@ -42,7 +42,7 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
-           type == "m.redaction" || type == "m.room.member";
+           type == "m.redaction" || type == "m.room.member" || type == "m.room.retention";
 }
 
 const char* conn_name(int c) {
@@ -57,7 +57,8 @@ Engine::Engine(EngineConfig config)
       work_(asio::make_work_guard(io_)),
       resolver_(io_),
       tls_ctx_(asio::ssl::context::tls_client),
-      reconnect_timer_(io_) {
+      reconnect_timer_(io_),
+      sweep_timer_(io_) {
     if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
     // The server is authenticated by its pinned fingerprint, checked after the
     // handshake, so certificate-authority verification is switched off.
@@ -71,6 +72,7 @@ Engine::~Engine() {
     asio::post(io_, [this] {
         want_connection_ = false;
         drop_connection("shutting down");
+        sweep_timer_.cancel();
         vault_.lock();
         io_.stop();
     });
@@ -167,6 +169,7 @@ Engine::json Engine::room_json(const RoomRow& room) {
             {"name", room.kind == 0 ? room.channel_name : room.name},
             {"kind", kinds[room.kind >= 0 && room.kind <= 2 ? room.kind : 2]},
             {"is_group", room.kind == 2},
+            {"disappear_after", room.ttl_s},
             {"members", std::move(members)}};
 }
 
@@ -204,6 +207,7 @@ Engine::json Engine::event_json(const EventRow& e) {
     j["content"] = json::parse(e.edited_content.empty() ? e.content : e.edited_content, nullptr, false);
     if (j["content"].is_discarded()) j["content"] = json::object();
     j["edited"] = !e.edited_content.empty();
+    j["expires_at"] = e.expires_at;
     // How many messages hang off this one as a thread.
     j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
@@ -256,8 +260,30 @@ uint64_t Engine::vault_unlock(Bytes passphrase) {
     return req;
 }
 
+// Erases disappearing messages whose time has come and tells the frontend.
+void Engine::sweep_expired() {
+    if (!vault_.unlocked()) return;
+    for (const auto& [room_id, event_id] : vault_.expire_events(now_ms()))
+        emit({{"event", "event_expired"}, {"room_id", b64(room_id)}, {"event_id", b64(event_id)}});
+}
+
+void Engine::schedule_sweep() {
+    sweep_timer_.expires_after(std::chrono::seconds(1));
+    sweep_timer_.async_wait([this](asio::error_code ec) {
+        if (ec || !vault_.unlocked()) return;
+        try {
+            sweep_expired();
+        } catch (const std::exception& e) {
+            emit({{"event", "warning"}, {"message", std::string("expiry sweep failed: ") + e.what()}});
+        }
+        schedule_sweep();
+    });
+}
+
 void Engine::after_unlock() {
     emit_vault_state();
+    sweep_expired();  // anything that came due while the vault was locked
+    schedule_sweep();
     for (const auto& room : vault_.rooms()) emit({{"event", "room_updated"}, {"room", room_json(room)}});
     // Reconnect to the server used last time, if there was one.
     auto host = vault_.meta("server_host");
@@ -305,6 +331,7 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         } else if (name == "lock") {
             want_connection_ = false;
             drop_connection("vault locked");
+            sweep_timer_.cancel();
             vault_.lock();
             emit_vault_state();
             ok(req);
@@ -415,10 +442,18 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                        {"content", {{"body", cmd.at("body")}}}};
             if (cmd.contains("reply_to"))
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
+            if (cmd.contains("expires_in")) ev["expires_in"] = cmd.at("expires_in");
             // A thread message points at the message that started the thread.
             if (cmd.contains("thread"))
                 ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
             cmd_send_event(req, ev);
+        } else if (name == "set_disappearing") {
+            // Messages sent in this room from now on disappear after `seconds`
+            // (0 turns it off). Travels as an encrypted state event.
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.room.retention"},
+                                 {"state_key", ""},
+                                 {"content", {{"ttl_seconds", cmd.at("seconds")}}}});
         } else if (name == "edit_event") {
             cmd_send_event(req, {{"room_id", cmd.at("room_id")},
                                  {"type", "m.edit"},
@@ -730,6 +765,20 @@ void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string roo
     });
 }
 
+// Whether a member's roles (as the server reported them) carry a permission.
+bool Engine::has_permission(const RoomRow& room, ByteView user_id, uint64_t permission) {
+    for (const auto& m : room.members) {
+        if (m.user_id.size() != user_id.size() || !std::equal(m.user_id.begin(), m.user_id.end(), user_id.begin()))
+            continue;
+        if (m.is_owner || m.is_admin) return true;
+        for (const auto& r : roles_) {
+            bool held = r.is_everyone || std::find(m.roles.begin(), m.roles.end(), r.id) != m.roles.end();
+            if (held && (r.permissions & (permission | perm::Administrator))) return true;
+        }
+    }
+    return false;
+}
+
 // Whether this person may delete other people's messages in a channel: the
 // owner, an administrator, or anyone with a role that grants manage_messages.
 // Judged from the roles the server reported; per-channel exceptions are not
@@ -778,8 +827,23 @@ void Engine::apply_relation(const EventRow& e) {
         emit({{"event", "event_updated"}, {"room_id", b64(e.room_id)}, {"data", event_json(*updated)}});
 }
 
-// Room state carried by events. Only the room name so far.
+// Room state carried by events: the room's name, and how long messages last.
 void Engine::apply_state(const EventRow& e) {
+    if (e.type == "m.room.retention") {
+        auto room = vault_.room(e.room_id);
+        if (!room) return;
+        // In a channel only people who manage channels decide this; in a
+        // direct message or private group, anyone in it may.
+        if (room->kind == 0 && !has_permission(*room, e.sender_user, perm::ManageChannels)) return;
+        json content = json::parse(e.content, nullptr, false);
+        if (!content.is_object() || !content.value("ttl_seconds", json()).is_number()) return;
+        double ttl = content["ttl_seconds"].get<double>();
+        if (ttl < 0 || ttl > 366.0 * 24 * 3600) return;
+        vault_.set_room_ttl(e.room_id, static_cast<uint64_t>(ttl));
+        if (auto updated = vault_.room(e.room_id))
+            emit({{"event", "room_updated"}, {"room", room_json(*updated)}});
+        return;
+    }
     if (e.type != "m.room.name") return;
     json content = json::parse(e.content, nullptr, false);
     if (!content.is_object() || !content.value("name", json()).is_string()) return;
@@ -816,6 +880,15 @@ void Engine::cmd_send_event(uint64_t req, const json& cmd) {
     if (e.content.size() > 256 * 1024) {
         fail(req, "invalid_argument", "event content is too large");
         return;
+    }
+    // Disappearing: this message's own timer if given, else the room's. Room
+    // settings and membership notices are not themselves made to disappear.
+    {
+        double own = cmd.value("expires_in", 0.0);
+        uint64_t room_ttl = vault_.room(e.room_id)->ttl_s;
+        bool housekeeping = e.type.rfind("m.room.", 0) == 0;
+        if (own > 0) e.expires_at = e.origin_ts + static_cast<uint64_t>(own * 1000.0);
+        else if (room_ttl > 0 && !housekeeping) e.expires_at = e.origin_ts + room_ttl * 1000;
     }
     {
         db::Transaction tx(vault_.db());
@@ -1227,6 +1300,7 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
                 row.state_key = e.state_key;
                 row.content = to_string(e.content);
                 row.fallback_text = e.fallback_text;
+                row.expires_at = e.expires_at;
                 row.status = "ok";
                 if (e.relation && e.relation->target.size() == 16) {
                     row.rel_kind = e.relation->kind;
@@ -1356,6 +1430,7 @@ void Engine::pump_outbox() {
     inner.content_encoding = 0;
     inner.content = to_bytes(event->content);
     inner.fallback_text = event->fallback_text;
+    inner.expires_at = event->expires_at;
     if (!event->rel_kind.empty()) {
         inner.relation = std::make_unique<wire::RelationT>();
         inner.relation->kind = event->rel_kind;
@@ -1369,6 +1444,7 @@ void Engine::pump_outbox() {
     wire::SendRoomEventT send;
     send.room_id = row.room_id;
     send.event_id = row.event_id;
+    send.expires_at = event->expires_at;  // lets the server drop its copy on time
     try {
         // Persist each advanced ratchet before its ciphertext leaves the
         // process, so a crash can never reuse a message key.

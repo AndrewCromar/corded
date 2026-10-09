@@ -47,13 +47,14 @@ EventRow read_event(db::Statement& st) {
     e.rel_target = st.blob(14);
     e.rel_key = st.text(15);
     e.edited_content = st.text(16);
+    e.expires_at = st.u64(17);
     return e;
 }
 
 constexpr const char* kEventColumns =
     "room_id, event_id, seq, type, type_version, sender_user, sender_device, origin_ts, "
     "server_ts, state_key, content, fallback_text, status, rel_kind, rel_target, rel_key, "
-    "edited_content";
+    "edited_content, COALESCE(expires_at, 0)";
 
 }  // namespace
 
@@ -235,6 +236,13 @@ CREATE TABLE IF NOT EXISTS outbox (
         db_.exec("ALTER TABLE members ADD COLUMN is_owner INTEGER NOT NULL DEFAULT 0");
         db_.exec("ALTER TABLE members ADD COLUMN roles TEXT NOT NULL DEFAULT ''");
     }
+    try {
+        db_.exec("SELECT expires_at FROM events LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE events ADD COLUMN expires_at INTEGER");
+        db_.exec("ALTER TABLE rooms ADD COLUMN ttl_s INTEGER NOT NULL DEFAULT 0");
+    }
+    db_.exec("CREATE INDEX IF NOT EXISTS events_expiry ON events(expires_at) WHERE expires_at IS NOT NULL");
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -366,7 +374,7 @@ void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members,
 std::optional<RoomRow> Vault::room(ByteView room_id) {
     RoomRow r;
     {
-        auto st = db_.prepare("SELECT acked_seq, name, kind, channel_name FROM rooms WHERE room_id = ?");
+        auto st = db_.prepare("SELECT acked_seq, name, kind, channel_name, ttl_s FROM rooms WHERE room_id = ?");
         st.bind(1, room_id);
         if (!st.step()) return std::nullopt;
         r.room_id = to_bytes(room_id);
@@ -374,6 +382,7 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
         r.name = st.text(1);
         r.kind = static_cast<int>(st.i64(2));
         r.channel_name = st.text(3);
+        r.ttl_s = st.u64(4);
     }
     auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles FROM members "
                           "WHERE room_id = ? ORDER BY username");
@@ -423,11 +432,41 @@ void Vault::delete_room(ByteView room_id) {
     }
 }
 
+void Vault::set_room_ttl(ByteView room_id, uint64_t seconds) {
+    auto st = db_.prepare("UPDATE rooms SET ttl_s = ? WHERE room_id = ?");
+    st.bind(1, seconds).bind(2, room_id).exec();
+}
+
+std::vector<std::pair<Bytes, Bytes>> Vault::expire_events(uint64_t now_ms) {
+    std::vector<std::pair<Bytes, Bytes>> due;
+    {
+        auto st = db_.prepare("SELECT room_id, event_id FROM events WHERE expires_at IS NOT NULL "
+                              "AND expires_at <= ?");
+        st.bind(1, now_ms);
+        while (st.step()) due.push_back({st.blob(0), st.blob(1)});
+    }
+    if (due.empty()) return due;
+    db::Transaction tx(db_);
+    for (const auto& [room_id, event_id] : due) {
+        // The row goes entirely (secure_delete is on), along with anything
+        // that pointed at it or was waiting to send it.
+        for (const char* sql : {"DELETE FROM events WHERE room_id = ? AND event_id = ?",
+                                "DELETE FROM outbox WHERE room_id = ? AND event_id = ?",
+                                "DELETE FROM relations WHERE room_id = ? AND event_id = ?",
+                                "DELETE FROM relations WHERE room_id = ? AND target_event_id = ?"}) {
+            auto st = db_.prepare(sql);
+            st.bind(1, room_id).bind(2, event_id).exec();
+        }
+    }
+    tx.commit();
+    return due;
+}
+
 bool Vault::insert_event(const EventRow& e) {
     auto st = db_.prepare(
         "INSERT OR IGNORE INTO events (room_id, event_id, seq, type, type_version, sender_user, "
         "sender_device, origin_ts, server_ts, state_key, content, fallback_text, status, rel_kind, "
-        "rel_target, rel_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        "rel_target, rel_key, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     st.bind(1, e.room_id).bind(2, e.event_id);
     if (e.seq) st.bind(3, *e.seq);
     else st.bind_null(3);
@@ -436,7 +475,10 @@ bool Vault::insert_event(const EventRow& e) {
         .bind(11, e.content).bind(12, e.fallback_text).bind(13, e.status).bind(14, e.rel_kind);
     if (e.rel_target.empty()) st.bind_null(15);
     else st.bind(15, e.rel_target);
-    st.bind(16, e.rel_key).exec();
+    st.bind(16, e.rel_key);
+    if (e.expires_at) st.bind(17, e.expires_at);
+    else st.bind_null(17);
+    st.exec();
     if (db_.changes() == 0) return false;
     if (!e.rel_kind.empty() && !e.rel_target.empty()) {
         auto rel = db_.prepare("INSERT OR IGNORE INTO relations (room_id, target_event_id, kind, "

@@ -84,6 +84,8 @@ Talking:
 | `/react <emoji or text>` | Reacts to the last message you received |
 | `/edit <text>` | Changes your last message |
 | `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
+| `/once 30s <text>` | Sends one message that disappears after the given time (`30s`, `5m`, `2h`, `1d`) |
+| `/disappear 1h` | Makes every new message in the open chat disappear after that long; `/disappear off` stops it |
 | `/group bob carol : Weekend plans` | Starts a private group chat; the part after the colon is an optional name |
 | `/add <username>`, `/leave`, `/name <text>` | Add someone to the open group, leave it, or rename it |
 | `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
@@ -158,6 +160,11 @@ It does:
 - A community per server: channels that every member sees, an owner, and roles with
   permissions. Channels can be made private to a role or read-only. Members can be kicked
   and banned by people whose role allows it.
+- Disappearing messages, for one message or a whole chat. When the time comes the message
+  is erased from every member's vault and from the server. In a channel, only someone who
+  can manage channels sets the timer; in a direct message or group, anyone in it can.
+  Like deletion, this relies on everyone's client cooperating: it cannot stop someone
+  who copied the text or runs a modified client.
 - Moderation: a role with `manage_messages` can delete other people's messages (`/remove`).
 - Invite links made from the client, with optional use limits.
 - Direct messages and private group chats alongside the channels. Group names are

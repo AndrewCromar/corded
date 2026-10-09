@@ -172,6 +172,22 @@ public:
         }
     }
 
+    // Every few seconds, drop stored copies of disappearing messages that are due.
+    asio::awaitable<void> sweep_loop() {
+        asio::steady_timer timer(io_);
+        for (;;) {
+            timer.expires_after(std::chrono::seconds(5));
+            asio::error_code ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) co_return;
+            try {
+                if (int n = storage_.sweep_expired(); n > 0) spdlog::debug("dropped {} expired copies", n);
+            } catch (const std::exception& e) {
+                spdlog::warn("expiry sweep failed: {}", e.what());
+            }
+        }
+    }
+
     void stop() {
         asio::error_code ec;
         acceptor_.close(ec);
@@ -758,6 +774,7 @@ private:
         wire::SendRoomEventT accepted;
         accepted.room_id = ev.room_id;
         accepted.event_id = ev.event_id;
+        accepted.expires_at = ev.expires_at;
         for (const auto& r : ev.recipients) {
             auto dev = r ? storage_.find_device(r->device_id) : std::nullopt;
             if (!dev || !storage_.is_member(ev.room_id, dev->user_id) || r->ciphertext.empty()) continue;
@@ -929,6 +946,7 @@ int main(int argc, char** argv) {
             io.stop();
         });
         asio::co_spawn(io, server.accept_loop(), asio::detached);
+        asio::co_spawn(io, server.sweep_loop(), asio::detached);
         io.run();
     } catch (const std::exception& e) {
         spdlog::critical("fatal: {}", e.what());

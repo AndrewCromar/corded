@@ -29,11 +29,13 @@ struct Message {
     uint64_t ts = 0;
     bool mine = false;
     bool edited = false;
+    bool disappearing = false;
 };
 
 struct Room {
     std::string id, title;
     std::string kind = "direct";  // channel, direct or group
+    uint64_t disappear_after = 0;  // seconds; 0 = messages are kept
     std::vector<Message> messages;
     // target event id -> reaction key -> ids of the reaction events
     std::map<std::string, std::map<std::string, std::set<std::string>>> reactions;
@@ -48,6 +50,24 @@ std::string clock_time(uint64_t ms) {
     char buf[8];
     std::strftime(buf, sizeof buf, "%H:%M", &tm);
     return buf;
+}
+
+// "30s", "5m", "2h", "1d" or a bare number of seconds. Returns 0 if not understood.
+double parse_duration(const std::string& s) {
+    if (s.empty()) return 0;
+    char unit = s.back();
+    double scale = unit == 's' ? 1 : unit == 'm' ? 60 : unit == 'h' ? 3600 : unit == 'd' ? 86400 : 0;
+    std::string digits = scale > 0 ? s.substr(0, s.size() - 1) : s;
+    if (scale == 0) scale = 1;
+    if (digits.empty() || digits.find_first_not_of("0123456789.") != std::string::npos) return 0;
+    return std::atof(digits.c_str()) * scale;
+}
+
+std::string describe_duration(uint64_t seconds) {
+    if (seconds % 86400 == 0) return std::to_string(seconds / 86400) + "d";
+    if (seconds % 3600 == 0) return std::to_string(seconds / 3600) + "h";
+    if (seconds % 60 == 0) return std::to_string(seconds / 60) + "m";
+    return std::to_string(seconds) + "s";
 }
 
 std::string snippet(const std::string& s, size_t n = 40) {
@@ -130,6 +150,7 @@ private:
                 Room& room = room_for(id);
                 room.title = r.value("title", "?");
                 room.kind = r.value("kind", "direct");
+                room.disappear_after = r.value("disappear_after", uint64_t{0});
             }
             refresh_titles();  // re-sorts, so look the room up again
             Room& room = room_for(id);
@@ -158,6 +179,14 @@ private:
                 ++room.unread;
                 refresh_titles();
             }
+        } else if (kind == "event_expired") {
+            // A disappearing message's time came: it is gone from the vault.
+            Room& room = room_for(ev.value("room_id", ""));
+            std::string id = ev.value("event_id", "");
+            room.messages.erase(std::remove_if(room.messages.begin(), room.messages.end(),
+                                               [&](const Message& m) { return m.event_id == id; }),
+                                room.messages.end());
+            room.reactions.erase(id);
         } else if (kind == "event_updated") {
             // An edit or a deletion changed an existing message.
             const json& d = ev.at("data");
@@ -167,6 +196,7 @@ private:
                 if (m.event_id != id) continue;
                 m.status = d.value("status", m.status);
                 m.edited = d.value("edited", false);
+        m.disappearing = d.value("expires_at", uint64_t{0}) != 0;
                 m.body = m.status == "redacted" ? "[deleted]" : d["content"].value("body", m.body);
             }
             for (auto& [target, keys] : room.reactions)
@@ -282,6 +312,7 @@ private:
         m.status = d.value("status", "");
         m.ts = d.value("origin_ts", uint64_t{0});
         m.edited = d.value("edited", false);
+        m.disappearing = d.value("expires_at", uint64_t{0}) != 0;
         if (rel_kind == "reply") m.reply_to = rel_target;
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
@@ -292,7 +323,11 @@ private:
                          : d["content"].value("action", "") == "removed"
                                ? "removed " + d["content"].value("username", "someone") + " from the chat"
                                : "added " + d["content"].value("username", "someone") + " to the chat";
-        else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
+        else if (type == "m.room.retention") {
+            uint64_t ttl = d["content"].value("ttl_seconds", uint64_t{0});
+            m.body = ttl ? "set messages here to disappear after " + describe_duration(ttl)
+                         : "turned off disappearing messages";
+        } else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
         else m.body = "[unsupported message type: " + type + "]";
@@ -531,6 +566,19 @@ private:
                     command({{"cmd", "edit_event"}, {"room_id", room->id}, {"event_id", mine->event_id}, {"body", arg}});
                 else
                     command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", mine->event_id}});
+            } else if (cmd == "/disappear" && !arg.empty() && room) {
+                // Every new message in this chat disappears after the given time.
+                double seconds = arg == "off" ? 0 : parse_duration(arg);
+                if (arg != "off" && seconds <= 0) notice_ = "use a time like 30s, 5m, 2h or 1d, or \"off\"";
+                else command({{"cmd", "set_disappearing"}, {"room_id", room->id}, {"seconds", seconds}});
+            } else if (cmd == "/once" && !arg.empty() && room) {
+                // One message that disappears: /once 30s the text
+                auto sp = arg.find(' ');
+                double seconds = parse_duration(arg.substr(0, sp));
+                if (sp == std::string::npos || seconds <= 0) notice_ = "use: /once 30s your message";
+                else
+                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", arg.substr(sp + 1)},
+                             {"expires_in", seconds}});
             } else if (cmd == "/remove" && room) {
                 // Moderators: delete the last message someone else posted here.
                 if (const Message* m = last_from_other(*room))
@@ -629,6 +677,7 @@ private:
             std::string mark;
             if (m.mine) mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)" : "";
             if (m.edited) mark += " (edited)";
+            if (m.disappearing) mark += " (disappears)";
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             Element body = paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
@@ -681,7 +730,10 @@ private:
                              rooms_.empty() ? text("(none)") | dim : room_menu_->Render() | yframe | flex}) |
                        size(WIDTH, EQUAL, 24);
         Element right = vbox({
-            text(room ? room->title : "") | bold,
+            hbox({text(room ? room->title : "") | bold,
+                  text(room && room->disappear_after
+                           ? "   messages disappear after " + describe_duration(room->disappear_after)
+                           : "") | color(Color::Yellow)}),
             separator(),
             messages_view(),
             separator(),
@@ -699,6 +751,7 @@ private:
                               text("/thread <text>     reply in a thread under the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
                               text("/edit <text>       change your last message        /delete  remove it"),
+                              text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),

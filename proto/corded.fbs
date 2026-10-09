@@ -74,7 +74,9 @@ table ListRooms {}
 table RoomList { rooms: [RoomInfo]; }
 
 // ---- events ----
-table SendRoomEvent { room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; }
+// expires_at (ms since epoch, 0 = never) is the one thing about a disappearing
+// message the server is told, so that it can drop its stored copy on time.
+table SendRoomEvent { room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; expires_at: uint64; }
 table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
 table RoomEvent {
   room_id: [ubyte]; seq: uint64; event_id: [ubyte];

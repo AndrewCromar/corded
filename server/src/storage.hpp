@@ -116,6 +116,13 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
             db_.exec("ALTER TABLE rooms ADD COLUMN name TEXT NOT NULL DEFAULT ''");
             db_.exec("UPDATE rooms SET kind = 1 WHERE is_direct = 1");
         }
+        try {
+            db_.exec("SELECT expires_at FROM room_events LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE room_events ADD COLUMN expires_at INTEGER");
+        }
+        db_.exec("CREATE INDEX IF NOT EXISTS room_events_expiry ON room_events(expires_at) "
+                 "WHERE expires_at IS NOT NULL");
         // A community always has the @everyone role and at least one channel.
         {
             auto st = db_.prepare("SELECT 1 FROM roles WHERE is_everyone = 1");
@@ -592,14 +599,24 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         for (const auto& r : ev.recipients) {
             if (!r) continue;
             auto ins = db_.prepare("INSERT INTO room_events (room_id, seq, recipient_device, "
-                                   "event_id, sender_user, sender_device, server_ts, ciphertext) "
-                                   "VALUES (?,?,?,?,?,?,?,?)");
+                                   "event_id, sender_user, sender_device, server_ts, ciphertext, "
+                                   "expires_at) VALUES (?,?,?,?,?,?,?,?,?)");
             ins.bind(1, ev.room_id).bind(2, out.seq).bind(3, r->device_id).bind(4, ev.event_id)
                 .bind(5, sender_user).bind(6, sender_device).bind(7, out.server_ts)
-                .bind(8, r->ciphertext).exec();
+                .bind(8, r->ciphertext);
+            if (ev.expires_at) ins.bind(9, ev.expires_at);
+            else ins.bind_null(9);
+            ins.exec();
         }
         tx.commit();
         return out;
+    }
+
+    // Drops stored copies of disappearing messages whose time has come.
+    int sweep_expired() {
+        auto st = db_.prepare("DELETE FROM room_events WHERE expires_at IS NOT NULL AND expires_at <= ?");
+        st.bind(1, now_ms()).exec();
+        return db_.changes();
     }
 
     std::vector<wire::RoomEventT> events_after(ByteView room_id, ByteView device_id, uint64_t seq) {
