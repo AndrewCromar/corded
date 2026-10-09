@@ -57,6 +57,19 @@ table ServerInfo {
 // A newcomer asks for messages from before they joined. The server holds none
 // it can read, so it passes the request to members who are online; each of
 // their clients decides whether to answer.
+// ---- running the server from a client ----
+table Setting { key: string; value: string; owner_only: bool; needs_restart: bool; description: string; }
+table GetSettings {}
+table Settings { entries: [Setting]; }
+table SetSetting { key: string; value: string; }
+table Restart {}                 // restart the server program (not the computer)
+table GetStatus {}
+table Status {
+  version: string; started_at: uint64; members: uint32; online: uint32;
+  stored_bytes: uint64; last_housekeeping: uint64; scope: string;
+}
+table Notice { message: string; }   // something the server wants members to read
+
 table HistoryRequest { room_id: [ubyte]; limit: uint32; }
 table HistoryWanted { room_id: [ubyte]; requester: [ubyte]; limit: uint32; }
 table GetMembers {}
@@ -104,7 +117,8 @@ union FrameBody {
   NewRole, EditRole, RemoveRole, GrantRole,
   CreateChannel, UpdateChannel, DeleteChannel, SetOverride,
   NewInvite, Invite, RevokeInvite,
-  HistoryRequest, HistoryWanted
+  HistoryRequest, HistoryWanted,
+  GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

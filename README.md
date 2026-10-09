@@ -52,6 +52,18 @@ Then open three terminals in the `corded` directory.
 ./build/dev/bin/cordedd --port 7443 --data ./server-data --name "My Server" --owner alice
 ```
 
+A new server only accepts connections from the computer it runs on. To let other
+machines in, say how far it should reach:
+
+| | Who can connect |
+|---|---|
+| `--scope machine` (default) | Only this computer |
+| `--scope network` | Devices on your local network; anything else is turned away |
+| `--scope internet` | Anyone. New accounts then need an invite unless you add `--open-registration` |
+
+Settings given on the command line are remembered, so later starts only need `--data`
+(and `--port` if you changed it).
+
 **Terminal 2, Alice (the owner):**
 
 ```sh
@@ -115,6 +127,9 @@ the matching permission:
 | `/role delete <name>` | Deletes a role |
 | `/delete 12` or `/remove` | With `manage_messages`: deletes someone else's message, by number or the latest |
 | `/invite [uses]` | Makes an invite link |
+| `/settings`, `/set <name> <value>` | Shows or changes the server's settings (needs `manage_server`; scope is owner only) |
+| `/status` | Version, uptime, members, storage used |
+| `/reboot` | Restarts the server program; everyone reconnects by themselves |
 | `/kick <user>` | Removes someone from the server; they can rejoin |
 | `/ban <user>`, `/unban <user>` | Blocks or restores someone's access |
 
@@ -146,8 +161,8 @@ permission. `--closed` stops new accounts entirely while existing members keep w
 If you make a link while connected as `localhost`, the link says `localhost` too; connect
 by the address other people will use.
 
-To talk between two computers, run the server on one, and point the other's `--server`
-at that machine's address. Quit a client and start it again with the same `--vault` to
+To talk between two computers, start the server with `--scope network` on one, and point
+the other's `--server` at that machine's address. Quit a client and start it again with the same `--vault` to
 see it unlock, restore history and pick up anything it missed.
 
 To run the tests:
@@ -170,6 +185,9 @@ It does:
   can manage channels sets the timer; in a direct message or group, anyone in it can.
   Like deletion, this relies on everyone's client cooperating: it cannot stop someone
   who copied the text or runs a modified client.
+- Running the server from a client: every setting is stored in the server and can be
+  changed with `/set`, including a regular restart (`/set restart weekly sun 04:00`) and
+  how long messages are kept (30 days by default). `/reboot` restarts it on the spot.
 - Moderation: a role with `manage_messages` can delete other people's messages (`/remove`).
 - Invite links made from the client, with optional use limits.
 - Direct messages and private group chats alongside the channels. Group names are

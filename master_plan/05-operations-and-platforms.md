@@ -9,9 +9,9 @@ plan in [04-community-model.md](04-community-model.md), section 6.
 | Leaving the client with a command | (small) | done | `/exit` built |
 | Switching between servers in the client | D-27, C5 | C5 | Built: `/servers`, `/server switch`, `/server join` |
 | Acting on one specific message | (design already supports it) | C4 | Built: messages are numbered in the terminal client and commands take a number |
-| Server scope: machine, network, internet | D-33 | C12 | Planned |
-| All server settings from the owner's client | D-34 | C16 | Planned |
-| Scheduled maintenance and restarts | D-35 | C16 | Planned |
+| Server scope: machine, network, internet | D-33 | C12 | Built |
+| All server settings from the owner's client | D-34 | C16 | Built: `/settings`, `/set`, `/status` |
+| Scheduled maintenance and restarts | D-35 | C16 | Built: `/reboot`, `/set restart ...`, hourly housekeeping, retention window |
 | Remote update of the server | D-36 | C16 | Planned; needs a decision on release signing |
 | One person on several devices | D-37 | C13 | Planned |
 | Clients on Linux, Windows, macOS, iOS, Android | D-38 | C14 | Planned |

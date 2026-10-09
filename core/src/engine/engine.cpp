@@ -587,7 +587,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "kick" || name == "ban_user" ||
-                   name == "create_invite" || name == "revoke_invite") {
+                   name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
+                   name == "set_setting" || name == "restart_server" || name == "server_status") {
             community_command(req, name, cmd);
         } else if (name == "leave_room") {
             if (conn_ != Conn::Live) {
@@ -840,6 +841,48 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
                      {"expires_at", invite->expires_at},
                      {"link", "corded://" + host_ + ":" + port_ + "/?fp=" + server_fingerprint_ +
                                   "&invite=" + invite->code}});
+        });
+    } else if (name == "get_settings") {
+        request(wire::GetSettingsT{}, [this, req](wire::FrameT& r) {
+            auto* list = r.body.AsSettings();
+            if (!list) {
+                auto* e = r.body.AsError();
+                fail(req, "refused", e ? e->message : "could not read the settings");
+                return;
+            }
+            json settings = json::array();
+            for (const auto& s : list->entries)
+                if (s)
+                    settings.push_back({{"key", s->key},
+                                        {"value", s->value},
+                                        {"owner_only", s->owner_only},
+                                        {"needs_restart", s->needs_restart},
+                                        {"description", s->description}});
+            ok(req, {{"settings", std::move(settings)}});
+        });
+    } else if (name == "set_setting") {
+        wire::SetSettingT q;
+        q.key = cmd.at("key").get<std::string>();
+        q.value = cmd.at("value").is_string() ? cmd.at("value").get<std::string>() : cmd.at("value").dump();
+        simple_request(req, std::move(q));
+    } else if (name == "restart_server") {
+        simple_request(req, wire::RestartT{});
+    } else if (name == "server_status") {
+        request(wire::GetStatusT{}, [this, req](wire::FrameT& r) {
+            auto* st = r.body.AsStatus();
+            if (!st) {
+                auto* e = r.body.AsError();
+                fail(req, "refused", e ? e->message : "could not read the status");
+                return;
+            }
+            ok(req, {{"status",
+                      {{"version", st->version},
+                       {"started_at", st->started_at},
+                       {"members", st->members},
+                       {"online", st->online},
+                       {"stored_bytes", st->stored_bytes},
+                       {"last_housekeeping", st->last_housekeeping},
+                       {"scope", st->scope}}}});
         });
     } else if (name == "revoke_invite") {
         wire::RevokeInviteT q;
@@ -1260,6 +1303,9 @@ void Session::on_frame(wire::FrameT& f) {
         case wire::FrameBody_RoomInfo: store_room(*f.body.AsRoomInfo()); break;
         case wire::FrameBody_ServerInfo: on_server_info(*f.body.AsServerInfo()); break;
         case wire::FrameBody_HistoryWanted: on_history_wanted(*f.body.AsHistoryWanted()); break;
+        case wire::FrameBody_Notice:
+            emit({{"event", "server_notice"}, {"message", f.body.AsNotice()->message}});
+            break;
         case wire::FrameBody_RoomList: reconcile_rooms(*f.body.AsRoomList()); break;
         case wire::FrameBody_RoomEvent: on_room_event(*f.body.AsRoomEvent()); break;
         case wire::FrameBody_Error:

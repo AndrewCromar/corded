@@ -216,6 +216,18 @@ def main():
         alice.expect("[mods]")
         print("ok  owner creates a channel and a role, and gives the role to a member")
 
+        # Running the server from the client.
+        alice.type("/settings\r")
+        alice.expect("Server settings")
+        alice.expect("retention_days = ")
+        alice.type("/set retention_days 14\r")
+        alice.expect("retention_days is now 14")
+        alice.type("/status\r")
+        alice.expect("Server status")
+        bob.type("/set registration closed\r")
+        bob.expect("do not have permission")
+        print("ok  settings and status from the owner's client; refused for others")
+
         # An invite link, used by a fourth person to join.
         alice.type("/invite 1\r")
         alice.expect("Invite link")

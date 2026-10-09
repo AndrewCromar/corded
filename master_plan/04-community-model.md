@@ -255,8 +255,9 @@ build on it.
 | C8 Sender keys | Not started |
 | C9 History for newcomers | Built on `next`: asked for automatically on joining a channel or group, relayed by the server to up to two online members, shared from their vaults as an encrypted envelope for the newcomer alone, with the server switch and the member switch |
 | C10 Polish, C11 Optional unencrypted servers | Not started |
-| C12 Server scope | Not started |
-| C13 Several devices, C14 Windows and GUI, C15 Browser client, C16 Remote administration | Not started; designed in [05-operations-and-platforms.md](05-operations-and-platforms.md) |
+| C12 Server scope | Built: `--scope machine`, `network` or `internet`; machine is the default for a new server; network scope turns away non-local addresses; internet scope makes registration invite-only unless told otherwise. The extra limits for internet scope (accounts per address per day, handshake timeouts) are not built |
+| C16 Remote administration | Partly built: settings stored in the server and changed from a client, `/status`, `/reboot`, scheduled restarts, hourly housekeeping with a retention window. Remote update is not built; it waits on the release signing decision |
+| C13 Several devices, C14 Windows and GUI, C15 Browser client | Not started; designed in [05-operations-and-platforms.md](05-operations-and-platforms.md) |
 
 Simplifications in what is built, to be revisited: after any change to roles, channels or
 membership the server sends every online member a full fresh picture instead of a small

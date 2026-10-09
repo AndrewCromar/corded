@@ -612,6 +612,28 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         return out;
     }
 
+    // Regular tidying: spent and expired invites, messages past the retention
+    // window, then let SQLite compact its log.
+    void housekeeping(int retention_days) {
+        {
+            auto st = db_.prepare("DELETE FROM invites WHERE (uses_left IS NOT NULL AND uses_left <= 0) "
+                                  "OR (expires_at IS NOT NULL AND expires_at <= ?)");
+            st.bind(1, now_ms()).exec();
+        }
+        if (retention_days > 0) {
+            auto st = db_.prepare("DELETE FROM room_events WHERE server_ts < ?");
+            st.bind(1, now_ms() - static_cast<uint64_t>(retention_days) * 24 * 3600 * 1000).exec();
+        }
+        sweep_expired();
+        db_.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;");
+        set_info("last_housekeeping", to_bytes(std::to_string(now_ms())));
+    }
+    uint32_t member_count() {
+        auto st = db_.prepare("SELECT COUNT(*) FROM users WHERE access_level >= 0");
+        st.step();
+        return static_cast<uint32_t>(st.i64(0));
+    }
+
     // Drops stored copies of disappearing messages whose time has come.
     int sweep_expired() {
         auto st = db_.prepare("DELETE FROM room_events WHERE expires_at IS NOT NULL AND expires_at <= ?");

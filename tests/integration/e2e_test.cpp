@@ -1283,3 +1283,97 @@ TEST_CASE("a server can forbid sharing earlier messages") {
         if (e["event"] == "event_received")
             REQUIRE(e["data"]["content"].value("body", "") != "before anyone joined");
 }
+
+TEST_CASE("the owner runs the server from a client") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+    }
+    auto value_of = [&](Client& c, const std::string& key) -> std::string {
+        json settings = c.cmd({{"cmd", "get_settings"}})["data"]["settings"];
+        for (const auto& s : settings)
+            if (s["key"] == key) return s["value"];
+        return "(missing)";
+    };
+
+    // Settings can be read and changed by the owner, not by an ordinary member.
+    REQUIRE(value_of(alice, "scope") == "machine");
+    REQUIRE(value_of(alice, "registration") == "open");
+    REQUIRE(value_of(alice, "retention_days") == "30");
+    REQUIRE(bob.cmd({{"cmd", "get_settings"}})["ok"] == false);
+    REQUIRE(bob.cmd({{"cmd", "set_setting"}, {"key", "registration"}, {"value", "closed"}})["ok"] == false);
+    REQUIRE(bob.cmd({{"cmd", "restart_server"}})["ok"] == false);
+    REQUIRE(bob.cmd({{"cmd", "server_status"}})["ok"] == false);
+
+    // Bad values and unknown settings are refused.
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "scope"}, {"value", "everywhere"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "restart"}, {"value", "sometimes"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "no_such_thing"}, {"value", "1"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "restart"}, {"value", "weekly sun 04:00"}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "retention_days"}, {"value", "7"}})["ok"] == true);
+
+    // A change takes effect at once: the name reaches members, registration closes.
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "name"}, {"value", "Renamed Place"}})["ok"] == true);
+    bob.wait("new name", [](const json& e) { return e["event"] == "server_info" && e["name"] == "Renamed Place"; });
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "registration"}, {"value", "closed"}})["ok"] == true);
+    Client late((tmp.path / "late").string());
+    REQUIRE(late.create("late")["ok"] == true);
+    REQUIRE(late.cmd(connect)["ok"] == true);
+    late.wait("refusal", [](const json& e) {
+        return e["event"] == "connection_state" && e["state"] == "disconnected" &&
+               e.value("detail", "").find("registration failed") != std::string::npos;
+    });
+
+    // A role with manage_server can change ordinary settings, but not the owner-only ones.
+    REQUIRE(alice.cmd({{"cmd", "create_role"}, {"name", "ops"}, {"permissions", {"manage_server"}}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "grant_role"}, {"username", "bob"}, {"role", "ops"}})["ok"] == true);
+    bob.have("ops role", [](const json& e) {
+        if (e["event"] != "server_info") return false;
+        for (const auto& p : e["my_permissions"]) if (p == "manage_server") return true;
+        return false;
+    });
+    REQUIRE(bob.cmd({{"cmd", "set_setting"}, {"key", "history_sharing"}, {"value", "off"}})["ok"] == true);
+    json scope_attempt = bob.cmd({{"cmd", "set_setting"}, {"key", "scope"}, {"value", "internet"}});
+    REQUIRE(scope_attempt["ok"] == false);
+    REQUIRE(scope_attempt["error"]["message"].get<std::string>().find("owner") != std::string::npos);
+
+    json status = alice.cmd({{"cmd", "server_status"}})["data"]["status"];
+    REQUIRE(status["members"] == 2);
+    REQUIRE(status["online"] == 2);
+    REQUIRE(status["scope"] == "machine");
+    REQUIRE(status["stored_bytes"].get<uint64_t>() > 0);
+    uint64_t first_start = status["started_at"];
+
+    // Restarting from the client: everyone is told, reconnects, and the settings are still there.
+    alice.seen.clear();
+    bob.seen.clear();
+    REQUIRE(alice.cmd({{"cmd", "restart_server"}})["ok"] == true);
+    bob.wait("restart notice", [](const json& e) {
+        return e["event"] == "server_notice" && e.value("message", "").find("restarting") != std::string::npos;
+    });
+    auto down = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "disconnected"; };
+    alice.wait("dropped", down, 20000);
+    alice.wait("back", live, 30000);
+    bob.have("dropped", down);
+    bob.wait("back", live, 30000);
+    REQUIRE(value_of(alice, "name") == "Renamed Place");
+    REQUIRE(value_of(alice, "registration") == "closed");
+    REQUIRE(value_of(alice, "retention_days") == "7");
+    REQUIRE(value_of(alice, "restart") == "weekly sun 04:00");
+    REQUIRE(value_of(alice, "history_sharing") == "off");
+    REQUIRE(alice.cmd({{"cmd", "server_status"}})["data"]["status"]["started_at"].get<uint64_t>() > first_start);
+    REQUIRE(alice.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == true);
+    // And it still works as a chat server.
+    std::string general;
+    json rooms = alice.cmd({{"cmd", "list_rooms"}})["data"]["rooms"];
+    for (const auto& r : rooms) if (r["title"] == "#general") general = r["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "after the restart"}})["ok"] == true);
+    bob.wait_message("after the restart");
+}

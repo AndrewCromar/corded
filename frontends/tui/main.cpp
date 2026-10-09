@@ -242,6 +242,8 @@ private:
         } else if (kind == "server_pinned") {
             pin_notice_ = "First connection to this server. Its key " + ev.value("fingerprint", "") +
                           " is now remembered.";
+        } else if (kind == "server_notice") {
+            notice_ = ev.value("message", "");
         } else if (kind == "history_received") {
             notice_ = std::to_string(ev.value("count", 0)) + " earlier messages were shared with you";
         } else if (kind == "warning") {
@@ -272,6 +274,38 @@ private:
             room_for(id).title = ev["data"]["room"].value("title", "?");
             refresh_titles();
             select_room(id);
+            return;
+        }
+        if (ok && ev["data"].contains("settings")) {
+            Elements rows = {text("Server settings") | bold};
+            for (const auto& st : ev["data"]["settings"]) {
+                rows.push_back(hbox({text(st.value("key", "") + " = ") | bold, text(st.value("value", "")) | color(Color::Cyan),
+                                     text(st.value("owner_only", false) ? "  (owner only)" : "") | color(Color::Magenta),
+                                     text(st.value("needs_restart", false) ? "  (needs /reboot)" : "") | dim}));
+                rows.push_back(text("    " + st.value("description", "")) | dim);
+            }
+            rows.push_back(text("/set <name> <value> changes one") | dim);
+            info_box_ = vbox(std::move(rows)) | border;
+            show_info_ = true;
+            return;
+        }
+        if (ok && ev["data"].contains("status")) {
+            const json& st = ev["data"]["status"];
+            uint64_t up = st.value("started_at", uint64_t{0});
+            uint64_t now = static_cast<uint64_t>(std::time(nullptr)) * 1000;
+            uint64_t tidy = st.value("last_housekeeping", uint64_t{0});
+            info_box_ = vbox({
+                            text("Server status") | bold,
+                            text("version " + st.value("version", "?") + ", scope " + st.value("scope", "?")),
+                            text("running for " + describe_duration(up && now > up ? (now - up) / 1000 : 0)),
+                            text(std::to_string(st.value("members", 0)) + " members, " +
+                                 std::to_string(st.value("online", 0)) + " online"),
+                            text("storage used: " + std::to_string(st.value("stored_bytes", uint64_t{0}) / 1024) + " KB"),
+                            text(tidy ? "last tidied " + describe_duration((now - tidy) / 1000) + " ago"
+                                      : "not tidied yet since first start"),
+                        }) |
+                        border;
+            show_info_ = true;
             return;
         }
         if (ok && ev["data"].contains("link")) {
@@ -677,6 +711,15 @@ private:
                 json c = {{"cmd", "create_invite"}};
                 if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
                 command(c);
+            } else if (cmd == "/settings") {
+                command({{"cmd", "get_settings"}});
+            } else if (cmd == "/set" && arg.find(' ') != std::string::npos) {
+                auto sp = arg.find(' ');
+                command({{"cmd", "set_setting"}, {"key", arg.substr(0, sp)}, {"value", arg.substr(sp + 1)}});
+            } else if (cmd == "/reboot") {
+                command({{"cmd", "restart_server"}});
+            } else if (cmd == "/status") {
+                command({{"cmd", "server_status"}});
             } else if (cmd == "/members") {
                 command({{"cmd", "member_list"}});
             } else if (cmd == "/roles") {
@@ -923,6 +966,7 @@ private:
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
+                              text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
                               text("   /invite [uses]   make an invite link for someone to join"),
                               text("   /remove   delete the last message someone else posted in this channel"),
                           }) |

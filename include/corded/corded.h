@@ -43,6 +43,10 @@
  *   {"cmd":"grant_role","username":"dave","role":"moderator","grant":true}
  *   {"cmd":"create_invite","max_uses":5,"expires_in_hours":24}   (both optional)
  *   {"cmd":"revoke_invite","code":"..."}
+ *   {"cmd":"get_settings"}                                        (needs manage_server)
+ *   {"cmd":"set_setting","key":"registration","value":"invite"}
+ *   {"cmd":"restart_server"}          restarts the server program; clients reconnect
+ *   {"cmd":"server_status"}
  *   {"cmd":"kick","username":"dave"}
  *   {"cmd":"ban_user","username":"dave","banned":true}
  *  Permission names: view_channel, send_messages, add_reactions, attach_files,
@@ -67,7 +71,7 @@
  * Events (JSON objects, "event" names the event):
  *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
  *   room_removed,
- *   event_received, event_expired, history_received,
+ *   event_received, event_expired, history_received, server_notice,
  *   event_updated, event_send_status, command_result, warning
  */
 #ifndef CORDED_H
