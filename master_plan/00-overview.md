@@ -29,6 +29,8 @@ how messages are secured and delivered. Frontends decide how they look and feel.
 ### Goals
 
 - Anyone can self-host a server on very small hardware (Raspberry Pi 4/5, $3 VPS, NAS).
+- Whoever sets up a server can make their own account its administrator, with every
+  permission the server can grant. Not even an administrator can read rooms they are not in.
 - The server learns as little as possible, and that amount is written down honestly.
 - A frontend author never handles keys, sockets or ratchets.
 - Rich chat features (threads, replies, reactions, edits, attachments and more) can be

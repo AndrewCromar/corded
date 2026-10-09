@@ -176,6 +176,30 @@ uploads do not bloat the database or the WAL.
 Pragmas: `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`,
 `busy_timeout=5000`, `cache_size=-4096`, `wal_autocheckpoint=1000`.
 
+### Server administrators
+
+Decision D-26. The operator names one or more administrators when setting up the server.
+An administrator has every permission the server can grant.
+
+- **Bootstrap.** `cordedd init --admin <username>` (and `admin = ["..."]` in the
+  configuration file, and `--admin` on `cordedd run`) records the administrator
+  usernames. A named username that is not registered yet is reserved: nobody else can
+  take it, and its first registration is granted `access_level = 1`. A named username
+  that already exists is promoted at start-up.
+- **Permissions.** The authorisation function `can(actor, action, room, target)` returns
+  true for every action when the actor is a server administrator and, for room actions,
+  a member of the room. Server-wide actions (ban, unban, delete user, delete room,
+  manage invites, change the registration mode, grant or revoke administrator) are
+  administrator-only.
+- **Limits that are not permissions.** An administrator cannot read rooms they are not in
+  and cannot be added to a room silently: joining is announced to members like any other
+  membership change.
+- **Visibility.** `AuthOk` carries the account's access level; `Member` entries carry an
+  `is_admin` flag.
+- **Remote administration.** Because an administrator is an ordinary authenticated
+  client, the admin commands in step 2.12 are available over the normal protocol as well
+  as through the local admin socket.
+
 ### Configuration
 
 A TOML file (`/etc/cordedd/cordedd.toml`), with every key overridable by environment
@@ -187,6 +211,7 @@ variable `CORDEDD_*` and by command-line flag.
 | `tls.cert`, `tls.key` | none | PEM paths; `tls.self_signed = true` generates and persists one |
 | `data_dir` | `/var/lib/cordedd` | Database and blobs |
 | `registration` | `invite` | `open`, `invite` or `closed` |
+| `admin` | none | Usernames that are server administrators (D-26) |
 | `retention_days` | 30 | Room ciphertext retention |
 | `max_frame_bytes` | 1048576 | |
 | `max_connections` | 1000 | |
@@ -209,8 +234,8 @@ Tasks:
   `shutting down` error to clients, flush the database, exit); SIGHUP reloads the log
   level and TLS certificate.
 - Subcommands on the same binary: `cordedd run`, `cordedd init` (create data directory,
-  generate a self-signed certificate if asked, print the fingerprint and a first admin
-  invite link), `cordedd admin ...` (step 2.12), `cordedd version`.
+  generate a self-signed certificate if asked, record the administrator usernames given
+  with `--admin`, print the fingerprint and how the administrator should connect), `cordedd admin ...` (step 2.12), `cordedd version`.
 - systemd unit file with sandboxing directives (`DynamicUser`, `ProtectSystem=strict`,
   `StateDirectory`, `NoNewPrivileges`, `MemoryMax`).
 
@@ -402,7 +427,8 @@ Tasks:
 - Limits configurable; `Error` responses carry a retry-after.
 - Buckets live in memory with bounded size and idle eviction.
 - Server-level controls: ban user (drops connections, blocks login), delete user, remove
-  room, close registration.
+  room, close registration. Each is available to server administrators over the protocol
+  (D-26) and to the operator through the local admin socket.
 - Temporary IP blocks after repeated authentication failures.
 - Resource caps: rooms per user, members per room, devices per user, inbox depth.
 

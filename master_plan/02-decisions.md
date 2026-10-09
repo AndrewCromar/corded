@@ -39,6 +39,7 @@ To change a decision, edit this file in the same pull request as the change.
 | D-23 | Ratchet implementation | Write X3DH, Double Ratchet and sender keys in C++ on libsodium, or wrap an audited library | Open | 4 |
 | D-24 | Mobile push notifications | Needs its own design before any mobile release | Open | 6 |
 | D-25 | Multi-device in 1.0 | Recommended yes (feature milestone F7 before 1.0) | Open | 7 |
+| D-26 | Server administrator | The person who sets up a server can make their own account its administrator, with every permission | Locked (owner requirement) | 2 |
 
 ### D-03 vcpkg in manifest mode
 One `vcpkg.json` with a pinned `builtin-baseline`, consumed through the CMake toolchain
@@ -168,6 +169,37 @@ integration, persistence, key distribution and verification.
 
 To be decided by the owner before Stage 4 starts. Stage 4's `CryptoProvider` interface
 is the same either way, so the choice does not affect Stages 2, 3 or 5.
+
+### D-26 Server administrator
+Requirement from the owner: when someone sets up a server, they must be able to assign
+their own client as an administrator that has all permissions.
+
+How it works:
+
+- **Becoming the administrator.** The operator names the administrator when starting the
+  server (`cordedd --admin <username>`, later also `cordedd init` and the configuration
+  file). Whoever holds that username is the administrator. If nobody has registered it
+  yet, the name is reserved and the first registration of it becomes the administrator;
+  on an invite-only server that still needs the invite code. Several administrators can
+  be named. Naming is done on the server's own command line or configuration, so only
+  someone who controls the server machine can grant it.
+- **What "all permissions" means.** An administrator can do anything any role on the
+  server can do, in every room they are a member of and across the server: remove members
+  from rooms, add members, rename rooms, delete rooms, ban and unban users, create and
+  revoke invite codes, close or open registration, and grant or remove administrator
+  status for others.
+- **What it does not mean.** An administrator cannot read messages in rooms they are not
+  a member of, and cannot decrypt anything they were not sent. That is a property of the
+  end-to-end encryption, not a permission, and no server role can override it. An
+  administrator who joins a room is visible to its members like anyone else.
+- **How clients learn of it.** The server tells a client at sign-in whether its account
+  is an administrator, and marks administrators in room member lists, so frontends can
+  show admin controls and other members can see who has that power.
+- **Relation to room roles.** Room-level roles (owner, admin, member) from the Stage 1
+  rooms specification still exist. A server administrator outranks all of them.
+
+Stage 2 owns the server side (steps 2.1, 2.5, 2.7, 2.11 and 2.12); Stage 5 exposes the
+admin commands through the C ABI and the TUI.
 
 ## Prototype notes
 
