@@ -46,12 +46,14 @@ EventRow read_event(db::Statement& st) {
     e.rel_kind = st.text(13);
     e.rel_target = st.blob(14);
     e.rel_key = st.text(15);
+    e.edited_content = st.text(16);
     return e;
 }
 
 constexpr const char* kEventColumns =
     "room_id, event_id, seq, type, type_version, sender_user, sender_device, origin_ts, "
-    "server_ts, state_key, content, fallback_text, status, rel_kind, rel_target, rel_key";
+    "server_ts, state_key, content, fallback_text, status, rel_kind, rel_target, rel_key, "
+    "edited_content";
 
 }  // namespace
 
@@ -215,6 +217,11 @@ CREATE TABLE IF NOT EXISTS outbox (
 )sql");
     db_.exec("CREATE TABLE IF NOT EXISTS verified_users ("
              "user_id BLOB PRIMARY KEY, verified_at INTEGER NOT NULL) WITHOUT ROWID");
+    try {
+        db_.exec("SELECT edited_content FROM events LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE events ADD COLUMN edited_content TEXT NOT NULL DEFAULT ''");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -434,6 +441,17 @@ std::vector<EventRow> Vault::timeline(ByteView room_id, uint32_t limit) {
     while (st.step()) out.push_back(read_event(st));
     std::reverse(out.begin(), out.end());
     return out;
+}
+
+void Vault::set_edited_content(ByteView room_id, ByteView event_id, const std::string& content) {
+    auto st = db_.prepare("UPDATE events SET edited_content = ? WHERE room_id = ? AND event_id = ?");
+    st.bind(1, content).bind(2, room_id).bind(3, event_id).exec();
+}
+
+void Vault::redact_event(ByteView room_id, ByteView event_id) {
+    auto st = db_.prepare("UPDATE events SET content = '{}', edited_content = '', fallback_text = '', "
+                          "status = 'redacted' WHERE room_id = ? AND event_id = ?");
+    st.bind(1, room_id).bind(2, event_id).exec();
 }
 
 void Vault::outbox_push(ByteView room_id, ByteView event_id) {

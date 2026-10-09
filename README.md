@@ -80,6 +80,8 @@ and start typing. Things to try:
 |---|---|
 | any text | Sends a message to the open chat |
 | `/chat <username>` | Starts or opens a chat with someone on the same server |
+| `/edit <text>` | Changes your last message |
+| `/delete` | Removes your last message (others' clients erase their copy; it cannot force them to) |
 | `/group bob carol : Weekend plans` | Starts a group chat; the part after the colon is an optional name |
 | `/name <text>` | Renames the open chat |
 | `/verify` | Shows a safety number for each person in the chat, to compare with them out of band |
@@ -114,6 +116,7 @@ It does:
   return, in order. Clients reconnect on their own, and queued messages survive restarts.
 - An encrypted connection to the server: TLS 1.3, with the server's self-signed key
   pinned by the client, and sign-in bound to that TLS session.
+- Editing and deleting your own messages.
 - Safety numbers, so two people can check that nobody is sitting between them.
 - Typed events with relations instead of plain strings. Replies and reactions already use
   this, and it is what threads, edits and the rest will be built on.

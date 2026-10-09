@@ -27,8 +27,7 @@ struct Message {
     std::string reply_to;
     uint64_t ts = 0;
     bool mine = false;
-    bool sorted_by_seq = false;
-    uint64_t seq = 0;
+    bool edited = false;
 };
 
 struct Room {
@@ -135,10 +134,24 @@ private:
                 ++room.unread;
                 refresh_titles();
             }
+        } else if (kind == "event_updated") {
+            // An edit or a deletion changed an existing message.
+            const json& d = ev.at("data");
+            Room& room = room_for(d.value("room_id", ""));
+            std::string id = d.value("event_id", "");
+            for (auto& m : room.messages) {
+                if (m.event_id != id) continue;
+                m.status = d.value("status", m.status);
+                m.edited = d.value("edited", false);
+                m.body = m.status == "redacted" ? "[deleted]" : d["content"].value("body", m.body);
+            }
+            for (auto& [target, keys] : room.reactions)
+                for (auto& [key, ids] : keys) ids.erase(id);
         } else if (kind == "event_send_status") {
             Room& room = room_for(ev.value("room_id", ""));
             for (auto& m : room.messages)
-                if (m.event_id == ev.value("event_id", "")) m.status = ev.value("status", "");
+                if (m.event_id == ev.value("event_id", ""))
+                    m.status = ev.value("status", "") == "sent" ? "ok" : ev.value("status", "");
             if (ev.value("status", "") == "failed") notice_ = "send failed: " + ev.value("message", "");
         } else if (kind == "command_result") {
             on_result(ev);
@@ -197,6 +210,9 @@ private:
             std::string key = rel_key.empty() ? d["content"].value("key", "?") : rel_key;
             return room.reactions[rel_target][key].insert(id).second;
         }
+        // Edits and deletions are not lines of their own; they arrive again as
+        // event_updated for the message they change.
+        if (type == "m.edit" || type == "m.redaction") return false;
         for (auto& m : room.messages) {
             if (m.event_id != id) continue;
             m.status = d.value("status", m.status);
@@ -209,8 +225,10 @@ private:
         m.sender = d.value("sender_name", m.mine ? username_ : std::string("?"));
         m.status = d.value("status", "");
         m.ts = d.value("origin_ts", uint64_t{0});
+        m.edited = d.value("edited", false);
         if (rel_kind == "reply") m.reply_to = rel_target;
-        if (type == "m.text") m.body = d["content"].value("body", "");
+        if (m.status == "redacted") m.body = "[deleted]";
+        else if (type == "m.text") m.body = d["content"].value("body", "");
         else if (type == "m.room.name") m.body = "named this chat \"" + d["content"].value("name", "") + "\"";
         else if (m.status == "undecryptable") m.body = "[could not decrypt this message]";
         else if (d.contains("fallback_text")) m.body = d.value("fallback_text", "");
@@ -335,6 +353,15 @@ private:
                 chat_request_ = command(c);
             } else if (cmd == "/name" && !arg.empty() && room) {
                 command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
+            } else if ((cmd == "/edit" && !arg.empty() && room) || (cmd == "/delete" && room)) {
+                const Message* mine = nullptr;
+                for (auto it = room->messages.rbegin(); it != room->messages.rend() && !mine; ++it)
+                    if (it->mine && it->type == "m.text" && it->status == "ok") mine = &*it;
+                if (!mine) notice_ = "you have no sent message here to change";
+                else if (cmd == "/edit")
+                    command({{"cmd", "edit_event"}, {"room_id", room->id}, {"event_id", mine->event_id}, {"body", arg}});
+                else
+                    command({{"cmd", "delete_event"}, {"room_id", room->id}, {"event_id", mine->event_id}});
             } else if (cmd == "/verify" && room) {
                 command({{"cmd", "safety_numbers"}, {"room_id", room->id}});
             } else if ((cmd == "/verified" || cmd == "/unverified") && !arg.empty() && room) {
@@ -418,15 +445,20 @@ private:
             }
             std::string mark;
             if (m.mine) mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)" : "";
+            if (m.edited) mark += " (edited)";
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             Element body = paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
             lines.push_back(hbox({text(clock_time(m.ts) + " ") | dim, name, body | flex}));
             if (auto it = room->reactions.find(m.event_id); it != room->reactions.end()) {
                 std::string r = "        ";
-                for (const auto& [key, ids] : it->second)
+                bool any = false;
+                for (const auto& [key, ids] : it->second) {
+                    if (ids.empty()) continue;
+                    any = true;
                     r += "[" + key + (ids.size() > 1 ? " x" + std::to_string(ids.size()) : "") + "] ";
-                lines.push_back(text(r) | color(Color::Yellow));
+                }
+                if (any) lines.push_back(text(r) | color(Color::Yellow));
             }
         }
         if (lines.empty()) lines.push_back(text("No messages yet. Say hello.") | dim | center);
@@ -466,6 +498,7 @@ private:
                               text("/verify            show safety numbers for the people in this chat"),
                               text("/reply <text>      reply to the last message you received"),
                               text("/react <emoji>     react to the last message you received"),
+                              text("/edit <text>       change your last message        /delete  remove it"),
                               text("/connect host:port connect to a server"),
                               text("/quit              leave        Tab: switch between chats and typing"),
                           }) |

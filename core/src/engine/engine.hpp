@@ -67,6 +67,7 @@ private:
                      std::shared_ptr<wire::CreateRoomT> create, std::string room_name);
     void create_room(uint64_t req, wire::CreateRoomT create, std::string room_name);
     void apply_state(const EventRow& e);
+    void apply_relation(const EventRow& e);
     void cmd_send_event(uint64_t req, const json& cmd);
     void after_unlock();
 

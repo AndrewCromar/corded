@@ -108,7 +108,11 @@ struct Client {
             json ev = json::parse(text);
             corded_event_free(text);
             seen.push_back(ev);
-            if (match(ev)) return ev;
+            try {
+                if (match(ev)) return ev;
+            } catch (const std::exception& ex) {
+                FAIL("matcher threw '" << ex.what() << "' on event: " << ev.dump());
+            }
         }
         FAIL("timed out waiting for: " << what);
         return {};
@@ -247,6 +251,38 @@ TEST_CASE("two clients talk end to end through a real server") {
     REQUIRE(custom["data"]["content"]["result"] == 17);
     REQUIRE(custom["data"]["fallback_text"] == "rolled a 17");
 
+    // Edits and deletions: only the original sender can change a message.
+    {
+        json s = alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "a typo hre"}});
+        std::string id = s["data"]["event_id"];
+        bob.wait_message("a typo hre");
+        auto updated = [&](const json& e) { return e["event"] == "event_updated" && e["data"]["event_id"] == id; };
+
+        // Bob tries to rewrite Alice's message. Nothing changes for anyone.
+        REQUIRE(bob.cmd({{"cmd", "edit_event"}, {"room_id", room}, {"event_id", id}, {"body", "forged"}})["ok"] == true);
+        REQUIRE(bob.cmd({{"cmd", "delete_event"}, {"room_id", room}, {"event_id", id}})["ok"] == true);
+
+        REQUIRE(alice.cmd({{"cmd", "edit_event"}, {"room_id", room}, {"event_id", id}, {"body", "a typo here"}})["ok"] == true);
+        json edited = bob.wait("edit", updated);
+        REQUIRE(edited["data"]["content"]["body"] == "a typo here");
+        REQUIRE(edited["data"]["edited"] == true);
+        REQUIRE(edited["data"]["status"] == "ok");
+        for (const auto& e : alice.seen)
+            if (e["event"] == "event_updated" && e["data"]["event_id"] == id)
+                REQUIRE(e["data"]["content"]["body"] != "forged");
+
+        REQUIRE(alice.cmd({{"cmd", "delete_event"}, {"room_id", room}, {"event_id", id}})["ok"] == true);
+        json gone = bob.wait("deletion", [&](const json& e) { return updated(e) && e["data"]["status"] == "redacted"; });
+        REQUIRE(gone["data"]["content"].empty());
+        // It stays deleted in history too.
+        json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
+        for (const auto& e : tl["data"]["events"])
+            if (e["event_id"] == id) {
+                REQUIRE(e["status"] == "redacted");
+                REQUIRE(e["content"].empty());
+            }
+    }
+
     // Both people see the same safety number, and marking it checked sticks.
     {
         json a = alice.cmd({{"cmd", "safety_numbers"}, {"room_id", room}});
@@ -271,7 +307,8 @@ TEST_CASE("two clients talk end to end through a real server") {
         json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", room}, {"limit", 500}});
         std::vector<std::string> from_alice;
         for (const auto& e : tl["data"]["events"])
-            if (e["type"] == "m.text" && e["mine"] == false && e["content"]["body"].get<std::string>()[0] == 'a')
+            if (e["type"] == "m.text" && e["mine"] == false && e["status"] == "ok" &&
+                e["content"].value("body", "x")[0] == 'a' && e["content"].value("body", "").size() <= 3)
                 from_alice.push_back(e["content"]["body"]);
         REQUIRE(from_alice.size() == 20);
         for (int i = 0; i < 20; ++i) REQUIRE(from_alice[static_cast<size_t>(i)] == "a" + std::to_string(i));
@@ -309,7 +346,8 @@ TEST_CASE("two clients talk end to end through a real server") {
         alice.close();
         bob.close();
         server.stop();
-        for (const char* needle : {"hello bob, this is secret", "hi alice", "rolled a 17", "dice.roll", "m.text"}) {
+        for (const char* needle : {"hello bob, this is secret", "hi alice", "rolled a 17", "dice.roll", "m.text",
+                                   "a typo"}) {
             INFO("looking for: " << needle);
             REQUIRE_FALSE(tree_contains(tmp.path / "server", needle));
             REQUIRE_FALSE(tree_contains(tmp.path / "alice", needle));

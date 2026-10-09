@@ -22,13 +22,15 @@
  *   {"cmd":"safety_numbers","room_id":"..."}
  *   {"cmd":"set_verified","user_id":"...","verified":true}
  *   {"cmd":"send_text","room_id":"...","body":"hi","reply_to":"<event id, optional>"}
+ *   {"cmd":"edit_event","room_id":"...","event_id":"...","body":"new text"}
+ *   {"cmd":"delete_event","room_id":"...","event_id":"..."}
  *   {"cmd":"send_event","room_id":"...","type":"m.reaction","content":{...},
  *    "relation":{"kind":"annotation","target":"<event id>","key":"+1"}}
  *   {"cmd":"fetch_timeline","room_id":"...","limit":200}
  *
  * Events (JSON objects, "event" names the event):
  *   vault_state, connection_state, server_pinned, room_updated, event_received,
- *   event_send_status, command_result, warning
+ *   event_updated, event_send_status, command_result, warning
  */
 #ifndef CORDED_H
 #define CORDED_H

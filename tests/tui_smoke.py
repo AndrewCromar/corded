@@ -138,6 +138,14 @@ def main():
         alice.expect("[+1]")
         print("ok  reaction shows on the other side")
 
+        bob.type("this has a mistaek\r")
+        alice.expect("this has a mistaek")
+        bob.type("/edit this has no mistake\r")
+        alice.expect("this has no mistake (edited)")
+        bob.type("/delete\r")
+        alice.expect("[deleted]")
+        print("ok  edit and delete show on the other side")
+
         alice.type("/verify\r")
         alice.expect("Safety numbers")
         alice.type("/verified bob\r")

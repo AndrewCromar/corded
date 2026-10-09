@@ -44,8 +44,9 @@ struct EventRow {
     uint64_t origin_ts = 0, server_ts = 0;
     std::string state_key;
     std::string content;  // JSON
+    std::string edited_content;  // JSON of the latest accepted edit, if any
     std::string fallback_text;
-    std::string status;  // ok, pending, failed, undecryptable
+    std::string status;  // ok, pending, failed, undecryptable, redacted
     std::string rel_kind;
     Bytes rel_target;
     std::string rel_key;
@@ -99,6 +100,8 @@ public:
     void confirm_event(ByteView room_id, ByteView event_id, uint64_t seq, uint64_t server_ts);
     void set_event_status(ByteView room_id, ByteView event_id, const std::string& status);
     std::vector<EventRow> timeline(ByteView room_id, uint32_t limit);
+    void set_edited_content(ByteView room_id, ByteView event_id, const std::string& content);
+    void redact_event(ByteView room_id, ByteView event_id);  // erases the content for good
 
     void outbox_push(ByteView room_id, ByteView event_id);
     std::vector<OutboxRow> outbox();

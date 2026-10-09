@@ -41,7 +41,8 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 }
 
 bool known_type(const std::string& type) {
-    return type == "m.text" || type == "m.reaction" || type == "m.room.name";
+    return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
+           type == "m.redaction";
 }
 
 const char* conn_name(int c) {
@@ -168,8 +169,10 @@ Engine::json Engine::event_json(const EventRow& e) {
     j["mine"] = e.sender_user.size() == 32 &&
                 std::equal(e.sender_user.begin(), e.sender_user.end(),
                            vault_.identity().user.pk.begin());
-    j["content"] = json::parse(e.content, nullptr, false);
+    // An accepted edit replaces what is shown; the original stays in the vault.
+    j["content"] = json::parse(e.edited_content.empty() ? e.content : e.edited_content, nullptr, false);
     if (j["content"].is_discarded()) j["content"] = json::object();
+    j["edited"] = !e.edited_content.empty();
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
     if (!e.rel_kind.empty()) {
         j["relation"] = {{"kind", e.rel_kind}, {"target", b64(e.rel_target)}};
@@ -320,6 +323,15 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             if (cmd.contains("reply_to"))
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
             cmd_send_event(req, ev);
+        } else if (name == "edit_event") {
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.edit"},
+                                 {"content", {{"body", cmd.at("body")}}},
+                                 {"relation", {{"kind", "replace"}, {"target", cmd.at("event_id")}}}});
+        } else if (name == "delete_event") {
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.redaction"},
+                                 {"relation", {{"kind", "redact"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "send_event") {
             cmd_send_event(req, cmd);
         } else if (name == "fetch_timeline") {
@@ -436,6 +448,25 @@ void Engine::create_room(uint64_t req, wire::CreateRoomT create, std::string roo
     });
 }
 
+// Edits and deletions change another event. Both are honoured only when they
+// come from the person who sent the original. Deletion is a request: this
+// client erases its copy, but cannot make anyone else forget.
+void Engine::apply_relation(const EventRow& e) {
+    if (e.rel_target.empty() || (e.rel_kind != "replace" && e.rel_kind != "redact")) return;
+    auto target = vault_.event(e.room_id, e.rel_target);
+    if (!target || target->sender_user != e.sender_user) return;
+    if (target->status == "redacted" || target->status == "undecryptable") return;
+    if (e.rel_kind == "replace") {
+        if (e.type != "m.edit" || target->type != "m.text") return;
+        vault_.set_edited_content(e.room_id, e.rel_target, e.content);
+    } else {
+        if (e.type != "m.redaction") return;
+        vault_.redact_event(e.room_id, e.rel_target);
+    }
+    if (auto updated = vault_.event(e.room_id, e.rel_target))
+        emit({{"event", "event_updated"}, {"room_id", b64(e.room_id)}, {"data", event_json(*updated)}});
+}
+
 // Room state carried by events. Only the room name so far.
 void Engine::apply_state(const EventRow& e) {
     if (e.type != "m.room.name") return;
@@ -482,6 +513,7 @@ void Engine::cmd_send_event(uint64_t req, const json& cmd) {
         tx.commit();
     }
     apply_state(e);
+    apply_relation(e);
     emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     ok(req, {{"event_id", b64(e.event_id)}});
     pump_outbox();
@@ -850,7 +882,10 @@ void Engine::on_room_event(const wire::RoomEventT& ev) {
         vault_.advance_cursor(ev.room_id, ev.seq);
         tx.commit();
     }
-    if (decrypted) apply_state(row);
+    if (decrypted) {
+        apply_state(row);
+        apply_relation(row);
+    }
     emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
 }
 
