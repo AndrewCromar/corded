@@ -44,3 +44,53 @@ jobs:
         run: |
           extra=$(nm -D --defined-only build/dev/lib/libcorded.so | grep -v -E ' T corded_| A CORDED_0' || true)
           if [ -n "$extra" ]; then echo "unexpected exported symbols:"; echo "$extra"; exit 1; fi
+
+  windows:
+    name: Windows build
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-windows-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-windows-
+
+      - name: Fetch vcpkg
+        shell: cmd
+        run: |
+          git submodule update --init --depth 1 external/vcpkg
+          call external\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --preset windows || exit /b 1
+          cmake --build --preset windows || exit /b 1
+
+      - name: Unit tests
+        shell: cmd
+        run: build\windows\bin\corded_unit_tests.exe
+
+      - name: Smoke test the programs
+        shell: cmd
+        run: |
+          build\windows\bin\cordedd.exe --help
+          build\windows\bin\corded-tui.exe --help
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\corded-windows-x64 | Out-Null
+          Copy-Item build\windows\bin\cordedd.exe, build\windows\bin\corded-tui.exe, build\windows\bin\corded-cli.exe, build\windows\bin\corded.dll dist\corded-windows-x64\
+          Copy-Item packaging\README.txt, LICENSE dist\corded-windows-x64\
+          Compress-Archive -Path dist\corded-windows-x64 -DestinationPath corded-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corded-windows-x64
+          path: corded-windows-x64.zip

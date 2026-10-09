@@ -58,7 +58,11 @@ struct Room {
 std::string clock_time(uint64_t ms) {
     std::time_t t = static_cast<std::time_t>(ms / 1000);
     std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
     localtime_r(&t, &tm);
+#endif
     char buf[8];
     std::strftime(buf, sizeof buf, "%H:%M", &tm);
     return buf;

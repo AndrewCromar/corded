@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -56,6 +57,17 @@ inline std::string hex(ByteView v) {
     std::string out(v.size() * 2 + 1, '\0');
     sodium_bin2hex(out.data(), out.size(), v.data(), v.size());
     out.resize(v.size() * 2);
+    return out;
+}
+
+// Local calendar time; the thread-safe call is spelled differently on Windows.
+inline std::tm local_time(std::time_t t) {
+    std::tm out{};
+#ifdef _WIN32
+    localtime_s(&out, &t);
+#else
+    localtime_r(&t, &out);
+#endif
     return out;
 }
 

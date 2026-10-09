@@ -5,6 +5,12 @@ add_executable(corded_unit_tests unit/crypto_test.cpp)
 target_link_libraries(corded_unit_tests PRIVATE corded_core Catch2::Catch2WithMain)
 catch_discover_tests(corded_unit_tests)
 
+# The end-to-end and terminal tests start processes and pseudo-terminals the
+# POSIX way; they are not ported to Windows yet.
+if(WIN32)
+  return()
+endif()
+
 # End-to-end: starts a real cordedd and drives two engines through the C ABI.
 add_executable(corded_integration_tests integration/e2e_test.cpp)
 target_link_libraries(corded_integration_tests PRIVATE

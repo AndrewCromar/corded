@@ -12,6 +12,14 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
+if(WIN32)
+  # Keep windows.h from defining min/max macros, and target Windows 10 and later.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS)
+endif()
+if(MSVC)
+  add_compile_options(/utf-8 /bigobj)
+endif()
+
 option(CORDED_BUILD_TESTS "Build the test suite" ON)
 option(CORDED_PORTABLE "Link the C++ runtime statically so the programs run on other machines" ON)
 
@@ -54,8 +62,13 @@ add_library(corded_sqlite3mc STATIC ${sqlite3mc_SOURCE_DIR}/sqlite3mc_amalgamati
 target_include_directories(corded_sqlite3mc SYSTEM PUBLIC ${sqlite3mc_SOURCE_DIR})
 target_compile_definitions(corded_sqlite3mc PRIVATE
   SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION=1 SQLITE_DQS=0)
-target_compile_options(corded_sqlite3mc PRIVATE -O2 -w)
-target_link_libraries(corded_sqlite3mc PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+if(MSVC)
+  target_compile_options(corded_sqlite3mc PRIVATE /O2 /w)
+  target_link_libraries(corded_sqlite3mc PRIVATE Threads::Threads)
+else()
+  target_compile_options(corded_sqlite3mc PRIVATE -O2 -w)
+  target_link_libraries(corded_sqlite3mc PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+endif()
 
 # ---- wire schema ----------------------------------------------------------
 find_program(FLATC flatc
@@ -71,7 +84,11 @@ add_custom_target(corded_proto_gen DEPENDS ${CORDED_GENERATED_DIR}/corded_genera
 
 # ---- shared code ----------------------------------------------------------
 add_library(corded_warnings INTERFACE)
-target_compile_options(corded_warnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
+if(MSVC)
+  target_compile_options(corded_warnings INTERFACE /W3)
+else()
+  target_compile_options(corded_warnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
 
 # Keep C++ template statics out of libcorded's dynamic symbol table.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -102,9 +119,13 @@ add_library(corded SHARED core/src/abi/abi.cpp)
 target_compile_definitions(corded PRIVATE CORDED_BUILDING)
 target_include_directories(corded PUBLIC include)
 target_link_libraries(corded PRIVATE corded_core corded_warnings)
-target_link_options(corded PRIVATE -Wl,--exclude-libs,ALL
-  -Wl,--version-script=${CMAKE_SOURCE_DIR}/core/corded.map)
-set_target_properties(corded PROPERTIES LINK_DEPENDS ${CMAKE_SOURCE_DIR}/core/corded.map)
+# On Linux a linker script keeps everything but corded_* private. On Windows
+# only functions marked for export in corded.h leave the DLL anyway.
+if(UNIX AND NOT APPLE)
+  target_link_options(corded PRIVATE -Wl,--exclude-libs,ALL
+    -Wl,--version-script=${CMAKE_SOURCE_DIR}/core/corded.map)
+  set_target_properties(corded PROPERTIES LINK_DEPENDS ${CMAKE_SOURCE_DIR}/core/corded.map)
+endif()
 set_target_properties(corded PROPERTIES
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON VERSION ${PROJECT_VERSION} SOVERSION 0)
 

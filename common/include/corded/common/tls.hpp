@@ -14,7 +14,6 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
-#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -57,10 +56,9 @@ inline Bytes peer_fingerprint(Stream& stream) {
 }
 
 inline Bytes file_fingerprint(const std::string& cert_path) {
-    FILE* f = std::fopen(cert_path.c_str(), "r");
-    if (!f) throw std::runtime_error("cannot read " + cert_path);
-    X509* cert = PEM_read_X509(f, nullptr, nullptr, nullptr);
-    std::fclose(f);
+    std::unique_ptr<BIO, decltype(&BIO_free)> in(BIO_new_file(cert_path.c_str(), "r"), BIO_free);
+    if (!in) throw std::runtime_error("cannot read " + cert_path);
+    X509* cert = PEM_read_bio_X509(in.get(), nullptr, nullptr, nullptr);
     if (!cert) throw std::runtime_error("cannot parse " + cert_path);
     std::unique_ptr<X509, decltype(&X509_free)> guard(cert, X509_free);
     return fingerprint(cert);
@@ -88,18 +86,18 @@ inline void generate_self_signed(const std::string& cert_path, const std::string
     if (X509_sign(cert.get(), key.get(), EVP_sha256()) == 0)
         throw std::runtime_error("cannot sign the TLS certificate");
 
-    FILE* kf = std::fopen(key_path.c_str(), "w");
-    if (!kf) throw std::runtime_error("cannot write " + key_path);
+    {
+        std::unique_ptr<BIO, decltype(&BIO_free)> out(BIO_new_file(key_path.c_str(), "w"), BIO_free);
+        if (!out || PEM_write_bio_PrivateKey(out.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1)
+            throw std::runtime_error("cannot write " + key_path);
+    }
+    std::error_code ignored;
     std::filesystem::permissions(key_path,
                                  std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                 std::filesystem::perm_options::replace);
-    int ok = PEM_write_PrivateKey(kf, key.get(), nullptr, nullptr, 0, nullptr, nullptr);
-    std::fclose(kf);
-    FILE* cf = std::fopen(cert_path.c_str(), "w");
-    if (!cf) throw std::runtime_error("cannot write " + cert_path);
-    ok = ok && PEM_write_X509(cf, cert.get());
-    std::fclose(cf);
-    if (!ok) throw std::runtime_error("cannot write the TLS key and certificate");
+                                 std::filesystem::perm_options::replace, ignored);
+    std::unique_ptr<BIO, decltype(&BIO_free)> out(BIO_new_file(cert_path.c_str(), "w"), BIO_free);
+    if (!out || PEM_write_bio_X509(out.get(), cert.get()) != 1)
+        throw std::runtime_error("cannot write " + cert_path);
 }
 
 }  // namespace corded::tls

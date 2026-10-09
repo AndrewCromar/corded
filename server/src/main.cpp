@@ -13,8 +13,13 @@
 #include <deque>
 #include <cstring>
 #include <ctime>
+#include <cerrno>
 #include <filesystem>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include <map>
 #include <memory>
 #include <set>
@@ -380,8 +385,7 @@ public:
                 auto schedule = parse_schedule(options_.restart_schedule);
                 if (!schedule) continue;
                 std::time_t t = std::time(nullptr);
-                std::tm local{};
-                localtime_r(&t, &local);
+                std::tm local = local_time(t);
                 if (local.tm_hour != schedule->hour || local.tm_min != schedule->minute ||
                     (schedule->weekday >= 0 && local.tm_wday != schedule->weekday))
                     continue;
@@ -1283,7 +1287,11 @@ int main(int argc, char** argv) {
         // Everything is closed by now. Become a fresh copy of this program,
         // with the same arguments.
         spdlog::info("restarting now");
+#ifdef _WIN32
+        _execv(argv[0], argv);
+#else
         execv("/proc/self/exe", argv);
+#endif
         spdlog::critical("could not restart: {}", std::strerror(errno));
         return 1;
     }
