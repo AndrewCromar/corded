@@ -281,6 +281,32 @@ The stage structure stands. What moves:
 - **Feature roadmap.** Mentions gain roles; pins and moderation depend on permissions;
   everything else is unaffected.
 
+### A server-wide switch for encryption (proposed answer to D-28)
+
+The owner's reply to the history question was that the server admin could simply disable
+it server side. Read as: the owner of a server may turn end-to-end encryption off for
+that whole server.
+
+If confirmed, the design would be:
+
+- **A setting chosen by the owner**, `cordedd --no-e2ee` or a server setting changed by
+  someone with `MANAGE_SERVER`. Default stays encrypted.
+- **With it off**, channel messages are sent to the server readable (still inside TLS),
+  the server stores them, and newcomers get the full history, search can work on the
+  server, and large channels cost nothing extra. Direct messages can stay end-to-end
+  encrypted regardless, since they have no newcomers.
+- **Every client shows it plainly**, per server: a visible "not end-to-end encrypted:
+  the server's operator can read channels here" marker, at join time and in the header.
+  A client must never present an unencrypted server as if it were private.
+- **It cannot be flipped silently.** Changing the setting is announced to all members,
+  and turning encryption *off* on a server that had it on does not expose old messages
+  (the server never had their keys); it only affects messages from then on.
+- **What is lost** on such a server: the operator, anyone who compromises the server, and
+  anyone with access to its disk or backups can read channel content.
+
+This would make C8 (sender keys) and C9 (history for newcomers) unnecessary on servers
+that choose it, and still needed on servers that stay encrypted.
+
 ## 8. Open questions for the owner
 
 1. **History for new members (D-28).** Start-at-join, history sharing, or allow some

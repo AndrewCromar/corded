@@ -41,7 +41,7 @@ To change a decision, edit this file in the same pull request as the change.
 | D-25 | Multi-device in 1.0 | Recommended yes (feature milestone F7 before 1.0) | Open | 7 |
 | D-26 | Server administrator | Superseded by D-27: the administrator is now the server's owner, and other powers come from roles | Superseded | 2 |
 | D-27 | Community model | One server is one Discord-style community: channels, one owner, roles with permissions. Two communities means two servers. See [04-community-model.md](04-community-model.md) | Locked (owner requirement) | 1, 2, 3, 5 |
-| D-28 | History for new members | Messages sent before someone joined were not encrypted to them. Start-at-join (assumed), history sharing, or optional unencrypted channels | Open | 4 |
+| D-28 | History for new members | Messages sent before someone joined were not encrypted to them. The owner's reply, as understood: let the server's owner switch end-to-end encryption off for the whole server, so it keeps readable history like Slack or Discord. **Awaiting confirmation before it is built.** Until then, history starts when you join | Proposed, to be confirmed | 2, 4 |
 | D-29 | What the server sees of a community | Channel names, role names and the member list are visible to the server; message content is not | Proposed | 1 |
 | D-30 | Sender keys timing | Needed before communities grow, because channels have many members; moves earlier than D-04 implied | Proposed | 4 |
 | D-31 | Direct messages | Within one server only; cross-server direct messages would need federation | Proposed | 1 |
