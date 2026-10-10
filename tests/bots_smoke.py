@@ -385,7 +385,7 @@ def main():
 
         second = alice.say("#general", f"another one {clip}second")["event_id"]
         carol.say("#general", "@clips", reply_to=second)
-        got = wait_for("the video asked for in a reply", lambda m: m.thread == second, among=alice_files)
+        wait_for("the video asked for in a reply", lambda m: m.thread == second, among=alice_files)
         carol.say("#general", "@clips audio please", thread=second)
         got = wait_for("the sound asked for in the thread", lambda m: m.thread == second
                        and m.file["name"].endswith(".mp3") and "sound only" in m.body, among=alice_files)
@@ -434,7 +434,7 @@ def main():
         print("ok  video bot: help, a link alone in a direct chat, limits changed by the owner and by nobody else")
 
         # Adult sites: only in a channel marked NSFW or in a direct chat, unless a manager says otherwise.
-        made = alice.request({"cmd": "create_channel", "name": "after-dark"})
+        alice.request({"cmd": "create_channel", "name": "after-dark"})
         time.sleep(3)
         alice.request({"cmd": "set_channel_nsfw", "room_id": alice.room_id("#after-dark"), "nsfw": True})
         time.sleep(3)
@@ -460,7 +460,7 @@ def main():
         wait_for("a named site refused everywhere once adult is off", lambda item: item == ("clips", "That link is to "
                  "an adult site, and I don't fetch those on this server."))
         kept = json.load(open(os.path.join(tmp, "clips", "store.json")))
-        assert kept["adult"] == "off" and kept["adult_sites"] == ["somewhere.example"], (kept, made)
+        assert kept["adult"] == "off" and kept["adult_sites"] == ["somewhere.example"], kept
         assert len(alice_files) == before + 1
         earlier = len(dave_heard)
         dave.say(dave.dm("clips"), "adult anywhere")
@@ -472,18 +472,18 @@ def main():
         anywhere = carol.say("#general", f"@clips {clip}adult")["event_id"]
         wait_for("a video marked 18+ in an ordinary channel, now allowed", lambda m: m.thread == anywhere,
                  among=alice_files)
+        print("ok  video bot: adult sites and videos marked 18+ only where a channel is marked NSFW; a manager can "
+              "turn them off, allow them anywhere, and name more sites")
+
         # A link inside a thread gets a thread of its own under it, not a place in the thread it is in.
         inner = alice.say("#general", f"and one more, in here: {clip}nested", thread=second)["event_id"]
         dave.say("#general", "@clips", thread=inner)
-        got = wait_for("a video under a link that is itself in a thread", lambda m: m.thread == inner,
-                       among=alice_files)
+        wait_for("a video under a link that is itself in a thread", lambda m: m.thread == inner, among=alice_files)
         deeper = alice.say("#general", f"deeper still {clip}deeper", thread=inner)["event_id"]
         dave.say("#general", "@clips", reply_to=deeper, thread=inner)
         wait_for("and one level further down", lambda m: m.thread == deeper, among=alice_files)
         assert len([m for m in alice_files if m.thread == second]) == 2, "it posted into the thread the link was in"
         print("ok  video bot: a link in a thread gets its own thread under it, however deep")
-        print("ok  video bot: adult sites and videos marked 18+ only where a channel is marked NSFW; a manager can "
-              "turn them off, allow them anywhere, and name more sites")
 
         # The rest of the kit.
         assert mentioned_names("hi @Sage, mail me a@b.c or @sage-2") == {"sage", "sage-2"}

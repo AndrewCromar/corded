@@ -33,7 +33,7 @@ address.
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
 | `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Its character comes from a "soul" text file; see `soul.example.txt`. Answers when mentioned or in a direct chat. | By the test suite with a stand-in model; not yet with a real one |
-| `video_bot.py` | Mention it with a link to a video and it posts the file in a thread under the link. Fetched by the machine it runs on. | By the test suite with a stand-in for the downloader, and with real links on a test server |
+| `video_bot.py` | Mention it with a link to a video and it posts the file in a thread under the link. Fetched by the machine it runs on. | By the test suite with a stand-in for the downloader, with real links on a test server, and tried on a real server |
 | `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite, and tried on a real server |
 
 ```sh

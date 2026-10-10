@@ -7,8 +7,8 @@ The bot does nothing until it is mentioned. Then it looks for a link: in the
 message that mentions it, or else in the message that one replies to, or the
 message whose thread it is in. It fetches the video and posts the file in the
 thread under the message that holds the link, also when that message is itself
-in a thread. The word "audio" beside the
-mention gets the sound only. In a direct chat with the bot a link is enough.
+in a thread. The word "audio" beside the mention gets the sound only. In a
+direct chat with the bot a link is enough.
 
 All of the work happens on the machine the bot runs on. The fetching is done
 by yt-dlp, a program that knows well over a thousand video sites, and ffmpeg,
@@ -135,7 +135,6 @@ def main():
     parser.add_argument("--picture", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_bot.png"),
                         help="its profile picture, a small square image ('' for none)")
     parser.add_argument("--vault", default=None)
-    parser.add_argument("--allow-private", action="store_true", help=argparse.SUPPRESS)   # for trying it out
     args = parser.parse_args()
 
     yt_dlp = find_yt_dlp(args.yt_dlp)
@@ -188,6 +187,7 @@ def main():
                 "off": "nothing from adult sites, and no video a site marks 18+",
                 "anywhere": "adult sites in any channel"}[bot.store["adult"]]
 
+    title = f"## 🎬 {args.display_name}"
     asked = collections.defaultdict(collections.deque)   # user id -> when they last asked
     server = {"size": 0}   # the largest file the server takes, in MB, once known; 0 for not known or no limit
 
@@ -207,7 +207,7 @@ def main():
 
     def help_for(user_id):
         lines = [
-            "## 🎬 Clips",
+            title,
             "Mention me with a link to a video and I'll post the video file in a thread under it.",
             "",
             "**How to ask**",
@@ -263,8 +263,8 @@ def main():
                     + "\n\nTo change: `adult nsfw`, `adult off`, `adult anywhere`, `adult add example.com`, "
                       "`adult remove example.com`.")
         if words[0] == "limits" or len(words) == 1:
-            return "**Limits**\n" + limits_in_words() + "\n\nTo change one: `limit minutes 30`, `limit size 300`, " \
-                   "`limit quality 1080`."
+            return ("**Limits**\n" + limits_in_words() +
+                    "\n\nTo change one: `limit minutes 30`, `limit size 300`, `limit quality 1080`.")
         name = {"minutes": "minutes", "minute": "minutes", "length": "minutes", "size": "size", "mb": "size",
                 "quality": "quality", "height": "quality"}.get(words[1])
         number = words[2].rstrip("pmb") if len(words) > 2 else ""
@@ -369,7 +369,7 @@ def main():
                 bot.typing(message.room_id)
                 path, about = fetch(url, audio, folder, adult_ok)
                 bot.typing(message.room_id)
-                site = about.get("webpage_url_domain") or urllib.parse.urlsplit(url).hostname
+                site = about.get("webpage_url_domain") or site_of(url)
                 facts = [length_in_words(about.get("duration")) if about.get("duration") else "",
                          size_in_words(os.path.getsize(path)), site, "sound only" if audio else ""]
                 caption = f"**{(about.get('title') or 'Untitled')[:200]}**\n" + " · ".join(filter(None, facts))
@@ -421,7 +421,7 @@ def main():
         if adult_site(url) and not adult_allowed(message):
             bot.reply(message, adult_refusal("That link is to an adult site"))
             return
-        problem = None if args.allow_private else address_problem(url)
+        problem = address_problem(url)
         if problem:
             bot.reply(message, problem)
             return
@@ -442,7 +442,7 @@ def main():
         if message.direct:
             return help_for(message.sender_id)
         return "\n".join([
-            "## 🎬 Clips",
+            title,
             f"Mention me with a link to a video (`@{bot.username} https://…`), or in a reply to a message that has "
             "one, and I'll post the video file in a thread under it.",
             "",
