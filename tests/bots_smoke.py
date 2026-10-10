@@ -25,6 +25,29 @@ from corded_bot import Bot, Message, mentioned_names  # noqa: E402
 os.environ["CORDED_CLI"] = os.path.join(bin_dir, "corded-cli")
 
 
+# A stand-in for yt-dlp: it fetches nothing and answers by what the address says.
+FAKE_YT_DLP = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+url = args[-1]
+if "--dump-single-json" in args:
+    if "fail" in url:
+        sys.stderr.write("WARNING: something minor\nERROR: [generic] Unsupported URL: " + url + "\n")
+        sys.exit(1)
+    print(json.dumps({"title": "A Test Clip", "duration": 9000 if "long" in url else 75,
+                      "webpage_url_domain": "videos.example", "is_live": "live" in url,
+                      "_type": "playlist" if "list" in url else "video"}))
+    sys.exit(0)
+folder = args[args.index("--paths") + 1]
+audio = "--extract-audio" in args
+tall = not audio and "res:720" in args[args.index("--format-sort") + 1]
+path = os.path.join(folder, "A_Test_Clip [abc]." + ("mp3" if audio else "mp4"))
+with open(path, "wb") as f:
+    f.write(b"0" * (3000000 if "big" in url and tall else 5000))
+print(path)
+'''
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -178,7 +201,7 @@ def main():
               "has a name, a line about itself and a picture")
 
         # A birthday in the profile, without a year; and a bot that joins is not asked.
-        dave, dave_heard, _ = person("dave")
+        dave, dave_heard, dave_files = person("dave")
         dave.request({"cmd": "set_profile", "birthday": "05-17"})
         wait_for("a wish from the profile", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @dave!"))
         bot_process("command_bot.py", address, "latecomer", os.path.join(tmp, "latecomer"))
@@ -340,6 +363,74 @@ def main():
                  "🎂 **Happy birthday**, @carol! (22 today.)"), among=heard_where)
         print("ok  birthday bot: the channel is #general and the time 09:00 until a manager changes them, "
               "and the changes are kept")
+
+        # The video bot, with the stand-in above for yt-dlp and a limit of 1 MB.
+        fake = os.path.join(tmp, "fake-yt-dlp")
+        open(fake, "w").write(FAKE_YT_DLP)
+        os.chmod(fake, 0o755)
+        alice_files = []
+        alice.on_file(alice_files.append)
+        bot_process("video_bot.py", address, "--yt-dlp", fake, "--max-size", "1", "--vault", os.path.join(tmp, "clips"))
+        time.sleep(3)
+        clip = "http://93.184.216.34/"    # an address on the public web that needs no looking up
+        del heard[:]
+        alice.say("#general", f"nobody asked for this one: {clip}unasked")
+        asked_for = alice.say("#general", f"@clips {clip}watch.")["event_id"]
+        got = wait_for("the video", lambda m: m.sender == "clips", among=alice_files)
+        assert got.thread == asked_for and got.file["name"].endswith(".mp4") and got.file["size"] == 5000, got.raw
+        assert got.body == "**A Test Clip**\n1:15 · 0.0 MB · videos.example", got.body
+        time.sleep(2)
+        assert len(alice_files) == 1, "it fetched a link nobody mentioned it for"
+
+        second = alice.say("#general", f"another one {clip}second")["event_id"]
+        carol.say("#general", "@clips", reply_to=second)
+        got = wait_for("the video asked for in a reply", lambda m: m.thread == second, among=alice_files)
+        carol.say("#general", "@clips audio please", thread=second)
+        got = wait_for("the sound asked for in the thread", lambda m: m.thread == second
+                       and m.file["name"].endswith(".mp3") and "sound only" in m.body, among=alice_files)
+        carol._recent.clear()   # a message older than it remembers is read from its vault
+        assert carol.lookup(got.room_id, second).body == f"another one {clip}second"
+        big = carol.say("#general", f"@clips {clip}big")["event_id"]
+        got = wait_for("a smaller copy of one too large", lambda m: m.thread == big, among=alice_files)
+        assert got.file["size"] == 5000
+
+        for path, reason in (("long", "That video is 2:30:00 long, and my limit is 20 minutes."),
+                             ("list", "That is a list of videos."), ("live", "That is a live stream"),
+                             ("fail", f"The site would not give it to me: Unsupported URL: {clip}fail")):
+            alice.say("#general", f"@clips {clip}{path}")
+            wait_for(f"a refusal for {path}", lambda item: item[0] == "clips" and reason in item[1])
+        for private in ("http://127.0.0.1:9/video", "http://192.168.1.1/video", "http://[::1]/video"):
+            del heard[:]
+            alice.say("#general", f"@clips {private}")
+            wait_for(f"a refusal for {private}", lambda item: item == ("clips", "That address is on a private "
+                     "network. I only fetch from the public web."))
+        alice.say("#general", f"@clips {clip}sixth")
+        wait_for("the limit for one person", lambda item: item == ("clips", "That's 5 in 10 minutes. Give me a "
+                                                                   "little while."))
+        dave.say("#general", "@clips hello")
+        wait_for("a hint", lambda item: item[0] == "clips" and "I didn't find a link." in item[1])
+        print("ok  video bot: only when mentioned; with the link, in a reply and in a thread; sound only; a smaller "
+              "copy when too large; refusals with their reason; never a private address")
+
+        with_clips = dave.dm("clips")
+        dave.say(with_clips, "help")
+        said = wait_for("its help", lambda m: m.sender == "clips" and "## 🎬 Clips" in m.body, among=dave_heard)
+        assert "**20 minutes** and **1 MB**, at **720p**" in said.body and "manage bots" not in said.body
+        dave.say(with_clips, "limit minutes 300")
+        wait_for("a refusal to change the limits", lambda m: m.sender == "clips" and "**Manage bots**" in m.body,
+                 among=dave_heard)
+        dave.say(with_clips, f"{clip}straight")
+        wait_for("a video in a direct chat, without a mention", lambda m: m.sender == "clips" and m.direct,
+                 among=dave_files)
+        alice.say(alice.dm("clips"), "limit minutes 300")
+        wait_for("the limit changed", lambda item: item[0] == "clips" and "Done." in item[1]
+                 and "**300 minutes**" in item[1])
+        carol.say("#general", f"@clips {clip}long")
+        wait_for("a long video now let through", lambda m: m.sender == "clips" and "2:30:00" in m.body,
+                 among=alice_files)
+        assert json.load(open(os.path.join(tmp, "clips", "store.json")))["limits"] == {
+            "minutes": 300, "size": 1, "quality": 720}
+        print("ok  video bot: help, a link alone in a direct chat, limits changed by the owner and by nobody else")
 
         # The rest of the kit.
         assert mentioned_names("hi @Sage, mail me a@b.c or @sage-2") == {"sage", "sage-2"}

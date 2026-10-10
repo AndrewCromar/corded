@@ -5,7 +5,8 @@ and its own encrypted vault, and it reads and writes end-to-end encrypted
 messages exactly as a person's client does. The server cannot tell it from a
 person; its profile says "bot", so people see a BOT tag beside its name.
 
-Everything here is plain Python 3 with no packages to install. The bots drive
+Everything here is plain Python 3 with no packages to install (the video bot
+also needs the programs yt-dlp and ffmpeg on the machine). The bots drive
 `corded-cli`, the headless client that ships with Corded, so they contain no
 encryption code of their own.
 
@@ -32,6 +33,7 @@ address.
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
 | `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Its character comes from a "soul" text file; see `soul.example.txt`. Answers when mentioned or in a direct chat. | By the test suite with a stand-in model; not yet with a real one |
+| `video_bot.py` | Mention it with a link to a video and it posts the file in a thread under the link. Fetched by the machine it runs on. | By the test suite with a stand-in for the downloader, and with real links on a test server |
 | `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite, and tried on a real server |
 
 ```sh
@@ -41,6 +43,8 @@ curl -X POST localhost:8765/say -H 'X-Corded-Secret: some-long-word' -d '{"text"
 python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --model llama3.2
 
 python3 birthday_bot.py 127.0.0.1:7443
+
+python3 video_bot.py 127.0.0.1:7443 --yt-dlp /path/to/yt-dlp
 ```
 
 ### The birthday bot
@@ -93,6 +97,46 @@ the machine it runs on, and are sent nowhere.
 It shows as "Birthday Bot" with a cake for a picture (`birthday_bot.png`,
 drawn in `birthday_bot.svg`); `--display-name` and `--picture` change them.
 
+### The video bot
+
+Someone posts a link to a video. The bot does nothing until it is mentioned:
+
+- `@clips https://…`, with the link in the same message;
+- `@clips` in a reply to a message that has a link, or in the thread under it;
+- `@clips audio https://…` for the sound only.
+
+It then posts the video file in the thread under the message that holds the
+link, with its title, length and size. In a direct chat with the bot a link
+alone is enough. If it cannot, it says why in one line, in the same thread.
+
+**Everything is done by the machine the bot runs on.** The fetching is done by
+[yt-dlp](https://github.com/yt-dlp/yt-dlp/releases), a program that knows well
+over a thousand video sites, and by ffmpeg, which joins picture and sound.
+Both run on that machine, and the only other machine spoken to is the site
+the video is on; no service in between is used. Say where yt-dlp is with
+`--yt-dlp`, or put it beside `video_bot.py` or on `PATH`. Sites change, so
+when one stops working the first thing to try is a newer yt-dlp. Some sites
+want an account or forbid fetching, and then the bot says so.
+
+Limits, to begin with: 20 minutes, 200 MB, and 720p or the nearest below. A
+video too large at that quality is fetched at a lower one. The server's own
+limit for one file counts too, if it is smaller. One video for each request:
+no playlists and no live streams. Five requests in ten minutes for each
+person. `--channels '#clips,#general'` keeps it to those channels.
+
+The limits are kept in the bot's files. The server's owner, and anyone with a
+role that has the **Manage bots** permission, change them in a direct chat:
+`limits`, `limit minutes 30`, `limit size 300`, `limit quality 1080`.
+
+It only fetches from the public web: an address that leads to the machine it
+runs on, or to the network that machine is on, is refused. This is checked
+before fetching; a public page that sends the downloader on to a private
+address is not caught, so do not run the bot on a network with things that
+trust whoever is inside it. The file is deleted from the bot's machine once it
+is sent, and what is sent takes space on the server like any other file.
+
+What people fetch is theirs to answer for, and so is whether a site allows it.
+
 ## Write your own
 
 ```python
@@ -128,10 +172,11 @@ name) and `direct` (it was said in a direct chat with the bot).
 | `bot.say(room, text, reply_to=, thread=)` | Send text. A room is its id or its title, like `"#general"`. |
 | `bot.reply(message, text)` | Answer where the message was said. |
 | `bot.dm(username, text)` | Open the direct chat with someone and say something there. Returns the room id. |
-| `bot.react(message, emoji)` | |
+| `bot.react(message, emoji)` | `bot.unreact(message, what_react_returned)` takes it back. |
 | `bot.send_file(room, path, caption, reply_to=, thread=)` | `thread=` puts the file in the thread under that message. |
 | `bot.typing(room)` | Show "typing" for a few seconds while working. |
 | `bot.recall(event_id)` | A recent message by its id: what `reply_to` and `thread` point at. |
+| `bot.lookup(room_id, event_id)` | The same for a message of any age: from the bot's vault if it is older than it remembers. |
 | `bot.members()`, `bot.profile_of(user_id)`, `bot.rooms` | Who and what the bot can see. |
 | `bot.may(user_id)` | Whether someone may give the bot orders: the server's owner, and anyone whose roles have the Manage bots permission. `bot.may(user_id, "kick_members")` asks about another permission. |
 | `bot.work(fn, *args)` | Run a job after those already waiting, one at a time (one model, one graphics card). Returns how many are ahead. |

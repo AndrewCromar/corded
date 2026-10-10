@@ -22,6 +22,7 @@ Only the Python standard library is used.
 import base64
 import collections
 import json
+import mimetypes
 import os
 import queue
 import re
@@ -103,7 +104,8 @@ def find_cli():
 
 # Commands that put a message in a room, and what a few others answer with.
 _SENDS = {"send_text": "m.text", "send_file": "m.file", "add_task": "m.task", "send_event": None}
-_ANSWERS = {"start_chat": "room", "get_profile": "profile", "member_list": "members", "fetch_timeline": "events"}
+_ANSWERS = {"start_chat": "room", "get_profile": "profile", "member_list": "members", "fetch_timeline": "events",
+            "fetch_thread": "root"}
 
 
 class Bot:
@@ -219,14 +221,23 @@ class Bot:
         return room["room_id"]
 
     def react(self, message, emoji):
+        """Puts an emoji under a message. What it returns can be given to unreact."""
         return self.request({"cmd": "send_event", "room_id": message.room_id, "type": "m.reaction",
                              "content": {"key": emoji},
                              "relation": {"kind": "annotation", "target": message.event_id, "key": emoji}})
 
+    def unreact(self, message, reaction):
+        """Takes back a reaction this bot put under a message: reaction is what react returned."""
+        if reaction and reaction.get("event_id"):
+            with self._lock:   # not waited for: the core answers a removal without naming it
+                self._send({"cmd": "delete_event", "room_id": message.room_id, "event_id": reaction["event_id"]})
+
     def send_file(self, room, path, caption="", reply_to=None, thread=None):
         """Sends a file to a room; thread is the id of the message whose
         thread it goes under."""
-        cmd = {"cmd": "send_file", "room_id": self.room_id(room), "path": os.path.abspath(path), "caption": caption}
+        cmd = {"cmd": "send_file", "room_id": self.room_id(room), "path": os.path.abspath(path), "caption": caption,
+               # What kind of file it is, so that the apps show a picture or play a video.
+               "mime": mimetypes.guess_type(path)[0] or "application/octet-stream"}
         if reply_to:
             cmd["reply_to"] = reply_to
         if thread:
@@ -285,6 +296,18 @@ class Bot:
         """A recent message by its id (None if it is older than the bot
         remembers): what message.reply_to and message.thread point at."""
         return self._recent.get(event_id)
+
+    def lookup(self, room_id, event_id):
+        """A message by its id, however old: from what the bot remembers, or
+        else from its vault. None if the bot never received it."""
+        found = self._recent.get(event_id)
+        if found or not event_id:
+            return found
+        try:
+            data = self.request({"cmd": "fetch_thread", "room_id": room_id, "event_id": event_id})["root"]
+        except (RuntimeError, KeyError):
+            return None
+        return Message(data, me=self.username, direct=self.rooms.get(room_id, {}).get("kind") == "direct")
 
     def work(self, fn, *args):
         """Runs fn(*args) after the jobs already waiting, one at a time: for
