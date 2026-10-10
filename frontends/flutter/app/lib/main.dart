@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'platform.dart';
 import 'app_state.dart';
 import 'screens/add_server.dart';
+import 'screens/catch_up.dart';
 import 'screens/chat.dart';
 import 'screens/home.dart';
 import 'screens/settings.dart';
@@ -66,6 +67,9 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
     state.onDevScreen = (screen) {
       if (screen == 'settings') {
         _navigator.currentState?.push(MaterialPageRoute(builder: (_) => SettingsScreen(state: state)));
+      }
+      if (screen == 'catchup') {
+        _navigator.currentState?.push(MaterialPageRoute(builder: (_) => CatchUpScreen(state: state)));
       }
     };
     final shot = Platform.environment['CORDED_SCREENSHOT'];

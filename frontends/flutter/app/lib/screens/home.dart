@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import 'add_server.dart';
+import 'catch_up.dart';
 import 'chat.dart';
 import 'common.dart';
 import 'group.dart';
@@ -89,6 +90,8 @@ class HomeScreen extends StatelessWidget {
     final loose = channels.where((r) => !known.contains(r.section)).toList();
     final archived = rooms.where((r) => r.kind == 'channel' && r.archived).toList();
     final others = rooms.where((r) => r.kind != 'channel').toList();
+    final unreadChats = rooms.where((r) => r.unread > 0).length;
+    final unreadTotal = rooms.fold<int>(0, (sum, r) => sum + r.unread);
 
     // In a direct chat, how present the other person is.
     String? statusIn(Room r) {
@@ -247,6 +250,16 @@ class HomeScreen extends StatelessWidget {
           ),
         Expanded(
           child: ListView(children: [
+            // Everything unread, gathered in one place to go through.
+            if (unreadTotal > 0)
+              ListTile(
+                leading: const Icon(Icons.mark_chat_unread_outlined),
+                title: const Text('Catch up', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('$unreadChats chat${unreadChats == 1 ? '' : 's'} with something new'),
+                trailing: Badge(label: Text('$unreadTotal')),
+                onTap: () =>
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => CatchUpScreen(state: state))),
+              ),
             if (pinned.isNotEmpty) heading('Pinned'),
             ...pinned.map(tile),
             // The server's own sections, in its order; then the channels in none.

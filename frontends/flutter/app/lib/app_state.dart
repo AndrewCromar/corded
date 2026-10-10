@@ -187,7 +187,7 @@ class AppState extends ChangeNotifier {
       }
       // CORDED_DEV_SCREEN=settings: show that screen, for a picture of it.
       if (env['CORDED_DEV_SCREEN'] != null) {
-        await Future<void>.delayed(const Duration(seconds: 3));
+        await Future<void>.delayed(Duration(seconds: int.tryParse(env['CORDED_DEV_WAIT'] ?? '') ?? 3));
         onDevScreen?.call(env['CORDED_DEV_SCREEN']!);
       }
       final open = env['CORDED_DEV_OPEN'];
