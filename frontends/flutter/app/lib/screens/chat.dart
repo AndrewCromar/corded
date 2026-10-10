@@ -4,7 +4,10 @@ import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
@@ -53,6 +56,7 @@ class _ChatScreenState extends State<ChatScreen> {
   LinkPreview? _draftPreview;
   String _draftLink = '', _dismissedLink = '';
   Timer? _previewTimer;
+  Future<LinkPreview?>? _previewLookup; // the page being fetched right now, if any
   final _cards = <String, LinkPreview?>{}; // message id -> its card, read once
 
   CordedStore get _store => widget.state.store;
@@ -543,7 +547,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
     final editing = _editing, replyingTo = _replyingTo;
     // The card goes along if it is for the link that is still in the text.
-    final card = _draftPreview != null && firstLink(text) == _draftPreview!.url ? _draftPreview : null;
+    // Sent before the page answered: give it a moment, so a quick thumb does
+    // not cost the message its card.
+    final link = firstLink(text);
+    var card = _draftPreview != null && link == _draftPreview!.url ? _draftPreview : null;
+    final wanted = editing == null && widget.state.linkPreviews && link != null && link != _dismissedLink;
+    final waiting = wanted && card == null && link == _draftLink ? (_previewLookup ?? _lookUp(link)) : null;
     _input.clear();
     _previewTimer?.cancel();
     _draftLink = '';
@@ -552,12 +561,16 @@ class _ChatScreenState extends State<ChatScreen> {
       _editing = null;
       _replyingTo = null;
       _draftPreview = null;
+      _previewLookup = null;
     });
     await attempt(context, () async {
       if (editing != null) {
         await widget.state.engine
             .command({'cmd': 'edit_event', 'room_id': _room, 'event_id': editing.id, 'body': text});
       } else {
+        if (waiting != null) {
+          card = await waiting.timeout(const Duration(seconds: 4), onTimeout: () => null);
+        }
         // A message has one relation. In a thread it belongs to the thread,
         // so what it replies to travels in its content instead.
         await widget.state.engine.command({
@@ -567,7 +580,7 @@ class _ChatScreenState extends State<ChatScreen> {
           'content': {
             'body': text,
             if (_thread != null && replyingTo != null) 'reply_to': replyingTo.id,
-            if (card != null) 'preview': card.toJson(),
+            if (card != null) 'preview': card!.toJson(),
           },
           if (_thread != null)
             'relation': {'kind': 'thread', 'target': _thread}
@@ -584,12 +597,27 @@ class _ChatScreenState extends State<ChatScreen> {
     if (link == _draftLink) return;
     _draftLink = link;
     _previewTimer?.cancel();
-    if (_draftPreview != null) setState(() => _draftPreview = null);
+    setState(() {
+      _draftPreview = null;
+      _previewLookup = null;
+    });
     if (link.isEmpty || link == _dismissedLink) return;
-    _previewTimer = Timer(const Duration(milliseconds: 700), () async {
-      final preview = await fetchPreview(link);
+    // A pasted link is whole at once; a typed one may still be growing.
+    _previewTimer = Timer(const Duration(milliseconds: 400), () => _lookUp(link));
+  }
+
+  Future<LinkPreview?> _lookUp(String link) {
+    final lookup = fetchPreview(link);
+    setState(() => _previewLookup = lookup);
+    return lookup.then((preview) {
       // Only if this is still the link in the box.
-      if (mounted && preview != null && _draftLink == link) setState(() => _draftPreview = preview);
+      if (mounted && _draftLink == link && identical(_previewLookup, lookup)) {
+        setState(() {
+          _draftPreview = preview;
+          _previewLookup = null;
+        });
+      }
+      return preview;
     });
   }
 
@@ -687,6 +715,28 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.videocam_outlined),
+            title: const Text('Video from your gallery'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _sendPicked(() async {
+                final video = await ImagePicker().pickVideo(source: ImageSource.gallery);
+                return video == null ? null : (path: video.path, name: video.name);
+              });
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.attach_file),
+            title: const Text('A file'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _sendPicked(() async {
+                final picked = await openFile();
+                return picked == null ? null : (path: picked.path, name: picked.name);
+              });
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.poll_outlined),
             title: const Text('Start a poll'),
             onTap: () {
@@ -697,6 +747,89 @@ class _ChatScreenState extends State<ChatScreen> {
         ]),
       ),
     );
+  }
+
+  static const _kinds = {
+    'mp4': 'video/mp4',
+    'mov': 'video/quicktime',
+    'webm': 'video/webm',
+    'mkv': 'video/x-matroska',
+    '3gp': 'video/3gpp',
+    'mp3': 'audio/mpeg',
+    'm4a': 'audio/mp4',
+    'ogg': 'audio/ogg',
+    'wav': 'audio/wav',
+    'pdf': 'application/pdf',
+    'txt': 'text/plain',
+    'zip': 'application/zip',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'webp': 'image/webp',
+  }; // by the ending of the name; anything else is just "a file"
+
+  static String _kindOf(String name) =>
+      _kinds[name.contains('.') ? name.split('.').last.toLowerCase() : ''] ?? 'application/octet-stream';
+
+  // A video or any other file: encrypted here and uploaded as it is, with
+  // what is typed in the message box as its caption.
+  Future<void> _sendPicked(Future<({String path, String name})?> Function() pick) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await pick();
+      if (file == null) return;
+      if (mounted) setState(() => _sendingFile = true);
+      final caption = _input.text.trim();
+      final replyingTo = _replyingTo;
+      await widget.state.engine.command({
+        'cmd': 'send_file',
+        'room_id': _room,
+        'path': file.path,
+        'name': file.name,
+        'mime': _kindOf(file.name),
+        'caption': caption,
+        if (_thread != null) 'thread': _thread,
+        if (replyingTo != null) 'reply_to': replyingTo.id,
+      });
+      if (_input.text.trim() == caption) _input.clear();
+      if (mounted) setState(() => _replyingTo = null);
+    } on CordedError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('That file could not be opened.')));
+    } finally {
+      if (mounted) setState(() => _sendingFile = false);
+    }
+  }
+
+  final _opening = <String>{}; // files being fetched right now
+
+  // Fetches and decrypts a file, then hands it to whatever app on the phone
+  // opens that kind of file: the video player, a PDF reader and so on.
+  Future<void> _openFile(Message m) async {
+    if (!_opening.add(m.id)) return;
+    setState(() {});
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final folder = '${(await getTemporaryDirectory()).path}/files';
+      final r = await widget.state.engine
+          .command({'cmd': 'download_file', 'room_id': _room, 'event_id': m.id, 'dir': folder});
+      final opened = await OpenFilex.open(r['path'] as String, type: m.fileMime.isEmpty ? null : m.fileMime);
+      if (opened.type != ResultType.done) {
+        messenger.showSnackBar(SnackBar(
+            content: Text(opened.type == ResultType.noAppToOpen
+                ? 'No app on this phone opens ${m.fileName}.'
+                : 'The file could not be opened.')));
+      }
+    } on CordedError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The file could not be opened.')));
+    } finally {
+      _opening.remove(m.id);
+      if (mounted) setState(() {});
+    }
   }
 
   // The photo is made smaller, encrypted on this device and uploaded; what is
@@ -770,18 +903,25 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.insert_drive_file_outlined, color: foreground),
-      const SizedBox(width: 8),
-      Flexible(
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(m.fileName, style: theme.textTheme.bodyLarge?.copyWith(color: foreground)),
-          Text('${_sizeWords(m.fileSize)} · save it from the desktop client for now',
-              style: theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.7))),
-        ]),
-      ),
-    ]);
+    final video = m.fileMime.startsWith('video/');
+    return InkWell(
+      onTap: () => _openFile(m),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _opening.contains(m.id)
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+            : Icon(video ? Icons.play_circle_outline : Icons.insert_drive_file_outlined,
+                color: foreground, size: video ? 32 : 24),
+        const SizedBox(width: 8),
+        Flexible(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(m.fileName, style: theme.textTheme.bodyLarge?.copyWith(color: foreground)),
+            Text('${_sizeWords(m.fileSize)} · tap to ${video ? 'play' : 'open'}',
+                style: theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.7))),
+          ]),
+        ),
+      ]),
+    );
   }
 
   // Reacting again with the same emoji takes the reaction back.
@@ -1318,6 +1458,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                 ],
               ),
+            ),
+          if (_previewLookup != null && _draftPreview == null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Row(children: [
+                const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 8),
+                Text('Looking up the link for a preview...', style: theme.textTheme.labelMedium),
+              ]),
             ),
           if (_draftPreview != null)
             Padding(

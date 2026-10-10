@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
@@ -22,10 +24,23 @@ class _MembersScreenState extends State<MembersScreen> {
 
   ServerInfo get _server => widget.state.server!;
 
+  StreamSubscription<void>? _sub;
+
   @override
   void initState() {
     super.initState();
     _load();
+    // Pictures are looked up as they are first asked for and arrive a moment
+    // later; presence changes too. Either way the list is drawn again.
+    _sub = widget.state.store.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 
   Future<Map<String, dynamic>> _command(Map<String, dynamic> cmd) =>
