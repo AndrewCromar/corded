@@ -27,5 +27,9 @@ if(CORDED_BUILD_TUI)
     add_test(NAME tui_smoke
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_smoke.py ${CMAKE_BINARY_DIR}/bin)
     set_tests_properties(tui_smoke PROPERTIES TIMEOUT 180)
+    # The example bots, run against a throwaway server.
+    add_test(NAME bots_smoke
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/bots_smoke.py ${CMAKE_BINARY_DIR}/bin)
+    set_tests_properties(bots_smoke PROPERTIES TIMEOUT 180)
   endif()
 endif()
