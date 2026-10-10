@@ -169,6 +169,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    // Leaving the channel covers it again; leaving one of its threads does not.
+    if (_thread == null && widget.state.uncoveredRoom == _room) widget.state.uncoveredRoom = null;
     // Back to whatever is underneath: nothing, or the chat this thread belongs to.
     if (widget.state.viewingRoom == _room && widget.state.viewingThread == _thread) {
       widget.state.viewingThread = null;
@@ -1515,7 +1517,12 @@ class _ChatScreenState extends State<ChatScreen> {
               FilledButton(onPressed: () => Navigator.maybePop(context), child: const Text('Go back')),
               const SizedBox(height: 8),
               TextButton(
-                  onPressed: () => setState(() => _uncovered = true), child: const Text('Open anyway')),
+                  onPressed: () {
+                    // Its threads are part of the channel: they do not ask again.
+                    widget.state.uncoveredRoom = _room;
+                    setState(() => _uncovered = true);
+                  },
+                  child: const Text('Open anyway')),
             ]),
           ),
         ),
@@ -1527,7 +1534,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final room = _store.rooms[_room];
-    if (room != null && room.nsfw && !_uncovered) return _nsfwGate(room);
+    final covered = room != null && room.nsfw && !_uncovered && widget.state.uncoveredRoom != _room;
+    if (covered) return _nsfwGate(room);
     if (room != null && room.isTaskList && _thread == null) {
       return TasksView(state: widget.state, room: room, tasks: [
         for (final m in _shown)

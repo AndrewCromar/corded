@@ -287,6 +287,9 @@ class AppState extends ChangeNotifier {
   /// The chat (and thread) on screen right now, so that a message arriving
   /// there is not announced. Set by the chat screen.
   String? viewingRoom;
+
+  /// The hidden channel the person chose to open, while they are in it.
+  String? uncoveredRoom;
   String? viewingThread;
   bool _onScreen = true;
   bool _doNotDisturb = false;
