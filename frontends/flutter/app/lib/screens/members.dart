@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import 'chat.dart';
 import 'common.dart';
+import 'presence.dart';
 
 /// Everyone on the server. Those with the permission can manage them here.
 class MembersScreen extends StatefulWidget {
@@ -227,10 +228,11 @@ class _MembersScreenState extends State<MembersScreen> {
                   child: ListView(children: [
                     for (final m in members)
                       ListTile(
-                        leading: CircleAvatar(
-                            child: Text(m.displayName.isEmpty ? '?' : m.displayName[0].toUpperCase())),
+                        leading: PresenceAvatar(
+                            name: m.displayName, status: widget.state.store.presence(_server.id, m.userId)),
                         title: Text(m.me ? '${m.displayName} (you)' : m.displayName),
                         subtitle: Text([
+                          presenceLook(widget.state.store.presence(_server.id, m.userId)).label,
                           '@${m.username}',
                           if (m.isOwner) 'owner' else if (m.isAdmin) 'administrator',
                           ...m.roles,

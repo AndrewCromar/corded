@@ -6,6 +6,7 @@ import 'add_server.dart';
 import 'chat.dart';
 import 'common.dart';
 import 'members.dart';
+import 'presence.dart';
 import 'settings.dart';
 
 /// The chats of one server, with a drawer for moving between servers.
@@ -68,12 +69,20 @@ class HomeScreen extends StatelessWidget {
     final channels = rooms.where((r) => r.kind == 'channel').toList();
     final others = rooms.where((r) => r.kind != 'channel').toList();
 
+    // In a direct chat, how present the other person is.
+    String? statusIn(Room r) {
+      if (r.kind != 'direct') return null;
+      final other = r.members.where((m) => !m.me).firstOrNull;
+      return other == null ? null : state.store.presence(r.serverId, other.userId);
+    }
+
     Widget tile(Room r) => ListTile(
-          leading: Icon(r.kind == 'channel'
-              ? Icons.tag
-              : r.kind == 'group'
-                  ? Icons.group_outlined
-                  : Icons.person_outline),
+          leading: r.kind == 'direct'
+              ? Stack(clipBehavior: Clip.none, children: [
+                  const Icon(Icons.person_outline),
+                  Positioned(right: -4, bottom: -2, child: PresenceDot(statusIn(r) ?? 'offline', size: 11)),
+                ])
+              : Icon(r.kind == 'channel' ? Icons.tag : Icons.group_outlined),
           title: Text(r.kind == 'channel' ? r.title.replaceFirst('#', '') : r.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

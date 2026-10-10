@@ -28,6 +28,7 @@ class CordedStore {
   final Map<String, Map<String, Map<String, String>>> _myReactions = {}; // room -> message -> key -> my reaction's id
   final Map<String, Map<String, DateTime>> _typing = {}; // room -> name -> until
   final Map<String, Map<String, String>> _readUpTo = {}; // room -> name -> message id
+  final Map<int, Map<String, String>> _presence = {}; // server -> person -> online, away or dnd
   final Set<String> _loaded = {};
   final Map<String, String?> _oldest = {}; // room -> where the next older page starts; null = none left
   String notice = '';
@@ -119,6 +120,9 @@ class CordedStore {
       });
     }
   }
+
+  /// How present someone is on a server: online, away, dnd or offline.
+  String presence(int serverId, String userId) => _presence[serverId]?[userId] ?? 'offline';
 
   /// Display names of those typing in a room right now.
   List<String> typing(String roomId) {
@@ -286,6 +290,16 @@ class CordedStore {
         _applyServer(e);
       case 'room_updated':
         _applyRoom((e['room'] as Map).cast<String, dynamic>());
+      case 'presence':
+        final server = (e['server_id'] as num?)?.toInt() ?? 0;
+        final status = '${e['status']}';
+        if (status == 'offline') {
+          _presence[server]?.remove(e['user_id']);
+        } else {
+          (_presence[server] ??= {})['${e['user_id']}'] = status;
+        }
+      case 'presence_reset':
+        _presence.remove((e['server_id'] as num?)?.toInt() ?? 0);
       case 'server_removed':
         final id = (e['server_id'] as num?)?.toInt();
         servers.remove(id);

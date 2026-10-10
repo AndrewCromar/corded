@@ -111,7 +111,15 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('background_mode', on);
     if (on) {
       // The task takes a moment to start listening.
-      Future<void>.delayed(const Duration(seconds: 2), () => _shareRoomTitles(force: true));
+      Future<void>.delayed(const Duration(seconds: 2), () async {
+        _shareRoomTitles(force: true);
+        try {
+          final s = await engine.command({'cmd': 'client_settings'});
+          setDoNotDisturb((s['client_settings'] as Map?)?['presence'] == 'dnd');
+        } catch (_) {
+          // Notifications stay on.
+        }
+      });
     }
     notifyListeners();
     return null;
@@ -149,8 +157,17 @@ class AppState extends ChangeNotifier {
     onOpenChat!(room.id, target['thread'] as String?);
   }
 
-  /// Tells the background task whether someone is looking at the app.
-  void setOnScreen(bool onScreen) => Background.tell(onScreen ? 'on_screen' : 'off_screen');
+  /// Tells the background task whether someone is looking at the app, and the
+  /// core too, so that others see this person as online or away.
+  void setOnScreen(bool onScreen) {
+    Background.tell(onScreen ? 'on_screen' : 'off_screen');
+    if (ready && store.vaultState == 'unlocked') {
+      engine.command({'cmd': 'set_active', 'active': onScreen}).catchError((_) => <String, dynamic>{});
+    }
+  }
+
+  /// With do not disturb on, this phone shows no message notifications.
+  void setDoNotDisturb(bool on) => Background.tell(on ? 'dnd_on' : 'dnd_off');
 
   Future<void> start() async {
     Background.init();

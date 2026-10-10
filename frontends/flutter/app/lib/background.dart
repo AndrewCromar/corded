@@ -44,6 +44,7 @@ void backgroundEntry() {
 class _EventReader extends TaskHandler {
   int _engine = 0;
   bool _onScreen = true;
+  bool _doNotDisturb = false;
   final _roomTitles = <String, String>{};
   final _notifications = FlutterLocalNotificationsPlugin();
   bool _ready = false;
@@ -75,7 +76,7 @@ class _EventReader extends TaskHandler {
         final room = (event['room'] as Map?) ?? const {};
         _roomTitles['${room['room_id']}'] = '${room['title']}';
       }
-      if (_onScreen || !_ready) continue;
+      if (_onScreen || _doNotDisturb || !_ready) continue;
       final n = notificationFor(event, _roomTitles);
       if (n == null) continue;
       _notifications.show(
@@ -101,6 +102,8 @@ class _EventReader extends TaskHandler {
       if (_ready) _notifications.cancelAll();
     }
     if (data == 'off_screen') _onScreen = false;
+    if (data == 'dnd_on') _doNotDisturb = true;
+    if (data == 'dnd_off') _doNotDisturb = false;
     if (data is Map && data['engine'] is int) _engine = data['engine'] as int;
     // Names of the chats, for the titles of notifications.
     if (data is Map && data['rooms'] is Map) {

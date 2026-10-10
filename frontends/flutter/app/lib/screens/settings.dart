@@ -60,6 +60,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  static const _statuses = {
+    'auto': ('Automatic', 'Online while you use the app, away when you do not'),
+    'dnd': ('Do not disturb', 'Others see you are busy, and this phone shows no message notifications'),
+    'invisible': ('Invisible', 'Others see you as offline; you still get everything'),
+  };
+
+  Future<void> _status() async {
+    final current = '${_settings['presence'] ?? 'auto'}';
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Status'),
+        children: [
+          for (final s in _statuses.entries)
+            ListTile(
+              leading: Icon(s.key == current ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+              title: Text(s.value.$1),
+              subtitle: Text(s.value.$2),
+              onTap: () => Navigator.pop(context, s.key),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || picked == current) return;
+    await _set({'cmd': 'set_presence', 'status': picked});
+    widget.state.setDoNotDisturb(picked == 'dnd');
+  }
+
   Future<void> _setFingerprint(bool on) async {
     final messenger = ScaffoldMessenger.of(context);
     if (!on) {
@@ -181,6 +209,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           leading: const Icon(Icons.person_outline),
           title: Text(widget.state.store.username),
           subtitle: const Text('Your username. It is the same on every server.'),
+        ),
+        ListTile(
+          leading: const Icon(Icons.circle_outlined),
+          title: const Text('Status'),
+          subtitle: Text(_statuses['${_settings['presence'] ?? 'auto'}']?.$1 ?? 'Automatic'),
+          onTap: _status,
         ),
         ListTile(
           leading: const Icon(Icons.badge_outlined),

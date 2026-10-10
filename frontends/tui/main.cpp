@@ -270,6 +270,8 @@ private:
             if (current_server_ == 0) current_server_ = sid;
             apply_current();
             refresh_titles();
+        } else if (kind == "presence" || kind == "presence_reset") {
+            if (members_selected()) command({{"cmd", "member_list"}});  // the page shows who is around
         } else if (kind == "server_removed") {
             int64_t gone = ev.value("server_id", int64_t{0});
             servers_.erase(gone);
@@ -920,6 +922,13 @@ private:
                 if (settings_selected()) load_settings_page();
             } else if (cmd == "/reboot") {
                 command({{"cmd", "restart_server"}});
+            } else if (cmd == "/presence" && (arg == "auto" || arg == "dnd" || arg == "invisible")) {
+                command({{"cmd", "set_presence"}, {"status", arg}});
+                notice_ = arg == "auto" ? "others see you as online while this is open"
+                          : arg == "dnd" ? "others see you as not to be disturbed"
+                                         : "others see you as offline";
+            } else if (cmd == "/presence") {
+                notice_ = "/presence auto | dnd | invisible";
             } else if (cmd == "/status") {
                 command({{"cmd", "server_status"}});
             } else if (cmd == "/members") {
@@ -1092,6 +1101,7 @@ private:
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/receipts on|off   whether others see what you have read"),
+                              text("/presence auto|dnd|invisible   how others see you (the members page shows everyone)"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
@@ -1112,8 +1122,13 @@ private:
             std::string shown = m.value("display_name", username);
             std::string roles;
             for (const auto& r : m.value("roles", json::array())) roles += " [" + r.get<std::string>() + "]";
+            std::string status = m.value("status", "offline");
+            Color dot = status == "online" ? Color::Green : status == "away" ? Color::Yellow
+                        : status == "dnd" ? Color::Red : Color::GrayDark;
             rows.push_back(hbox({
+                text(status == "offline" ? "o " : "* ") | color(dot),
                 text(shown) | bold | color(m.value("me", false) ? Color::Cyan : Color::Green),
+                text(status == "dnd" ? "  do not disturb" : status == "online" ? "" : "  " + status) | color(dot),
                 text(shown != username ? "  (" + username + ")" : "") | dim,
                 text(m.value("is_owner", false) ? "  owner" : m.value("is_admin", false) ? "  admin" : "") |
                     color(Color::Magenta),

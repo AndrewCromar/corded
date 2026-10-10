@@ -70,6 +70,17 @@ void main() {
     // A refused command surfaces as an error, not silence.
     await expectLater(bob.command({'cmd': 'create_channel', 'name': 'nope'}), throwsA(isA<CordedError>()));
 
+    // Each sees the other online; do not disturb and invisible show through.
+    final bobId = general(aliceStore)!.members.firstWhere((m) => m.username == 'bob').userId;
+    final serverId = aliceStore.servers.values.single.id;
+    await eventually(() => aliceStore.presence(serverId, bobId) == 'online' ? true : null, 'bob online');
+    await bob.command({'cmd': 'set_presence', 'status': 'dnd'});
+    await eventually(() => aliceStore.presence(serverId, bobId) == 'dnd' ? true : null, 'bob dnd');
+    await bob.command({'cmd': 'set_presence', 'status': 'invisible'});
+    await eventually(() => aliceStore.presence(serverId, bobId) == 'offline' ? true : null, 'bob invisible');
+    await bob.command({'cmd': 'set_presence', 'status': 'auto'});
+    await eventually(() => aliceStore.presence(serverId, bobId) == 'online' ? true : null, 'bob back');
+
     // Who may manage whom, and the roles there are to give.
     final aliceServer = aliceStore.servers.values.single, bobServer = bobStore.servers.values.single;
     expect(aliceServer.can('kick_members'), isTrue);

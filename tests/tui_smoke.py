@@ -242,7 +242,12 @@ def main():
         alice.type("/setnick bob\r")
         alice.type("/open dev\r")
         alice.expect("first post in dev")
-        print("ok  members page lists everyone; display names can be set and changed by the owner")
+        # Presence shows on the members page.
+        bob.type("/presence dnd\r")
+        alice.type("/members\r")
+        alice.expect("do not disturb", timeout=20)
+        bob.type("/presence auto\r")
+        print("ok  members page lists everyone; display names can be set and changed by the owner; presence shows")
 
         # Running the server from the client.
         alice.type("/settings\r")
