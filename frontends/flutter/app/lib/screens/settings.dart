@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'server.dart';
 
 /// Your own settings. The server's settings will join them here later.
 class SettingsScreen extends StatefulWidget {
@@ -174,6 +175,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: Text(server.name.isEmpty ? server.address : server.name),
             subtitle: Text('${server.address}\n$role'),
             isThreeLine: true,
+          ),
+        if (server != null &&
+            (server.can('manage_channels') || server.can('create_invite') || server.can('manage_server')))
+          ListTile(
+            leading: const Icon(Icons.tune),
+            title: const Text('Manage this server'),
+            subtitle: const Text('Channels, invites, settings, restart'),
+            onTap: () =>
+                Navigator.push(context, MaterialPageRoute(builder: (_) => ServerScreen(state: widget.state))),
           ),
         ListTile(
           leading: const Icon(Icons.lock_outline),

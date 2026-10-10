@@ -155,6 +155,17 @@ def main():
         bob.expect("you can only edit your own messages")
         print("ok  commands take a message number")
 
+        # The same reaction again takes it back.
+        bob.type("/react 1 star\r")
+        alice.pump(2.0)
+        alice.clear()
+        alice.type("/help\r")   # forces a redraw of the whole screen
+        alice.type("/help\r")
+        alice.pump(1.5)
+        assert "[+1]" in alice.screen, "the other reaction should still be there"
+        assert "[star]" not in alice.screen, "a reaction was not taken back"
+        print("ok  reacting again takes the reaction back")
+
         bob.type("/thread threaded answer\r")
         alice.expect("   | ")
         alice.expect("threaded answer")

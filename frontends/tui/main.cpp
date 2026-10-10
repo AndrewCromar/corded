@@ -53,6 +53,7 @@ struct Room {
     uint64_t disappear_after = 0;  // seconds; 0 = messages are kept
     int64_t server_id = 0;
     int next_num = 1;
+    std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
     std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
     std::map<std::string, std::string> read_upto;  // display name -> id of the newest message they read
     std::string last_marked;                       // newest message we have told others we read
@@ -490,6 +491,7 @@ private:
         }
         if (type == "m.reaction" && rel_kind == "annotation") {
             std::string key = rel_key.empty() ? d["content"].value("key", "?") : rel_key;
+            if (d.value("mine", false) && d.value("status", "") != "redacted") room.my_reactions[rel_target][key] = id;
             return room.reactions[rel_target][key].insert(id).second;
         }
         // Edits and deletions are not lines of their own; they arrive again as
@@ -769,7 +771,13 @@ private:
                 else if (cmd == "/thread")
                     command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", rest},
                              {"thread", target->thread_root.empty() ? target->event_id : target->thread_root}});
-                else if (cmd == "/react")
+                else if (cmd == "/react" && room->my_reactions[target->event_id].count(rest) &&
+                         room->reactions[target->event_id][rest].count(room->my_reactions[target->event_id][rest])) {
+                    // The same reaction again takes it back.
+                    command({{"cmd", "delete_event"}, {"room_id", room->id},
+                             {"event_id", room->my_reactions[target->event_id][rest]}});
+                    room->my_reactions[target->event_id].erase(rest);
+                } else if (cmd == "/react")
                     command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.reaction"},
                              {"content", {{"key", rest}}},
                              {"relation", {{"kind", "annotation"}, {"target", target->event_id}, {"key", rest}}}});

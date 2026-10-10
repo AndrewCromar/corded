@@ -318,16 +318,35 @@ class _ChatScreenState extends State<ChatScreen> {
                 ]),
               ),
             if (_thread == null && _store.threadCount(_room, m) > 0)
+              // A thread hangs off its first message as a tappable card.
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                child: TextButton.icon(
-                  style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                  onPressed: () => _openThread(m),
-                  icon: const Icon(Icons.forum_outlined, size: 16),
-                  label: Text(() {
-                    final n = _store.threadCount(_room, m);
-                    return n == 1 ? '1 reply' : '$n replies';
-                  }()),
+                padding: const EdgeInsets.fromLTRB(24, 4, 12, 2),
+                child: Material(
+                  color: scheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => _openThread(m),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.forum, size: 18, color: scheme.onSecondaryContainer),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(() {
+                            final n = _store.threadCount(_room, m);
+                            final replies = _store.thread(_room, m.id);
+                            final last = replies.isEmpty ? '' : '  ·  last from ${replies.last.mine ? 'you' : replies.last.sender}';
+                            return '${n == 1 ? 'Thread: 1 reply' : 'Thread: $n replies'}$last';
+                          }(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSecondaryContainer)),
+                        ),
+                        Icon(Icons.chevron_right, size: 20, color: scheme.onSecondaryContainer),
+                      ]),
+                    ),
+                  ),
                 ),
               ),
             if (readers.isNotEmpty)
