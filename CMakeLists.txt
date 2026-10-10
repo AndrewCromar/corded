@@ -105,9 +105,11 @@ endif()
 # ---- wire schema ----------------------------------------------------------
 # flatc is a build tool: when building for another kind of machine than this
 # one, vcpkg keeps it with the host's packages.
+file(GLOB corded_flatc_dirs ${VCPKG_INSTALLED_DIR}/*/tools/flatbuffers)
 find_program(FLATC flatc
   HINTS ${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/flatbuffers
         ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/flatbuffers
+        ${corded_flatc_dirs}
   REQUIRED)
 set(CORDED_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 add_custom_command(

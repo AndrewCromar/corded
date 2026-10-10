@@ -22,3 +22,8 @@ Run a client
   ./corded-tui --vault ./my-vault --name yourname --join 'corded://...'
 
   Type /help inside the client for the commands.
+
+Install the server as a locked-down service (Raspberry Pi OS, Debian, Ubuntu)
+  sudo ./install-server.sh --name "My Server" --owner yourname --scope internet --firewall
+  Read HOSTING-AT-HOME.md first if the machine is in a house with other
+  people's devices.

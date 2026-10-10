@@ -120,7 +120,20 @@ struct Client {
                 FAIL("matcher threw '" << ex.what() << "' on event: " << ev.dump());
             }
         }
-        FAIL("timed out waiting for: " << what);
+        // Say what did arrive, which is usually enough to see what went wrong.
+        std::string recent;
+        for (size_t i = seen.size() > 25 ? seen.size() - 25 : 0; i < seen.size(); ++i) {
+            const json& e = seen[i];
+            recent += "\n    " + e.value("event", "?");
+            if (e.contains("state")) recent += " " + e.value("state", "");
+            if (e.contains("detail")) recent += " (" + e.value("detail", "") + ")";
+            if (e.contains("message")) recent += " " + e.value("message", "");
+            if (e.contains("data") && e["data"].contains("type"))
+                recent += " " + e["data"].value("type", "") + " " + e["data"].value("status", "") + " " +
+                          e["data"]["content"].dump().substr(0, 60);
+            if (e.contains("ok") && e["ok"] == false) recent += " FAILED " + e["error"].dump();
+        }
+        FAIL("timed out waiting for: " << what << "\n  last events:" << recent);
         return {};
     }
     // Like wait, but also satisfied by an event that has already arrived.
@@ -1428,7 +1441,7 @@ TEST_CASE("one person on two devices") {
     REQUIRE(laptop.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == true);
 
     // Her own earlier messages and the direct message arrive from her PC.
-    laptop.wait("own history", [](const json& e) {
+    laptop.have("own history", [](const json& e) {
         return e["event"] == "event_received" && e["data"]["content"].value("body", "") == "sent from the pc";
     });
     laptop.have("direct message history", [](const json& e) {
