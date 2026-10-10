@@ -252,15 +252,15 @@ build on it.
 | C4 Client and TUI | Built on `next` (engine commands and TUI commands; no dedicated management screens) |
 | C5 Several servers per vault | Built: one session per server sharing one identity and vault; rooms and events tagged with their server; the terminal client lists, joins and switches servers |
 | C6 Invites | Built on `next`: codes with use limits and expiry, revocation, `corded://` links carrying address, key and code |
-| C7 Moderation | Deleting others' messages is built on `next`. Pins are not. The server does not yet drop the stored ciphertext of a deleted message |
+| C7 Moderation | Deleting others' messages and pins are built. The server does not yet drop the stored ciphertext of a deleted message |
 | C4b Members and settings pages | Built: a Members page (roles, online, display names; kick, ban, remove for those permitted), display names per server (`/nick`, and `/setnick` for those with `manage_nicknames`), and a Settings page showing personal settings and, for those with `manage_server`, the server's settings and status |
-| C8 Sender keys | Not started |
+| C8 Sender keys | Replaced for now by one body per message (D-48): a message is encrypted once and each device's ratchet carries its key. Sender keys proper are kept for communities in the thousands |
 | C9 History for newcomers | Built on `next`: asked for automatically on joining a channel or group, relayed by the server to up to two online members, shared from their vaults as an encrypted envelope for the newcomer alone, with the server switch and the member switch |
 | C10 Polish, C11 Optional unencrypted servers | Not started |
 | C12 Server scope | Built: `--scope machine`, `network` or `internet`; machine is the default for a new server; network scope turns away non-local addresses; internet scope makes registration invite-only unless told otherwise. The extra limits for internet scope (accounts per address per day, handshake timeouts) are not built |
 | C16 Remote administration | Partly built: settings stored in the server and changed from a client, `/status`, `/reboot`, scheduled restarts, hourly housekeeping with a retention window. Remote update is not built; it waits on the release signing decision |
 | C13 Several devices | Built: a recovery key recreates the identity on another device; the server keeps several devices per person; clients keep a session per device and send to every device, including the sender's own others; a new device gets history from the person's other device. Not built: linking by code or QR, listing and removing devices, telling contacts a device was added |
-| C14 Windows and GUI | Windows build of the server and terminal client is released. The GUI is planned in [06-gui-and-android.md](06-gui-and-android.md), Android first; not started |
+| C14 Windows and GUI | Built: Windows builds of the server and terminal client, and the graphical app for Android, Linux and Windows (see [06-gui-and-android.md](06-gui-and-android.md)) |
 | C15 Browser client | Set aside (owner decision) |
 | C17 Isolated home hosting | Not started |
 

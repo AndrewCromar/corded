@@ -12,9 +12,9 @@ plan in [04-community-model.md](04-community-model.md), section 6.
 | Server scope: machine, network, internet | D-33 | C12 | Built |
 | All server settings from the owner's client | D-34 | C16 | Built: `/settings`, `/set`, `/status` |
 | Scheduled maintenance and restarts | D-35 | C16 | Built: `/reboot`, `/set restart ...`, hourly housekeeping, retention window |
-| Remote update of the server | D-36 | C16 | Planned; needs a decision on release signing |
-| One person on several devices | D-37 | C13 | Built with a recovery key; linking and device management not yet |
-| Clients on Linux, Windows, macOS, iOS, Android | D-38 | C14 | Planned |
+| Remote update of the server | D-36 | C16 | Built: releases are signed by a key held only in the build system; `/update` (or the app's "Update the server") downloads the newest release, checks the signature and restarts. The apps update themselves the same way |
+| One person on several devices | D-37 | C13 | Built: recovery key (typed, or scanned as a QR code), a device list with sign-out, and profiles handed to a new device |
+| Clients on Linux, Windows, macOS, iOS, Android | D-38 | C14 | Built for Android, Linux and Windows (one Flutter app) besides the terminal client; macOS and iOS not started |
 | A browser client | D-39 | C15 | Set aside for now (owner decision) |
 | Hosting at home, isolated from the home network | D-40 | C17 | Planned |
 

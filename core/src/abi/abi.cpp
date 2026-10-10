@@ -42,7 +42,7 @@ uint32_t corded_abi_version(void) {
     return (static_cast<uint32_t>(CORDED_ABI_VERSION_MAJOR) << 16) | CORDED_ABI_VERSION_MINOR;
 }
 
-const char* corded_version_string(void) { return "corded 0.1.0-prototype"; }
+const char* corded_version_string(void) { return "corded " CORDED_BUILD_VERSION; }
 
 const char* corded_status_message(corded_status status) {
     switch (status) {

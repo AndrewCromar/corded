@@ -33,6 +33,7 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 | Prototype | Working: server, core library and terminal client on Linux, Raspberry Pi and Windows. Channels, direct and group chats, all end-to-end encrypted |
 | Android app | Working test builds (Flutter, on the same core). See below |
 | Desktop app | Early builds for Linux and Windows: the same app as on Android, in a window. See below |
+| Bots | A small Python kit and four example bots: [bots/](bots/README.md) |
 | iOS, macOS, a browser client | Not started |
 
 ## Get it without building
@@ -91,6 +92,14 @@ message brings up reply, react, thread and the rest. From the release after v0.5
 Unpack one anywhere and run `corded_app` inside it; the folder is the whole app.
 
 It is new and has been checked far less than the phone app.
+
+### Staying up to date
+
+The apps update themselves: **Settings > Check for updates** asks GitHub for the newest
+release, downloads it, checks that it carries the release signature, and installs it (on
+Android you confirm the install once). A server's owner does the same for the server with
+**Manage server > Update the server**, or `/update` in the terminal client. Releases are
+signed by a key that exists only in the build system; nothing unsigned is installed.
 
 ## Build it yourself
 
@@ -299,14 +308,22 @@ It does:
 - Channels can be marked NSFW (covered until you choose to look) or archived (kept to
   read, closed to writing).
 - An Android app with all of the above, notifications while it is in the background, and
-  fingerprint unlock.
+  fingerprint unlock; and the same app for Linux and Windows desktops.
+- Link previews made by the sender, so reading a message never tells a website who read it.
+- Task-list channels, pinned channels, and channels hidden until asked for.
+- A message to many devices is encrypted and stored once, with only its key going through
+  each device's ratchet.
+- Signed releases, and updating the server and the apps from inside them.
+- Bots: ordinary members driven by a small Python kit ([bots/](bots/README.md)).
 - A frontend that uses only the public header, [`corded.h`](include/corded/corded.h).
 
 It does not, yet:
 
 - Categories, role colours, transferring ownership.
-- Scale to large channels. Each message is encrypted once per member, which is fine for
-  dozens of people and too slow for hundreds; sender keys are planned for that.
+- Scale to very large channels. A message is encrypted once, but its key still goes to each
+  device separately: fine for hundreds of people, not for many thousands; sender keys are
+  the plan for that.
+- Voice or video calls.
 - Hide channel names, role names or the member list from the server. Only message
   content is hidden.
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
@@ -338,7 +355,8 @@ Code layout:
 | `frontends/tui/` | `corded-tui`, the terminal client |
 | `frontends/flutter/` | The app (`app/`) and the Dart binding to the core it is built on (`packages/corded_dart/`) |
 | `tools/corded-cli.cpp` | A headless client that speaks JSON lines, for scripts and debugging |
-| `tests/` | Crypto unit tests, end-to-end tests, a TUI smoke test |
+| `bots/` | A Python kit for writing bots, with command, webhook, AI and birthday bots |
+| `tests/` | Crypto unit tests, end-to-end tests, smoke tests for the terminal client and the bots |
 
 ## License
 
