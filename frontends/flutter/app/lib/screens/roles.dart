@@ -19,6 +19,7 @@ const permissionLabels = <String, (String, String)>{
   'manage_channels': ('Manage channels', 'Create, rename and delete channels'),
   'manage_roles': ('Manage roles', 'Create and edit roles, and give them to members'),
   'manage_server': ('Manage the server', 'Change server settings and restart it'),
+  'manage_bots': ('Manage bots', 'Use the commands that bots keep for the people who run them'),
   'administrator': ('Administrator', 'Everything above, everywhere'),
 };
 

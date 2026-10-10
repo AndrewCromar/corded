@@ -788,6 +788,32 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
             REQUIRE(m["roles"].size() == (m["username"] == "bob" ? 1u : 0u));
         }
     }
+    // Each member is listed with what their roles add up to. "manage_bots" is
+    // there for bots to look for; the owner holds everything.
+    {
+        json made = alice.cmd({{"cmd", "create_role"}, {"name", "botkeeper"}, {"permissions", {"manage_bots"}}});
+        INFO(made.dump());
+        REQUIRE(made["ok"] == true);
+        REQUIRE(alice.cmd({{"cmd", "grant_role"}, {"username", "bob"}, {"role", "botkeeper"}})["ok"] == true);
+        auto may = [&](const std::string& username, const std::string& permission) {
+            json list = carol.cmd({{"cmd", "member_list"}});
+            for (const auto& m : list["data"]["members"])
+                if (m["username"] == username)
+                    for (const auto& p : m["permissions"])
+                        if (p == permission) return true;
+            return false;
+        };
+        // Carol's client learns of the new role a moment after it is made.
+        for (int i = 0; i < 50 && !may("bob", "manage_bots"); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        REQUIRE(may("bob", "manage_bots"));
+        REQUIRE(may("bob", "kick_members"));
+        REQUIRE(may("bob", "send_messages"));
+        REQUIRE(may("alice", "manage_bots"));
+        REQUIRE(!may("carol", "manage_bots"));
+        REQUIRE(alice.cmd({{"cmd", "grant_role"}, {"username", "bob"}, {"role", "botkeeper"}, {"grant", false}})["ok"] == true);
+        REQUIRE(alice.cmd({{"cmd", "delete_role"}, {"role", "botkeeper"}})["ok"] == true);
+    }
 
     // Display names: anyone sets their own; changing someone else's takes the
     // permission and a higher rank.

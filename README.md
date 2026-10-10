@@ -213,7 +213,9 @@ the matching permission:
 Permissions a role can carry: `view_channel`, `send_messages`, `add_reactions`,
 `attach_files`, `mention_everyone`, `manage_messages`, `manage_channels`, `manage_roles`,
 `manage_nicknames`, `kick_members`, `ban_members`, `create_invite`, `manage_server`,
-`administrator`. Nobody can give out a permission they do not hold, or act on someone
+`manage_bots`, `administrator`. `manage_bots` changes nothing on the server: it is there
+for bots to look for, so that a bot can keep some of its commands for the people who run
+it (every member is listed with their permissions). Nobody can give out a permission they do not hold, or act on someone
 ranked at or above themselves, and nobody can act on the owner. If you start the server
 without `--owner`, the first person to register owns it.
 

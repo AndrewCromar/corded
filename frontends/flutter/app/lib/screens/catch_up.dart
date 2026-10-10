@@ -4,6 +4,7 @@ import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import 'chat.dart';
 import 'common.dart';
 
 /// Everything unread in one place: each chat with something new, with who
@@ -109,11 +110,18 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
     }
   }
 
-  void _open(Room room) {
-    final start = _starts[room.id];
-    Navigator.pop(context);
-    widget.state.onOpenChat?.call(room.id, start?.thread);
+  // The chat opens over this list, so that Back comes back here, to the next
+  // thing to read.
+  void _go(String roomId, String? thread) {
+    final navigator = Navigator.of(context);
+    navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: widget.state, roomId: roomId)));
+    if (thread != null) {
+      navigator.push(MaterialPageRoute(
+          builder: (_) => ChatScreen(state: widget.state, roomId: roomId, threadRoot: thread)));
+    }
   }
+
+  void _open(Room room) => _go(room.id, _starts[room.id]?.thread);
 
   Future<void> _readAll() async {
     for (final roomId in {for (final t in _threads) '${t['room_id']}'}) {
@@ -230,10 +238,7 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis),
                   trailing: Badge(label: Text('${t['count']}')),
-                  onTap: () {
-                    Navigator.pop(context);
-                    widget.state.onOpenChat?.call('${t['room_id']}', '${t['root_id']}');
-                  },
+                  onTap: () => _go('${t['room_id']}', '${t['root_id']}'),
                 ),
             ]),
     );

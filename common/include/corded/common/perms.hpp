@@ -24,8 +24,11 @@ inline constexpr uint64_t BanMembers = 1ull << 10;
 inline constexpr uint64_t CreateInvite = 1ull << 11;
 inline constexpr uint64_t ManageServer = 1ull << 12;
 inline constexpr uint64_t Administrator = 1ull << 13;
+// Means nothing to the server: bots look for it to decide who may use the
+// commands they keep for the people who run them.
+inline constexpr uint64_t ManageBots = 1ull << 14;
 
-inline constexpr uint64_t All = (1ull << 14) - 1;
+inline constexpr uint64_t All = (1ull << 15) - 1;
 // What the @everyone role starts with.
 inline constexpr uint64_t Default = ViewChannel | SendMessages | AddReactions | AttachFiles;
 
@@ -37,7 +40,8 @@ inline const std::vector<std::pair<std::string_view, uint64_t>>& names() {
         {"manage_channels", ManageChannels}, {"manage_roles", ManageRoles},
         {"manage_nicknames", ManageNicknames}, {"kick_members", KickMembers},
         {"ban_members", BanMembers},         {"create_invite", CreateInvite},
-        {"manage_server", ManageServer},     {"administrator", Administrator},
+        {"manage_server", ManageServer},     {"manage_bots", ManageBots},
+        {"administrator", Administrator},
     };
     return table;
 }

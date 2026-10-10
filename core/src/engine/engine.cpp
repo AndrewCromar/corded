@@ -328,9 +328,16 @@ Session::json Session::member_json(const MemberRow& m) {
     for (uint32_t id : m.roles)
         for (const auto& r : roles_)
             if (r.id == id) roles.push_back(r.name);
+    // What their roles add up to, so that a frontend or a bot can ask "may
+    // this person...?" without working it out from the roles.
+    uint64_t bits = 0;
+    for (const auto& r : roles_)
+        if (r.is_everyone || std::find(m.roles.begin(), m.roles.end(), r.id) != m.roles.end()) bits |= r.permissions;
+    if (m.is_owner || m.is_admin || (bits & perm::Administrator)) bits = perm::All;
     return {{"user_id", b64(m.user_id)},
             {"username", m.username},
             {"nickname", m.nickname},
+            {"permissions", perm::to_names(bits)},
             {"display_name", m.display()},
             {"me", me},
             {"bot", m.bot},

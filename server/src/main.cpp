@@ -3,6 +3,7 @@
 //
 // Prototype limits: one device per user, a single I/O thread.
 #include "storage.hpp"
+#include "transfer.hpp"
 #include "update.hpp"
 
 #include "corded/common/sig.hpp"
@@ -1813,6 +1814,8 @@ int main(int argc, char** argv) {
     }
 #endif
     corded::server::Options opt;
+    std::string export_to, import_from, passphrase_file;
+    bool no_passphrase = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -1839,6 +1842,10 @@ int main(int argc, char** argv) {
         else if (a == "--retention-days") opt.flags["retention_days"] = next();
         else if (a == "--restart") opt.flags["restart"] = next();
         else if (a == "--owner") opt.owner_name = next();
+        else if (a == "--export") export_to = next();
+        else if (a == "--import") import_from = next();
+        else if (a == "--passphrase-file") passphrase_file = next();
+        else if (a == "--no-passphrase") no_passphrase = true;
         else if (a == "--verbose") spdlog::set_level(spdlog::level::debug);
         else {
             std::fprintf(stderr,
@@ -1846,7 +1853,9 @@ int main(int argc, char** argv) {
                          "               [--name NAME] [--owner USERNAME]\n"
                          "               [--invite-only | --invite-code CODE | --open-registration | --closed]\n"
                          "               [--no-history-sharing] [--retention-days N] [--restart SCHEDULE]\n"
-                         "               [--host ADDR] [--verbose]\n\n"
+                         "               [--host ADDR] [--verbose]\n"
+                         "       cordedd --export FILE [--data DIR] [--passphrase-file F | --no-passphrase]\n"
+                         "       cordedd --import FILE --data DIR [--passphrase-file F]\n\n"
                          "Settings given here are remembered, so they need not be repeated on later\n"
                          "starts, and most can be changed afterwards from the owner's client (/settings).\n\n"
                          "  --scope SCOPE       who can reach the server: machine (default; this computer\n"
@@ -1862,13 +1871,62 @@ int main(int argc, char** argv) {
                          "  --no-history-sharing  newcomers cannot ask members for earlier messages\n"
                          "  --retention-days N  how long stored messages are kept (default 30; 0 = forever)\n"
                          "  --restart SCHEDULE  restart regularly: \"daily 04:00\" or \"weekly sun 04:00\"\n"
-                         "  --host ADDR         listen on this address instead of the one the scope implies\n");
+                         "  --host ADDR         listen on this address instead of the one the scope implies\n\n"
+                         "Moving a server to another machine, or keeping a copy of it:\n\n"
+                         "  --export FILE       write everything the server keeps (accounts, rooms, stored\n"
+                         "                      messages and files, settings, its identity) into FILE; the\n"
+                         "                      server may keep running. Asks for a passphrase to seal it\n"
+                         "  --import FILE       unpack such a file into the empty folder given by --data;\n"
+                         "                      a server started there is the same server to every client\n"
+                         "  --passphrase-file F read the passphrase from the first line of F instead of asking\n"
+                         "  --no-passphrase     export unsealed; the file then holds the server's private key\n"
+                         "                      in the clear and must be kept as safe as the server itself\n");
             return a == "--help" ? 0 : 2;
         }
     }
     if (!opt.invite_code.empty() && opt.invite_code.size() < 8) {
         std::fprintf(stderr, "the invite code must be at least 8 characters\n");
         return 2;
+    }
+    if (!export_to.empty() || !import_from.empty()) {
+        // Not a server run: pack or unpack, then stop.
+        try {
+            if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
+            namespace transfer = corded::transfer;
+            const bool exporting = !export_to.empty();
+            std::string passphrase;
+            if (!passphrase_file.empty()) {
+                std::ifstream in(passphrase_file);
+                if (!in || !std::getline(in, passphrase) || passphrase.empty())
+                    throw std::runtime_error("no passphrase found in " + passphrase_file);
+            } else if (const char* env = std::getenv("CORDED_TRANSFER_PASSPHRASE"); env && *env) {
+                passphrase = env;
+            } else if (exporting ? !no_passphrase : transfer::is_sealed(import_from)) {
+                passphrase = transfer::ask_passphrase(exporting ? "Passphrase to seal the export with: "
+                                                                : "Passphrase of the export: ");
+                if (exporting && passphrase != transfer::ask_passphrase("The same again: "))
+                    throw std::runtime_error("the two did not match");
+                if (passphrase.empty())
+                    throw std::runtime_error("no passphrase given (use --no-passphrase to export unsealed)");
+            }
+            if (exporting) {
+                auto done = transfer::export_server(opt.data_dir, export_to, passphrase);
+                std::printf("Exported %s to %s (%.1f MB, %llu stored files%s).\n", opt.data_dir.c_str(),
+                            export_to.c_str(), static_cast<double>(done.bytes) / (1024.0 * 1024.0),
+                            static_cast<unsigned long long>(done.files),
+                            passphrase.empty() ? ", NOT sealed: it holds the server's private key" : ", sealed");
+            } else {
+                std::filesystem::create_directories(opt.data_dir);
+                auto done = transfer::import_server(import_from, opt.data_dir, passphrase);
+                std::printf("Imported into %s (%llu stored files). Start it with: cordedd --data %s\n"
+                            "It is the same server as the one exported: stop that one before members use this one.\n",
+                            opt.data_dir.c_str(), static_cast<unsigned long long>(done.files), opt.data_dir.c_str());
+            }
+            return 0;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "%s\n", e.what());
+            return 1;
+        }
     }
     bool restart = false;
     try {
