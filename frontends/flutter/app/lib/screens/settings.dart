@@ -362,6 +362,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (mounted) setState(() {});
             },
           ),
+        SwitchListTile(
+          secondary: const Icon(Icons.link),
+          title: const Text('Preview links you send'),
+          subtitle: const Text('This device fetches the page and attaches a small card. '
+              'People who read it contact nobody.'),
+          value: widget.state.linkPreviews,
+          onChanged: (v) async {
+            await widget.state.setLinkPreviews(v);
+            if (mounted) setState(() {});
+          },
+        ),
         ListTile(
           leading: const Icon(Icons.palette_outlined),
           title: const Text('App icon'),

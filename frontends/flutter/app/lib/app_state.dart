@@ -256,6 +256,15 @@ class AppState extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setStringList('muted_rooms', mutedRooms.toList());
   }
 
+  /// Whether a link you send gets a preview card, which this device fetches.
+  bool linkPreviews = true;
+
+  Future<void> setLinkPreviews(bool on) async {
+    linkPreviews = on;
+    notifyListeners();
+    (await SharedPreferences.getInstance()).setBool('link_previews', on);
+  }
+
   Future<void> setShowMessageText(bool show) async {
     showMessageText = show;
     notifyListeners();
@@ -333,6 +342,7 @@ class AppState extends ChangeNotifier {
       _wantBackground = prefs.getBool('background_mode') ?? false;
       mutedRooms = (prefs.getStringList('muted_rooms') ?? const []).toSet();
       showMessageText = prefs.getBool('show_message_text') ?? true;
+      linkPreviews = prefs.getBool('link_previews') ?? true;
       if (serviceRunning) {
         Future<void>.delayed(const Duration(seconds: 1), _shareNotificationOptions);
       }

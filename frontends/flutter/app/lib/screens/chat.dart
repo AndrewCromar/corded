@@ -5,8 +5,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
+import '../link_preview.dart';
 import '../picture.dart';
 import 'common.dart';
 import 'group.dart';
@@ -46,6 +48,12 @@ class _ChatScreenState extends State<ChatScreen> {
   // is drawn above it.
   String _newFrom = '';
   bool _sendingFile = false;
+  // The card for the link being typed: fetched once the typing pauses, shown
+  // above the message box, and sent with the message unless it is closed.
+  LinkPreview? _draftPreview;
+  String _draftLink = '', _dismissedLink = '';
+  Timer? _previewTimer;
+  final _cards = <String, LinkPreview?>{}; // message id -> its card, read once
 
   CordedStore get _store => widget.state.store;
   String get _room => widget.roomId;
@@ -116,6 +124,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_thread == null) widget.state.viewingRoom = null;
     }
     _sub?.cancel();
+    _previewTimer?.cancel();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -533,10 +542,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _input.text.trim();
     if (text.isEmpty) return;
     final editing = _editing, replyingTo = _replyingTo;
+    // The card goes along if it is for the link that is still in the text.
+    final card = _draftPreview != null && firstLink(text) == _draftPreview!.url ? _draftPreview : null;
     _input.clear();
+    _previewTimer?.cancel();
+    _draftLink = '';
+    _dismissedLink = '';
     setState(() {
       _editing = null;
       _replyingTo = null;
+      _draftPreview = null;
     });
     await attempt(context, () async {
       if (editing != null) {
@@ -549,7 +564,11 @@ class _ChatScreenState extends State<ChatScreen> {
           'cmd': 'send_event',
           'room_id': _room,
           'type': 'm.text',
-          'content': {'body': text, if (_thread != null && replyingTo != null) 'reply_to': replyingTo.id},
+          'content': {
+            'body': text,
+            if (_thread != null && replyingTo != null) 'reply_to': replyingTo.id,
+            if (card != null) 'preview': card.toJson(),
+          },
           if (_thread != null)
             'relation': {'kind': 'thread', 'target': _thread}
           else if (replyingTo != null)
@@ -557,6 +576,91 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     });
+  }
+
+  void _watchForLink(String text) {
+    if (!widget.state.linkPreviews || _editing != null) return;
+    final link = firstLink(text) ?? '';
+    if (link == _draftLink) return;
+    _draftLink = link;
+    _previewTimer?.cancel();
+    if (_draftPreview != null) setState(() => _draftPreview = null);
+    if (link.isEmpty || link == _dismissedLink) return;
+    _previewTimer = Timer(const Duration(milliseconds: 700), () async {
+      final preview = await fetchPreview(link);
+      // Only if this is still the link in the box.
+      if (mounted && preview != null && _draftLink == link) setState(() => _draftPreview = preview);
+    });
+  }
+
+  LinkPreview? _cardOf(Message m) => _cards.putIfAbsent(m.id, () => LinkPreview.fromJson(m.preview));
+
+  // A link's card: picture, title, a line or two, and where it leads.
+  Widget _previewCard(LinkPreview p, Color foreground, {VoidCallback? onClose}) {
+    final theme = Theme.of(context);
+    final host = Uri.tryParse(p.url)?.host ?? '';
+    return Material(
+      color: foreground.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onClose != null
+            ? null
+            : () async {
+                try {
+                  await launchUrl(Uri.parse(p.url), mode: LaunchMode.externalApplication);
+                } catch (_) {
+                  // Nothing to open it with.
+                }
+              },
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (p.image != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Image.memory(p.image!,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (context, error, stack) => const SizedBox.shrink()),
+                ),
+              ),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (p.title.isNotEmpty)
+                      Text(p.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelLarge
+                              ?.copyWith(color: foreground, fontWeight: FontWeight.bold)),
+                    if (p.description.isNotEmpty)
+                      Text(p.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              theme.textTheme.bodySmall?.copyWith(color: foreground.withValues(alpha: 0.8))),
+                    Text(host,
+                        style:
+                            theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.6))),
+                  ]),
+            ),
+            if (onClose != null)
+              IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Send without the preview',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: onClose),
+          ]),
+        ),
+      ),
+    );
   }
 
   // What the + button offers.
@@ -976,6 +1080,10 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: foreground.withValues(alpha: gone ? 0.6 : 1),
                             fontStyle: gone ? FontStyle.italic : null),
                         linkColor: scheme.primary),
+                    if (!gone && _cardOf(m) != null)
+                      Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: _previewCard(_cardOf(m)!, foreground)),
                   ],
                   const SizedBox(height: 2),
                   Text(note,
@@ -1211,6 +1319,15 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
+          if (_draftPreview != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: _previewCard(_draftPreview!, theme.colorScheme.onSurface,
+                  onClose: () => setState(() {
+                        _dismissedLink = _draftPreview!.url;
+                        _draftPreview = null;
+                      })),
+            ),
           if (banner != null)
             Material(
               color: theme.colorScheme.secondaryContainer,
@@ -1259,6 +1376,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     onChanged: (v) {
                       // The core sends at most one of these every few seconds.
                       if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
+                      _watchForLink(v);
                       setState(() {}); // the name suggestions follow what is typed
                     },
                     decoration: InputDecoration(

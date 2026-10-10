@@ -95,6 +95,10 @@ class Message {
   int width = 0, height = 0;
   bool get isFile => type == 'm.file';
 
+  /// A card for a link in the message, attached by whoever sent it; as it
+  /// came, for the frontend to check and draw.
+  Map<String, dynamic>? preview;
+
   /// For a task: whether it is ticked, and by whom.
   bool taskDone = false;
   String taskDoneBy = '';
@@ -114,6 +118,8 @@ class Message {
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
+    final card = content['preview'];
+    preview = card is Map ? card.cast<String, dynamic>() : null;
     if (type == 'm.file') {
       fileName = content['name'] as String? ?? fileName;
       fileMime = content['mime'] as String? ?? fileMime;
