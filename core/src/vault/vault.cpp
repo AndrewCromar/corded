@@ -266,6 +266,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     } catch (const db::Error&) {
         db_.exec("ALTER TABLE members ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
     }
+    db_.exec("CREATE TABLE IF NOT EXISTS receipts (room_id BLOB NOT NULL, user_id BLOB NOT NULL, "
+             "event_id BLOB NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (room_id, user_id)) WITHOUT ROWID");
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -457,6 +459,7 @@ void Vault::set_room_name(ByteView room_id, const std::string& name) {
 
 void Vault::delete_room(ByteView room_id) {
     for (const char* sql : {"DELETE FROM relations WHERE room_id = ?", "DELETE FROM events WHERE room_id = ?",
+                            "DELETE FROM receipts WHERE room_id = ?",
                             "DELETE FROM outbox WHERE room_id = ?", "DELETE FROM members WHERE room_id = ?",
                             "DELETE FROM rooms WHERE room_id = ?"}) {
         auto st = db_.prepare(sql);
@@ -596,6 +599,22 @@ void Vault::redact_event(ByteView room_id, ByteView event_id) {
     auto st = db_.prepare("UPDATE events SET content = '{}', edited_content = '', fallback_text = '', "
                           "status = 'redacted' WHERE room_id = ? AND event_id = ?");
     st.bind(1, room_id).bind(2, event_id).exec();
+}
+
+bool Vault::set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, uint64_t seq) {
+    auto st = db_.prepare("INSERT INTO receipts (room_id, user_id, event_id, seq) VALUES (?,?,?,?) "
+                          "ON CONFLICT(room_id, user_id) DO UPDATE SET event_id = excluded.event_id, "
+                          "seq = excluded.seq WHERE excluded.seq > receipts.seq");
+    st.bind(1, room_id).bind(2, user_id).bind(3, event_id).bind(4, seq).exec();
+    return db_.changes() > 0;
+}
+
+std::vector<Vault::Receipt> Vault::receipts(ByteView room_id) {
+    std::vector<Receipt> out;
+    auto st = db_.prepare("SELECT user_id, event_id, seq FROM receipts WHERE room_id = ?");
+    st.bind(1, room_id);
+    while (st.step()) out.push_back({st.blob(0), st.blob(1), st.u64(2)});
+    return out;
 }
 
 void Vault::outbox_push(ByteView room_id, ByteView event_id, ByteView only_user) {

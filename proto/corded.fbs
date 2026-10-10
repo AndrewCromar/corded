@@ -80,6 +80,9 @@ table Status {
   stored_bytes: uint64; last_housekeeping: uint64; scope: string;
 }
 table Notice { message: string; }   // something the server wants members to read
+// Passed straight on to the room's members who are online, and never stored.
+// Used for "is typing", which says nothing the server does not already see.
+table Ephemeral { room_id: [ubyte]; kind: string; sender_user: [ubyte]; }
 
 table HistoryRequest { room_id: [ubyte]; limit: uint32; }
 table HistoryWanted { room_id: [ubyte]; requester: [ubyte]; limit: uint32; }
@@ -136,7 +139,7 @@ union FrameBody {
   HistoryRequest, HistoryWanted,
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
   ListDevices, DeviceList, DevicesChanged,
-  RemoveAccount, SetNickname
+  RemoveAccount, SetNickname, Ephemeral
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

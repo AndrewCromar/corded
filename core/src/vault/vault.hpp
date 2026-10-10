@@ -131,6 +131,15 @@ public:
     void redact_event(ByteView room_id, ByteView event_id);  // erases the content for good
 
     void outbox_push(ByteView room_id, ByteView event_id, ByteView only_user = {});
+
+    // Read receipts: for each person in a room, the newest message they have
+    // read. Returns true if this moved their marker forward.
+    struct Receipt {
+        Bytes user_id, event_id;
+        uint64_t seq = 0;
+    };
+    bool set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, uint64_t seq);
+    std::vector<Receipt> receipts(ByteView room_id);
     std::vector<OutboxRow> outbox();
     void outbox_remove(int64_t local_id);
 

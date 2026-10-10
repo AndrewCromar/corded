@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #ifndef _WIN32
 #include <csignal>
 #include <pthread.h>
@@ -52,6 +53,9 @@ struct Room {
     uint64_t disappear_after = 0;  // seconds; 0 = messages are kept
     int64_t server_id = 0;
     int next_num = 1;
+    std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
+    std::map<std::string, std::string> read_upto;  // display name -> id of the newest message they read
+    std::string last_marked;                       // newest message we have told others we read
     std::vector<Message> messages;
     // target event id -> reaction key -> ids of the reaction events
     std::map<std::string, std::map<std::string, std::set<std::string>>> reactions;
@@ -96,6 +100,12 @@ std::string snippet(const std::string& s, size_t n = 40) {
 
 std::atomic<bool> g_screen_open{false};
 
+uint64_t now_ms_() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count());
+}
+
 class TuiApp {
 public:
     TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint,
@@ -125,7 +135,10 @@ public:
         std::thread pump([this] {
             while (running_) {
                 const char* text = nullptr;
-                if (corded_next_event(engine_, 100, &text, nullptr) != CORDED_OK) continue;
+                if (corded_next_event(engine_, 100, &text, nullptr) != CORDED_OK) {
+                    if (typing_until_.load() > now_ms_() && ++idle_ticks_ % 10 == 0) screen_.PostEvent(Event::Custom);
+                    continue;
+                }
                 json ev = json::parse(text, nullptr, false);
                 corded_event_free(text);
                 if (ev.is_discarded()) continue;
@@ -220,6 +233,7 @@ private:
             if (!room.loaded) {
                 room.loaded = true;
                 command({{"cmd", "fetch_timeline"}, {"room_id", room.id}, {"limit", 500}});
+                command({{"cmd", "fetch_receipts"}, {"room_id", room.id}});
             }
         } else if (kind == "server_info") {
             int64_t sid = ev.value("server_id", int64_t{0});
@@ -245,10 +259,12 @@ private:
             const json& d = ev.at("data");
             Room& room = room_for(d.value("room_id", ""));
             bool is_new = add_event(room, d);
+            room.typing.erase(d.value("sender_name", ""));  // they sent it; no longer typing
             if (is_new && !d.value("mine", false) && current() != &room) {
                 ++room.unread;
                 refresh_titles();
             }
+            if (current() == &room) mark_read(room);
         } else if (kind == "event_expired") {
             // A disappearing message's time came: it is gone from the vault.
             Room& room = room_for(ev.value("room_id", ""));
@@ -282,6 +298,15 @@ private:
         } else if (kind == "server_pinned") {
             pin_notice_ = "First connection to this server. Its key " + ev.value("fingerprint", "") +
                           " is now remembered.";
+        } else if (kind == "typing") {
+            Room& room = room_for(ev.value("room_id", ""));
+            uint64_t until = now_ms_() + 5000;
+            room.typing[ev.value("display_name", "someone")] = until;
+            typing_until_ = until;
+        } else if (kind == "receipt") {
+            Room& room = room_for(ev.value("room_id", ""));
+            if (ev.value("username", "") != username_)
+                room.read_upto[ev.value("display_name", "someone")] = ev.value("event_id", "");
         } else if (kind == "server_notice") {
             notice_ = ev.value("message", "");
         } else if (kind == "history_received") {
@@ -329,6 +354,26 @@ private:
             show_info_ = true;
             return;
         }
+        if (ok && ev["data"].contains("receipts")) {
+            Room& room = room_for(ev["data"].value("room_id", ""));
+            for (const auto& r : ev["data"]["receipts"])
+                if (r.value("username", "") != username_ && r.contains("display_name"))
+                    room.read_upto[r.value("display_name", "")] = r.value("event_id", "");
+            return;
+        }
+        if (ok && ev["data"].contains("client_settings")) {
+            client_settings_ = ev["data"]["client_settings"];
+            return;
+        }
+        if (settings_selected() && ok && ev["data"].contains("settings")) {
+            server_settings_ = ev["data"]["settings"];
+            return;
+        }
+        if (settings_selected() && ok && ev["data"].contains("status")) {
+            server_status_ = ev["data"]["status"];
+            return;
+        }
+        if (settings_selected() && !ok && (req == settings_request_ || req == status_request_)) return;  // not permitted; the page just omits it
         if (ok && ev["data"].contains("settings")) {
             Elements rows = {text("Server settings") | bold};
             for (const auto& st : ev["data"]["settings"]) {
@@ -405,6 +450,7 @@ private:
         if (ok && ev["data"].contains("events")) {
             Room& room = room_for(ev["data"].value("room_id", ""));
             for (const auto& d : ev["data"]["events"]) add_event(room, d);
+            if (current() == &room) mark_read(room);
             return;
         }
         if (!ok) notice_ = message;
@@ -487,12 +533,29 @@ private:
     }
     // The chat on screen: one of the current server's chats.
     Room* current() {
-        // The row after the last chat is the Members page.
-        selected_ = std::clamp(selected_, 0, static_cast<int>(visible_.size()));
-        if (members_selected()) return nullptr;
+        // After the last chat come two pages: Members, then Settings.
+        selected_ = std::clamp(selected_, 0, static_cast<int>(visible_.size()) + 1);
+        if (members_selected() || settings_selected()) return nullptr;
         return &rooms_[visible_[static_cast<size_t>(selected_)]];
     }
     bool members_selected() const { return selected_ == static_cast<int>(visible_.size()); }
+    bool settings_selected() const { return selected_ == static_cast<int>(visible_.size()) + 1; }
+    // Tells the others in a chat that we have read up to its newest message.
+    void mark_read(Room& room) {
+        for (auto it = room.messages.rbegin(); it != room.messages.rend(); ++it) {
+            if (it->mine || it->status != "ok" || it->from_history) continue;
+            if (it->event_id != room.last_marked) {
+                room.last_marked = it->event_id;
+                command({{"cmd", "mark_read"}, {"room_id", room.id}, {"event_id", it->event_id}});
+            }
+            return;
+        }
+    }
+    void load_settings_page() {
+        command({{"cmd", "client_settings"}});
+        settings_request_ = command({{"cmd", "get_settings"}});
+        status_request_ = command({{"cmd", "server_status"}});
+    }
     std::string current_id() {
         Room* r = current();
         return r ? r->id : std::string();
@@ -534,7 +597,8 @@ private:
             titles_.push_back(r.title + (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
         titles_.push_back("-- members --");
-        if (open.empty() && was_on_members_) selected_ = static_cast<int>(visible_.size());
+        titles_.push_back("-- settings --");
+        if (open.empty() && page_ > 0) selected_ = static_cast<int>(visible_.size()) + page_ - 1;
     }
     void select_room(const std::string& id) {
         for (const auto& r : rooms_)
@@ -544,8 +608,14 @@ private:
         on_room_selected();
     }
     void on_room_selected() {
-        was_on_members_ = members_selected();
-        if (was_on_members_) command({{"cmd", "member_list"}});  // refresh the page
+        page_ = members_selected() ? 1 : settings_selected() ? 2 : 0;
+        if (page_ == 1) command({{"cmd", "member_list"}});  // refresh the page
+        if (page_ == 2) {
+            server_settings_ = json::array();
+            server_status_ = json::object();
+            load_settings_page();
+        }
+        if (Room* r = current()) mark_read(*r);
         if (Room* r = current(); r && r->unread > 0) {
             r->unread = 0;
             refresh_titles();
@@ -795,16 +865,19 @@ private:
             } else if (cmd == "/recovery-key") {
                 command({{"cmd", "get_recovery_key"}});
             } else if (cmd == "/settings") {
-                command({{"cmd", "get_settings"}});
+                selected_ = static_cast<int>(visible_.size()) + 1;
+                on_room_selected();
             } else if (cmd == "/set" && arg.find(' ') != std::string::npos) {
                 auto sp = arg.find(' ');
                 command({{"cmd", "set_setting"}, {"key", arg.substr(0, sp)}, {"value", arg.substr(sp + 1)}});
+                if (settings_selected()) load_settings_page();
             } else if (cmd == "/reboot") {
                 command({{"cmd", "restart_server"}});
             } else if (cmd == "/status") {
                 command({{"cmd", "server_status"}});
             } else if (cmd == "/members") {
-                command({{"cmd", "member_list"}});
+                selected_ = static_cast<int>(visible_.size());
+                on_room_selected();
             } else if (cmd == "/roles") {
                 Elements rows = {text("Roles") | bold};
                 for (const auto& r : roles_) {
@@ -885,6 +958,10 @@ private:
                              {"expires_in", seconds}});
             } else if (cmd == "/history" && room) {
                 command({{"cmd", "request_history"}, {"room_id", room->id}});
+            } else if (cmd == "/receipts" && (arg == "on" || arg == "off")) {
+                command({{"cmd", "set_read_receipts"}, {"enabled", arg == "on"}});
+                notice_ = arg == "on" ? "others will see what you have read" : "others will no longer see what you have read";
+                if (settings_selected()) load_settings_page();
             } else if (cmd == "/share-history" && (arg == "on" || arg == "off")) {
                 command({{"cmd", "set_history_sharing"}, {"enabled", arg == "on"}});
                 notice_ = arg == "on" ? "you will share earlier messages with newcomers who ask"
@@ -912,7 +989,8 @@ private:
             return;
         }
         if (!room) {
-            notice_ = members_selected() ? "this is the members page; open a chat to type (/open <name>)"
+            notice_ = settings_selected() ? "this is the settings page; open a chat to type (/open <name>)"
+                      : members_selected() ? "this is the members page; open a chat to type (/open <name>)"
                                          : "start a chat first: /chat <username>";
             return;
         }
@@ -966,6 +1044,7 @@ private:
                               text("/nick <name>       set your display name on this server"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
+                              text("/receipts on|off   whether others see what you have read"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
@@ -1011,9 +1090,55 @@ private:
         return vbox(std::move(rows)) | yframe | flex;
     }
 
+    // What can be changed, for you and (if you may) for the server.
+    Element settings_view() {
+        auto onoff = [](bool v) { return std::string(v ? "on" : "off"); };
+        auto line = [](const std::string& name, const std::string& value, const std::string& how) {
+            return hbox({text("  " + name + ": ") | bold, text(value) | color(Color::Cyan), text("    " + how) | dim});
+        };
+        Elements rows;
+        rows.push_back(text("You") | bold | color(Color::Green));
+        rows.push_back(line("username", client_settings_.value("username", username_), "fixed once a server knows you"));
+        rows.push_back(line("display name", "set per server", "/nick <name>"));
+        rows.push_back(line("share earlier messages with newcomers", onoff(client_settings_.value("share_history", true)),
+                            "/share-history on|off"));
+        rows.push_back(line("tell others what you have read", onoff(client_settings_.value("send_read_receipts", true)),
+                            "/receipts on|off"));
+        rows.push_back(line("another device as you", "recovery key", "/recovery-key"));
+        rows.push_back(text(""));
+        rows.push_back(text("This server") | bold | color(Color::Green));
+        rows.push_back(line("name", server_name_.empty() ? "?" : server_name_, ""));
+        rows.push_back(line("address", server_shown_, "/servers to see all, /server switch <name>"));
+        rows.push_back(line("server key", server_fp_.empty() ? "?" : server_fp_.substr(0, 16) + "...", "pinned on first connection"));
+        rows.push_back(line("you are", is_owner_ ? "the owner" : permissions_.count("administrator") ? "an administrator" : "a member", ""));
+        if (server_status_.contains("version")) {
+            uint64_t up = server_status_.value("started_at", uint64_t{0});
+            uint64_t now = now_ms_();
+            rows.push_back(line("status", "version " + server_status_.value("version", "?") + ", up " +
+                                              describe_duration(up && now > up ? (now - up) / 1000 : 0) + ", " +
+                                              std::to_string(server_status_.value("members", 0)) + " members (" +
+                                              std::to_string(server_status_.value("online", 0)) + " online), " +
+                                              std::to_string(server_status_.value("stored_bytes", uint64_t{0}) / 1024) + " KB stored",
+                                ""));
+        }
+        if (!server_settings_.empty()) {
+            rows.push_back(text(""));
+            rows.push_back(hbox({text("Server settings") | bold | color(Color::Green),
+                                 text("    /set <name> <value>    /reboot    /invite") | dim}));
+            for (const auto& st : server_settings_) {
+                rows.push_back(hbox({text("  " + st.value("key", "") + " = ") | bold, text(st.value("value", "")) | color(Color::Cyan),
+                                     text(st.value("owner_only", false) ? "  (owner only)" : "") | color(Color::Magenta),
+                                     text(st.value("needs_restart", false) ? "  (needs /reboot)" : "") | dim,
+                                     text("   " + st.value("description", "")) | dim | xflex_shrink}));
+            }
+        }
+        return vbox(std::move(rows)) | yframe | flex;
+    }
+
     Element messages_view() {
         if (show_help_) return help_view();
         if (members_selected()) return members_view();
+        if (settings_selected()) return settings_view();
         Room* room = current();
         if (!room) {
             return vbox({text(""), text("No conversations yet.") | center,
@@ -1048,6 +1173,10 @@ private:
                 }
                 if (any) lines.push_back(text(r) | color(Color::Yellow));
             }
+            std::string readers;
+            for (const auto& [who, upto] : room->read_upto)
+                if (upto == m.event_id) readers += (readers.empty() ? "" : ", ") + who;
+            if (!readers.empty()) lines.push_back(text(indent + "        read by " + readers) | dim);
         };
         for (const auto& m : room->messages) {
             // Thread messages are drawn under the message that started the
@@ -1063,6 +1192,13 @@ private:
                 if (child.thread_root == m.event_id) draw(child, "   | ");
         }
         if (lines.empty()) lines.push_back(text("No messages yet. Say hello.") | dim | center);
+        std::string typers;
+        uint64_t now = now_ms_();
+        for (const auto& [who, until] : room->typing)
+            if (until > now) typers += (typers.empty() ? "" : ", ") + who;
+        if (!typers.empty())
+            lines.push_back(text(typers + (typers.find(", ") == std::string::npos ? " is typing..." : " are typing...")) |
+                            dim);
         return vbox(std::move(lines)) | focusPositionRelative(0, 1) | yframe | flex;
     }
 
@@ -1089,6 +1225,7 @@ private:
                        size(WIDTH, EQUAL, 24);
         Element right = vbox({
             hbox({text(show_help_ ? "Commands   (/help again to close)"
+                                  : settings_selected() ? std::string("Settings")
                                   : members_selected() ? "Members of " + (server_name_.empty() ? std::string("this server") : server_name_)
                                   : room ? room->title : "") | bold,
                   text(room && room->disappear_after
@@ -1135,6 +1272,11 @@ private:
         InputOption chat;
         chat.multiline = false;
         chat.on_enter = [this] { submit_input(); };
+        chat.on_change = [this] {
+            Room* room = current();
+            // The core sends at most one of these every few seconds.
+            if (room && !input_text_.empty() && input_text_[0] != '/') command({{"cmd", "typing"}, {"room_id", room->id}});
+        };
         input_ = Input(&input_text_, "type a message, or /help", chat);
         MenuOption menu = MenuOption::Vertical();
         menu.on_change = [this] { on_room_selected(); };
@@ -1171,7 +1313,11 @@ private:
     std::map<int64_t, std::string> open_by_server_;
     std::vector<size_t> visible_;  // positions in rooms_ of the chats listed on screen
     json member_list_ = json::array();
-    bool was_on_members_ = false;
+    int page_ = 0;  // 0 = a chat is open, 1 = members page, 2 = settings page
+    json client_settings_ = json::object(), server_settings_ = json::array(), server_status_ = json::object();
+    corded_request settings_request_ = 0, status_request_ = 0;
+    std::atomic<uint64_t> typing_until_{0};
+    int idle_ticks_ = 0;
 
     // main
     int phase_ = 0;

@@ -129,6 +129,8 @@ private:
     void request_history(const Bytes& room_id, uint64_t req);  // req 0: nobody is waiting for the answer
     void on_history_wanted(const wire::HistoryWantedT& wanted);
     void accept_history(const EventRow& share);
+    void accept_receipt(const EventRow& receipt);
+    json receipts_json(ByteView room_id);
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
     void fail_outbox(const OutboxRow& row, const std::string& message);
@@ -181,6 +183,7 @@ private:
     std::set<Bytes> devices_requested_;
     std::set<Bytes> unreachable_;  // devices with no keys to start a session from
     std::map<Bytes, uint64_t> history_asked_;  // room -> when we asked, in ms
+    std::map<Bytes, uint64_t> typing_sent_;    // room -> when we last said "typing"
 };
 
 class Engine {

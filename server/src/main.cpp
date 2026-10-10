@@ -443,6 +443,7 @@ public:
                 case wire::FrameBody_Kick: on_kick(*c, rid, *f.body.AsKick()); break;
                 case wire::FrameBody_RemoveAccount: on_remove_account(*c, rid, *f.body.AsRemoveAccount()); break;
                 case wire::FrameBody_SetNickname: on_set_nickname(*c, rid, *f.body.AsSetNickname()); break;
+                case wire::FrameBody_Ephemeral: on_ephemeral(*c, *f.body.AsEphemeral()); break;
                 case wire::FrameBody_GetMembers: on_get_members(*c, rid); break;
                 case wire::FrameBody_NewRole: on_create_role(*c, rid, *f.body.AsNewRole()); break;
                 case wire::FrameBody_EditRole: on_update_role(*c, rid, *f.body.AsEditRole()); break;
@@ -1065,6 +1066,18 @@ private:
         drop_connection_of(q.user_id, "you were removed from this server");
         broadcast_state();
         c.reply(rid, wire::OkT{});
+    }
+
+    // Relayed to members who are online right now; nothing is written to disk.
+    void on_ephemeral(Conn& c, const wire::EphemeralT& q) {
+        if (q.kind.empty() || q.kind.size() > 32 || !storage_.is_member(q.room_id, c.user_id)) return;
+        wire::EphemeralT out;
+        out.room_id = q.room_id;
+        out.kind = q.kind;
+        out.sender_user = c.user_id;
+        for (const auto& m : storage_.room_info(q.room_id).members)
+            for (const auto& dev : storage_.devices_of_user(m->user_id))
+                if (dev.device_id != c.device_id) push(dev.device_id, out);
     }
 
     // Anyone may set their own display name. Setting someone else's needs

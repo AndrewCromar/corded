@@ -43,7 +43,7 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
-           type == "m.history.share";
+           type == "m.history.share" || type == "m.receipt";
 }
 
 }  // namespace
@@ -665,6 +665,51 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (cmd.contains("thread"))
                 ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
             cmd_send_event(req, ev);
+        } else if (name == "typing") {
+            // "I am typing in this room." Not stored anywhere; at most one every
+            // three seconds per room actually goes out.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            uint64_t now = now_ms();
+            if (conn_ == Conn::Live && now - typing_sent_[room_id] >= 3000) {
+                typing_sent_[room_id] = now;
+                wire::EphemeralT eph;
+                eph.room_id = room_id;
+                eph.kind = "typing";
+                send_frame(make_frame(0, std::move(eph)));
+            }
+            ok(req);
+        } else if (name == "mark_read") {
+            // "I have read up to this message." Sent to the room as an encrypted
+            // receipt unless the user has turned receipts off.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            Bytes event_id = need_b64(cmd, "event_id", 16);
+            auto target = vault_.event(room_id, event_id);
+            if (!target || !target->seq) {
+                fail(req, "not_found", "unknown message");
+                return;
+            }
+            const Bytes me = to_bytes(vault_.identity().user.pk);
+            bool moved = vault_.set_receipt(room_id, me, event_id, *target->seq);
+            if (moved && vault_.meta("send_receipts").value_or("1") != "0") {
+                cmd_send_event(next_request_++, {{"room_id", b64(room_id)},
+                                                 {"type", "m.receipt"},
+                                                 {"expires_in", 7 * 24 * 3600},
+                                                 {"relation", {{"kind", "reference"}, {"target", b64(event_id)}}}});
+            }
+            ok(req, {{"sent", moved}});
+        } else if (name == "fetch_receipts") {
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            ok(req, {{"room_id", b64(room_id)}, {"receipts", receipts_json(room_id)}});
+        } else if (name == "set_read_receipts") {
+            // Whether this client tells others what it has read.
+            vault_.set_meta("send_receipts", cmd.value("enabled", true) ? "1" : "0");
+            ok(req);
+        } else if (name == "client_settings") {
+            ok(req, {{"client_settings",
+                      {{"username", vault_.username()},
+                       {"user_id", b64(vault_.identity().user.pk)},
+                       {"share_history", vault_.meta("share_history").value_or("1") != "0"},
+                       {"send_read_receipts", vault_.meta("send_receipts").value_or("1") != "0"}}}});
         } else if (name == "get_recovery_key") {
             // The secret that lets this person set up another device. Whoever
             // has it can become them, so frontends should show it with care.
@@ -708,7 +753,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             Bytes room_id = need_b64(cmd, "room_id", 16);
             json events = json::array();
             for (const auto& e : vault_.timeline(room_id, cmd.value("limit", 200u)))
-                if (e.type != "m.history.share") events.push_back(event_json(e));  // envelopes are not messages
+                if (e.type != "m.history.share" && e.type != "m.receipt")
+                    events.push_back(event_json(e));  // envelopes and receipts are not messages
             ok(req, {{"room_id", b64(room_id)}, {"events", std::move(events)}});
         } else {
             fail(req, "unknown_command", "unknown command: " + name);
@@ -1183,7 +1229,8 @@ void Session::cmd_send_event(uint64_t req, const json& cmd) {
         vault_.outbox_push(e.room_id, e.event_id);
         tx.commit();
     }
-    emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
+    if (e.type != "m.receipt")
+        emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     apply_state(e);
     apply_relation(e);
     ok(req, {{"event_id", b64(e.event_id)}});
@@ -1374,6 +1421,20 @@ void Session::on_frame(wire::FrameT& f) {
             // Someone added a device; ask again who their devices are before the next send.
             devices_.erase(f.body.AsDevicesChanged()->user_id);
             break;
+        case wire::FrameBody_Ephemeral: {
+            const auto* eph = f.body.AsEphemeral();
+            if (eph->kind != "typing") break;
+            auto room = vault_.room(eph->room_id);
+            if (!room || room->server_id != id_) break;
+            for (const auto& m : room->members)
+                if (m.user_id == eph->sender_user)
+                    emit({{"event", "typing"},
+                          {"room_id", b64(eph->room_id)},
+                          {"user_id", b64(m.user_id)},
+                          {"username", m.username},
+                          {"display_name", m.display()}});
+            break;
+        }
         case wire::FrameBody_Notice:
             emit({{"event", "server_notice"}, {"message", f.body.AsNotice()->message}});
             break;
@@ -1500,6 +1561,45 @@ void Session::reconcile_rooms(const wire::RoomListT& list) {
     }
 }
 
+// ---------------------------------------------------------------- receipts
+// A read receipt says "I have read up to this message". It travels as an
+// encrypted event like any other, so the server cannot tell who read what.
+
+Session::json Session::receipts_json(ByteView room_id) {
+    json out = json::array();
+    auto room = vault_.room(room_id);
+    for (const auto& r : vault_.receipts(room_id)) {
+        json j = {{"user_id", b64(r.user_id)}, {"event_id", b64(r.event_id)}, {"event_seq", r.seq}};
+        if (room)
+            for (const auto& m : room->members)
+                if (m.user_id == r.user_id) {
+                    j["username"] = m.username;
+                    j["display_name"] = m.display();
+                }
+        out.push_back(std::move(j));
+    }
+    return out;
+}
+
+void Session::accept_receipt(const EventRow& receipt) {
+    if (receipt.rel_kind != "reference" || receipt.rel_target.size() != 16) return;
+    auto target = vault_.event(receipt.room_id, receipt.rel_target);
+    if (!target || !target->seq) return;  // a receipt for something we never had
+    if (!vault_.set_receipt(receipt.room_id, receipt.sender_user, receipt.rel_target, *target->seq)) return;
+    json j = {{"event", "receipt"},
+              {"room_id", b64(receipt.room_id)},
+              {"user_id", b64(receipt.sender_user)},
+              {"event_id", b64(receipt.rel_target)},
+              {"event_seq", *target->seq}};
+    if (auto room = vault_.room(receipt.room_id))
+        for (const auto& m : room->members)
+            if (m.user_id == receipt.sender_user) {
+                j["username"] = m.username;
+                j["display_name"] = m.display();
+            }
+    emit(std::move(j));
+}
+
 // ---------------------------------------------------------------- history
 // Messages from before someone joined were never encrypted to them. A newcomer
 // asks; members' clients that are willing hand the messages over, encrypted to
@@ -1566,7 +1666,9 @@ void Session::on_history_wanted(const wire::HistoryWantedT& wanted) {
     for (const auto& e : vault_.timeline(room->room_id, limit)) {
         // Never disappearing messages, deleted ones, unsent ones, or history
         // envelopes themselves.
-        if (e.status != "ok" || e.expires_at != 0 || !e.seq || e.type == "m.history.share") continue;
+        if (e.status != "ok" || e.expires_at != 0 || !e.seq || e.type == "m.history.share" ||
+            e.type == "m.receipt")
+            continue;
         json item = {{"event_id", b64(e.event_id)},
                      {"type", e.type},
                      {"type_version", e.type_version},
@@ -1776,6 +1878,10 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
     if (decrypted && row.type == "m.history.share") {
         accept_history(row);
         return;  // the envelope is not a message; frontends never see it
+    }
+    if (decrypted && row.type == "m.receipt") {
+        accept_receipt(row);
+        return;  // shown on the message it refers to, not as a message
     }
     // Announce the event first, then whatever it changes.
     emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});

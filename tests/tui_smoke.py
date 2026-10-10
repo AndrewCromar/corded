@@ -239,8 +239,7 @@ def main():
         alice.expect("retention_days = ")
         alice.type("/set retention_days 14\r")
         alice.expect("retention_days is now 14")
-        alice.type("/status\r")
-        alice.expect("Server status")
+        alice.expect("status: version")
         bob.type("/set registration closed\r")
         bob.expect("do not have permission")
         print("ok  settings and status from the owner's client; refused for others")
@@ -347,6 +346,24 @@ def main():
         alice.expect("owner", timeout=30)
         alice.expect_any(["sent while alice was away", "bob (1)"], timeout=30)
         print("ok  restart: wrong passphrase refused, channels and ownership restored, missed message delivered")
+
+        # Read markers and typing notices between the two of them.
+        bob.type("/help\r")   # close the help left open above
+        alice.type("/open bob\r")
+        bob.expect("read by alice", timeout=30)
+        alice.type("hel")
+        bob.expect("alice is typing", timeout=15)
+        alice.type("lo back\r")
+        bob.expect("hello back", timeout=15)
+        print("ok  read marker under the last message read, typing notice while composing")
+
+        # The settings page: everyone sees their own, the owner also sees the server's.
+        bob.type("/settings\r")
+        bob.expect("tell others what you have read", timeout=15)
+        alice.type("/settings\r")
+        alice.expect("Server settings", timeout=15)
+        alice.expect("status: version", timeout=15)
+        print("ok  settings page: personal settings for all, server settings and status for the owner")
         print("PASS")
     finally:
         try:

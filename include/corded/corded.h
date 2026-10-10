@@ -63,6 +63,11 @@
  *    "thread":"<id of the message that started the thread, optional>",
  *    "expires_in":<seconds until this one message disappears, optional>}
  *   {"cmd":"set_disappearing","room_id":"...","seconds":3600}   (0 turns it off)
+ *   {"cmd":"typing","room_id":"..."}                 say "I am typing"; never stored
+ *   {"cmd":"mark_read","room_id":"...","event_id":"..."}   read up to this message
+ *   {"cmd":"fetch_receipts","room_id":"..."}         who has read up to where
+ *   {"cmd":"set_read_receipts","enabled":false}      stop telling others what you read
+ *   {"cmd":"client_settings"}
  *   {"cmd":"get_recovery_key"}        the secret for adding another device; handle with care
  *   {"cmd":"request_history","room_id":"..."}       ask members for earlier messages
  *   {"cmd":"set_history_sharing","enabled":false}   stop answering such requests
@@ -76,7 +81,7 @@
  * Events (JSON objects, "event" names the event):
  *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
  *   room_removed,
- *   event_received, event_expired, history_received, server_notice,
+ *   event_received, event_expired, history_received, server_notice, typing, receipt,
  *   event_updated, event_send_status, command_result, warning
  */
 #ifndef CORDED_H

@@ -1467,6 +1467,78 @@ TEST_CASE("the owner runs the server from a client") {
     bob.wait_message("after the restart");
 }
 
+TEST_CASE("typing notices and read receipts") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+
+    // Bob starts typing; Alice is told, Bob is not told about himself.
+    REQUIRE(bob.cmd({{"cmd", "typing"}, {"room_id", general}})["ok"] == true);
+    json typing = alice.wait("bob typing", [&](const json& e) { return e["event"] == "typing"; });
+    REQUIRE(typing["room_id"] == general);
+    REQUIRE(typing["username"] == "bob");
+
+    // Bob reads Alice's message and she learns of it.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "first"}})["ok"] == true);
+    std::string first = bob.have_message("first")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", first}})["data"]["sent"] == true);
+    json receipt = alice.have("receipt for first", [&](const json& e) { return e["event"] == "receipt"; });
+    REQUIRE(receipt["username"] == "bob");
+    REQUIRE(receipt["event_id"] == first);
+    // Marking the same message again says nothing new.
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", first}})["data"]["sent"] == false);
+
+    auto read_by_bob = [&] {
+        std::string upto;
+        json reply = alice.cmd({{"cmd", "fetch_receipts"}, {"room_id", general}});
+        for (const auto& r : reply["data"]["receipts"])
+            if (r.value("username", "") == "bob") upto = r["event_id"];
+        return upto;
+    };
+    REQUIRE(read_by_bob() == first);
+    // Receipts are bookkeeping, not messages: they never show up in the timeline.
+    for (Client* c : {&alice, &bob}) {
+        json tl = c->cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 500}});
+        REQUIRE(tl["data"]["events"].size() == 1);
+        for (const auto& e : tl["data"]["events"]) REQUIRE(e.value("type", "") != "m.receipt");
+    }
+
+    // With receipts turned off, Bob keeps his own place but tells nobody.
+    REQUIRE(bob.cmd({{"cmd", "client_settings"}})["data"]["client_settings"]["send_read_receipts"] == true);
+    REQUIRE(bob.cmd({{"cmd", "set_read_receipts"}, {"enabled", false}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "client_settings"}})["data"]["client_settings"]["send_read_receipts"] == false);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "second"}})["ok"] == true);
+    std::string second = bob.have_message("second")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", second}})["ok"] == true);
+    // Anything Bob had sent would arrive before this next message of his.
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "marker"}})["ok"] == true);
+    alice.have_message("marker");
+    REQUIRE(read_by_bob() == first);
+
+    // Turned back on, the next thing he reads is reported.
+    REQUIRE(bob.cmd({{"cmd", "set_read_receipts"}, {"enabled", true}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "third"}})["ok"] == true);
+    std::string third = bob.have_message("third")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", third}})["ok"] == true);
+    alice.wait("receipt for third", [&](const json& e) { return e["event"] == "receipt" && e["event_id"] == third; });
+    REQUIRE(read_by_bob() == third);
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();
