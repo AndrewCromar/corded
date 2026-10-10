@@ -1035,7 +1035,22 @@ private:
                 return;
             }
             std::filesystem::create_directories(options_.data_dir + "/blobs");
+            uint64_t before = storage_.blob_bytes();
             storage_.blob_begin(q.blob_id, c.user_id, q.total);
+            // Those who run the server hear when the space for files is nearly
+            // gone: once on passing 80%, once on passing 95%.
+            if (limit > 0)
+                for (int mark : {95, 80})
+                    if (before * 100 < limit * mark && (before + q.total) * 100 >= limit * mark) {
+                        wire::NoticeT note;
+                        note.message = "files now take " + std::to_string(mark) + "% of the space this server allows (" +
+                                       setting("storage_limit_mb") +
+                                       " MB). Raise storage_limit_mb, shorten retention_days, or delete old files.";
+                        for (auto& [device, weak] : online_)
+                            if (auto conn = weak.lock(); conn && (storage_.permissions(conn->user_id) & perm::ManageServer))
+                                conn->reply(0, wire::NoticeT(note));
+                        break;
+                    }
             row = storage_.blob(q.blob_id);
         }
         if (row->owner != c.user_id || row->total != q.total || row->stored != q.offset) {

@@ -2200,6 +2200,19 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
     REQUIRE(bad["ok"] == false);
     REQUIRE(bad["error"]["code"] == "bad_file");
 
+    // Space for files in all: the owner hears when it is nearly gone, and a file that would not fit is refused.
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "storage_limit_mb"}, {"value", "1"}})["ok"] == true);
+    auto small = tmp.path / "small.bin";
+    std::ofstream(small, std::ios::binary) << std::string(200 * 1024, 'y');
+    REQUIRE(bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", small.string()}})["ok"] == true);
+    alice.wait("the warning", [](const json& e) {
+        return e["event"] == "server_notice" && e.value("message", "").find("80%") != std::string::npos;
+    });
+    json full = bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", small.string()}});
+    REQUIRE(full["ok"] == false);
+    REQUIRE(full["error"]["message"].get<std::string>().find("no room") != std::string::npos);
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "storage_limit_mb"}, {"value", "0"}})["ok"] == true);
+
     // The owner's limit is kept.
     REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "max_file_mb"}, {"value", "1"}})["ok"] == true);
     auto big = tmp.path / "big.bin";
@@ -2215,7 +2228,8 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
         return e["event"] == "event_updated" && e["data"]["event_id"] == sent["data"]["event_id"] &&
                e["data"]["status"] == "redacted";
     });
-    REQUIRE(std::filesystem::is_empty(blobs));
+    // Only Bob's small file is left.
+    REQUIRE(std::distance(std::filesystem::directory_iterator(blobs), std::filesystem::directory_iterator{}) == 1);
 }
 
 TEST_CASE("a task-list channel: anyone who can write adds tasks and ticks them") {
