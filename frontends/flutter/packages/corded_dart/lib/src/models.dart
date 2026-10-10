@@ -154,9 +154,13 @@ class Profile {
         fullName = j['full_name'] as String? ?? '',
         birthday = j['birthday'] as String? ?? '',
         bio = j['bio'] as String? ?? '',
+        picture = j['picture'] as String? ?? '',
         links = ((j['links'] as List?) ?? const []).map((e) => '$e').toList();
   final String displayName, fullName, birthday, bio;
+
+  /// A small picture as base64 (JPEG or PNG), or empty.
+  final String picture;
   final List<String> links;
 
-  bool get isEmpty => displayName.isEmpty && fullName.isEmpty && birthday.isEmpty && bio.isEmpty && links.isEmpty;
+  bool get isEmpty => displayName.isEmpty && fullName.isEmpty && birthday.isEmpty && bio.isEmpty && links.isEmpty && picture.isEmpty;
 }

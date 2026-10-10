@@ -88,6 +88,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                             CheckboxListTile(
                               secondary: PresenceAvatar(
                                   name: m.displayName,
+                                  picture: widget.state.store.picture(m.userId),
                                   status: widget.state.store.presence(serverId, m.userId)),
                               title: Text(m.displayName),
                               subtitle: Text('@${m.username}'),

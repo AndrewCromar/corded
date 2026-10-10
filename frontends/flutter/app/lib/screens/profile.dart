@@ -1,7 +1,12 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import 'chat.dart';
 import 'common.dart';
 import 'linked_text.dart';
@@ -22,6 +27,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Profile? _profile;
 
   bool get _me => widget.username == widget.state.store.username;
+
+  static Uint8List? _pictureBytes(Profile p) {
+    if (p.picture.isEmpty) return null;
+    try {
+      return base64Decode(p.picture);
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   void initState() {
@@ -86,13 +100,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           : ListView(children: [
               const SizedBox(height: 24),
               Center(
-                child: Stack(clipBehavior: Clip.none, children: [
-                  CircleAvatar(
-                      radius: 44,
-                      child: Text(name.isEmpty ? '?' : name[0].toUpperCase(),
-                          style: theme.textTheme.displaySmall)),
-                  Positioned(right: 0, bottom: 0, child: PresenceDot(status, size: 22)),
-                ]),
+                child: PresenceAvatar(name: name, radius: 48, status: status, picture: _pictureBytes(p)),
               ),
               const SizedBox(height: 12),
               Center(child: Text(name, style: theme.textTheme.headlineSmall)),
@@ -152,6 +160,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _bio = TextEditingController();
   final _links = TextEditingController();
   bool _loaded = false;
+  String _picture = ''; // base64, as it will be saved
+  bool _pictureChanged = false;
+
+  Future<void> _choosePicture() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file =
+          await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, maxHeight: 1024);
+      if (file == null) return;
+      final small = shrinkToProfilePicture(await file.readAsBytes());
+      if (small == null) {
+        messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _picture = small;
+          _pictureChanged = true;
+        });
+      }
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The picture could not be opened.')));
+    }
+  }
 
   @override
   void initState() {
@@ -164,6 +196,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _birthday.text = p.birthday;
         _bio.text = p.bio;
         _links.text = p.links.join('\n');
+        _picture = p.picture;
         _loaded = true;
       });
     }).catchError((_) {
@@ -189,6 +222,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               'full_name': _fullName.text.trim(),
               'birthday': birthday,
               'bio': _bio.text.trim(),
+              if (_pictureChanged) 'picture': _picture,
               'links': [
                 for (final line in _links.text.split('\n'))
                   if (line.trim().isNotEmpty) line.trim()
@@ -229,6 +263,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     Text('Everything here is optional. It is sent, encrypted, to the people you share a chat '
                         'with. Servers only ever see your username.'),
               ),
+              Center(
+                child: PresenceAvatar(
+                    name: _displayName.text.isEmpty ? widget.state.store.username : _displayName.text,
+                    radius: 44,
+                    picture: () {
+                      if (_picture.isEmpty) return null;
+                      try {
+                        return base64Decode(_picture);
+                      } catch (_) {
+                        return null;
+                      }
+                    }()),
+              ),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                TextButton.icon(
+                    onPressed: _choosePicture,
+                    icon: const Icon(Icons.photo_outlined),
+                    label: Text(_picture.isEmpty ? 'Add a picture' : 'Change picture')),
+                if (_picture.isNotEmpty)
+                  TextButton(
+                      onPressed: () => setState(() {
+                            _picture = '';
+                            _pictureChanged = true;
+                          }),
+                      child: const Text('Remove')),
+              ]),
+              const SizedBox(height: 8),
               field(_displayName, 'Display name', helper: 'Shown instead of your username', max: 40),
               field(_fullName, 'Full name', max: 80),
               field(_birthday, 'Birthday', helper: '2004-05-17, or 05-17 without the year'),

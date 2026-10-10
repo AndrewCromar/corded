@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 /// How a presence is shown: its colour and what to call it.
@@ -31,17 +33,28 @@ class PresenceDot extends StatelessWidget {
   }
 }
 
-/// An avatar with the person's presence at its corner.
+/// A person's picture, or their initial when they have none, with their
+/// presence at its corner when [status] is given.
 class PresenceAvatar extends StatelessWidget {
-  const PresenceAvatar({super.key, required this.name, required this.status});
+  const PresenceAvatar({super.key, required this.name, this.status, this.picture, this.radius = 20});
   final String name;
-  final String status;
+  final String? status;
+  final Uint8List? picture;
+  final double radius;
 
   @override
   Widget build(BuildContext context) {
+    final avatar = CircleAvatar(
+      radius: radius,
+      backgroundImage: picture == null ? null : MemoryImage(picture!),
+      child: picture != null
+          ? null
+          : Text(name.isEmpty ? '?' : name[0].toUpperCase(), style: TextStyle(fontSize: radius * 0.9)),
+    );
+    if (status == null) return avatar;
     return Stack(clipBehavior: Clip.none, children: [
-      CircleAvatar(child: Text(name.isEmpty ? '?' : name[0].toUpperCase())),
-      Positioned(right: -2, bottom: -2, child: PresenceDot(status, size: 14)),
+      avatar,
+      Positioned(right: -2, bottom: -2, child: PresenceDot(status!, size: radius * 0.7)),
     ]);
   }
 }

@@ -20,6 +20,8 @@ dependencies:
   biometric_storage: ^5.0.0
   qr_flutter: ^4.1.0
   mobile_scanner: ^6.0.0
+  image_picker: ^1.1.0
+  image: ^4.2.0
 
 dev_dependencies:
   flutter_test:

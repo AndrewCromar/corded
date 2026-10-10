@@ -237,7 +237,9 @@ class _MembersScreenState extends State<MembersScreen> {
                     for (final m in members)
                       ListTile(
                         leading: PresenceAvatar(
-                            name: m.displayName, status: widget.state.store.presence(_server.id, m.userId)),
+                            name: m.displayName,
+                            picture: widget.state.store.picture(m.userId),
+                            status: widget.state.store.presence(_server.id, m.userId)),
                         title: Text(m.me ? '${m.displayName} (you)' : m.displayName),
                         subtitle: Text([
                           presenceLook(widget.state.store.presence(_server.id, m.userId)).label,

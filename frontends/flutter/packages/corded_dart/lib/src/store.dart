@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'engine.dart';
 import 'mentions.dart';
@@ -30,6 +32,7 @@ class CordedStore {
   final Map<String, Map<String, DateTime>> _typing = {}; // room -> name -> until
   final Map<String, Map<String, String>> _readUpTo = {}; // room -> name -> message id
   final Map<int, Map<String, String>> _presence = {}; // server -> person -> online, away or dnd
+  final Map<String, Uint8List?> _pictures = {}; // person -> their picture; null if they have none
   final Set<String> _loaded = {};
   final Map<String, String?> _oldest = {}; // room -> where the next older page starts; null = none left
   String notice = '';
@@ -126,6 +129,30 @@ class CordedStore {
   Future<Profile> profile([String? userId]) async {
     final r = await engine.command({'cmd': 'get_profile', if (userId != null) 'user_id': userId});
     return Profile.fromJson(((r['profile'] as Map?) ?? const {}).cast<String, dynamic>());
+  }
+
+  /// Someone's profile picture, if this device has it. The first call for a
+  /// person looks it up in the vault and reports through [changes].
+  Uint8List? picture(String userId) {
+    if (_pictures.containsKey(userId)) return _pictures[userId];
+    _pictures[userId] = null;
+    engine.command({'cmd': 'get_profile', 'user_id': userId}).then((r) {
+      _setPicture(userId, ((r['profile'] as Map?) ?? const {})['picture']);
+      _changed();
+    }).catchError((_) {});
+    return null;
+  }
+
+  void _setPicture(String userId, Object? base64Picture) {
+    Uint8List? bytes;
+    if (base64Picture is String && base64Picture.isNotEmpty) {
+      try {
+        bytes = base64Decode(base64Picture);
+      } catch (_) {
+        bytes = null;
+      }
+    }
+    _pictures[userId] = bytes;
   }
 
   /// How present someone is on a server: online, away, dnd or offline.
@@ -299,6 +326,8 @@ class CordedStore {
         _applyServer(e);
       case 'room_updated':
         _applyRoom((e['room'] as Map).cast<String, dynamic>());
+      case 'profile_updated':
+        _setPicture('${e['user_id']}', ((e['profile'] as Map?) ?? const {})['picture']);
       case 'presence':
         final server = (e['server_id'] as num?)?.toInt() ?? 0;
         final status = '${e['status']}';

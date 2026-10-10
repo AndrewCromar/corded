@@ -79,10 +79,14 @@ class HomeScreen extends StatelessWidget {
 
     Widget tile(Room r) => ListTile(
           leading: r.kind == 'direct'
-              ? Stack(clipBehavior: Clip.none, children: [
-                  const Icon(Icons.person_outline),
-                  Positioned(right: -4, bottom: -2, child: PresenceDot(statusIn(r) ?? 'offline', size: 11)),
-                ])
+              ? PresenceAvatar(
+                  name: r.title,
+                  radius: 16,
+                  picture: () {
+                    final other = r.members.where((m) => !m.me).firstOrNull;
+                    return other == null ? null : state.store.picture(other.userId);
+                  }(),
+                  status: statusIn(r) ?? 'offline')
               : Icon(r.kind == 'channel' ? Icons.tag : Icons.group_outlined),
           title: Text(r.kind == 'channel' ? r.title.replaceFirst('#', '') : r.title,
               maxLines: 1,
