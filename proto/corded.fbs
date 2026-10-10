@@ -35,7 +35,9 @@ table PublishPrekeys { spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte]; otks: [Ke
 // With device_id, the bundle for that device; without, for the person's first device.
 table FetchBundle { user_id: [ubyte]; device_id: [ubyte]; }
 // One person may use several devices. Senders encrypt to each of them.
-table DeviceRef { device_id: [ubyte]; }
+table DeviceRef { device_id: [ubyte]; created_at: uint64; }
+// A person signs one of their own devices out for good.
+table RemoveDevice { device_id: [ubyte]; }
 table ListDevices { user_id: [ubyte]; }
 table DeviceList { user_id: [ubyte]; devices: [DeviceRef]; }
 table DevicesChanged { user_id: [ubyte]; }   // pushed when someone adds a device
@@ -146,7 +148,7 @@ union FrameBody {
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
   ListDevices, DeviceList, DevicesChanged,
   RemoveAccount, SetNickname, Ephemeral,
-  GetOverrides, Overrides, SetChannelNsfw
+  GetOverrides, Overrides, SetChannelNsfw, RemoveDevice
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

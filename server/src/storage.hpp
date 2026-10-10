@@ -164,6 +164,24 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
     }
 
     // Returns 0 on success or an error code.
+    uint64_t device_created_at(ByteView device_id) {
+        auto st = db_.prepare("SELECT created_at FROM devices WHERE device_id = ?");
+        st.bind(1, device_id);
+        return st.step() ? st.u64(0) : 0;
+    }
+    // Forgets one device: its keys and whatever was waiting for it.
+    void remove_device(ByteView device_id) {
+        db::Transaction tx(db_);
+        for (const char* sql : {"DELETE FROM room_events WHERE recipient_device = ?",
+                                "DELETE FROM one_time_prekeys WHERE device_id = ?",
+                                "DELETE FROM signed_prekeys WHERE device_id = ?",
+                                "DELETE FROM devices WHERE device_id = ?"}) {
+            auto st = db_.prepare(sql);
+            st.bind(1, device_id).exec();
+        }
+        tx.commit();
+    }
+
     std::vector<DeviceRow> devices_of_user(ByteView user_id) {
         std::vector<Bytes> ids;
         {

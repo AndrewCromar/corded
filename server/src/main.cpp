@@ -438,6 +438,7 @@ public:
                     break;
                 case wire::FrameBody_FetchBundle: on_fetch_bundle(*c, rid, *f.body.AsFetchBundle()); break;
                 case wire::FrameBody_ListDevices: on_list_devices(*c, rid, *f.body.AsListDevices()); break;
+                case wire::FrameBody_RemoveDevice: on_remove_device(*c, rid, *f.body.AsRemoveDevice()); break;
                 case wire::FrameBody_LookupUser: on_lookup_user(*c, rid, *f.body.AsLookupUser()); break;
                 case wire::FrameBody_CreateRoom: on_create_room(*c, rid, *f.body.AsCreateRoom()); break;
                 case wire::FrameBody_ListRooms: on_list_rooms(*c, rid); break;
@@ -667,9 +668,40 @@ private:
             for (const auto& d : storage_.devices_of_user(q.user_id)) {
                 auto ref = std::make_unique<wire::DeviceRefT>();
                 ref->device_id = d.device_id;
+                ref->created_at = storage_.device_created_at(d.device_id);
                 list.devices.push_back(std::move(ref));
             }
         c.reply(rid, std::move(list));
+    }
+
+    // Only a person's own devices, and never the one asking: that one signs
+    // itself out by erasing itself.
+    void on_remove_device(Conn& c, uint32_t rid, const wire::RemoveDeviceT& q) {
+        auto device = storage_.find_device(q.device_id);
+        if (!device || device->user_id != c.user_id) {
+            c.fail(rid, err::NotFound, "that is not one of your devices");
+            return;
+        }
+        if (q.device_id == c.device_id) {
+            c.fail(rid, err::Forbidden, "this is the device you are using; sign out on it instead");
+            return;
+        }
+        auto it = online_.find(q.device_id);
+        if (it != online_.end()) {
+            if (auto conn = it->second.lock()) {
+                conn->fail(0, err::Forbidden, "this device was signed out from another of your devices");
+                conn->close_when_flushed();
+            }
+            online_.erase(it);
+        }
+        storage_.remove_device(q.device_id);
+        spdlog::info("{} removed one of their devices", c.username);
+        // Everyone should stop sending to it.
+        wire::DevicesChangedT changed;
+        changed.user_id = c.user_id;
+        for (auto& [id, weak] : online_)
+            if (auto conn = weak.lock()) conn->reply(0, wire::DevicesChangedT(changed));
+        c.reply(rid, wire::OkT{});
     }
 
     // To every device of this person that is online.

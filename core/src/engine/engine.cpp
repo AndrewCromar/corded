@@ -755,6 +755,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
+                   name == "list_devices" || name == "remove_device" ||
                    name == "kick" ||
                    name == "ban_user" ||
                    name == "remove_account" || name == "set_nickname" ||
@@ -1095,6 +1096,31 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         q.role_id = role_id(cmd.at("role").get<std::string>());
         q.allow = permission_bits(cmd.value("allow", json::array()));
         q.deny = permission_bits(cmd.value("deny", json::array()));
+        simple_request(req, std::move(q));
+    } else if (name == "list_devices") {
+        // The devices signed in as this person on this server.
+        wire::ListDevicesT q;
+        q.user_id = to_bytes(vault_.identity().user.pk);
+        request(std::move(q), [this, req](wire::FrameT& r) {
+            auto* list = r.body.AsDeviceList();
+            if (!list) {
+                fail(req, "refused", "could not list your devices");
+                return;
+            }
+            const auto& mine = vault_.identity().device.pk;
+            json devices = json::array();
+            for (const auto& d : list->devices) {
+                if (!d || d->device_id.size() != 32) continue;
+                devices.push_back({{"device_id", b64(d->device_id)},
+                                   {"added_at", d->created_at},
+                                   {"this_device", std::equal(mine.begin(), mine.end(), d->device_id.begin())}});
+            }
+            ok(req, {{"devices", std::move(devices)}});
+        });
+    } else if (name == "remove_device") {
+        // Signs another of this person's devices out for good.
+        wire::RemoveDeviceT q;
+        q.device_id = need_b64(cmd, "device_id", 32);
         simple_request(req, std::move(q));
     } else if (name == "set_channel_nsfw") {
         // Marks a channel so that clients warn before showing it.

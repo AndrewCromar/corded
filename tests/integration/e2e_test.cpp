@@ -1954,4 +1954,32 @@ TEST_CASE("one person on two devices") {
     pc.wait_message("while the pc is off");
     pc.have("laptop message caught up", own_copy("laptop answering"));
     REQUIRE_FALSE(tree_contains(tmp.path / "server", "typed on the laptop"));
+
+    // Alice sees both her devices and signs the laptop out from the PC.
+    pc.have("pc live again", [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; });
+    json devices = pc.cmd({{"cmd", "list_devices"}});
+    REQUIRE(devices["ok"] == true);
+    REQUIRE(devices["data"]["devices"].size() == 2);
+    std::string other;
+    int mine = 0;
+    for (const auto& d : devices["data"]["devices"]) {
+        if (d["this_device"] == true) ++mine;
+        else other = d["device_id"];
+        REQUIRE(d["added_at"].get<uint64_t>() > 0);
+    }
+    REQUIRE(mine == 1);
+    // Not the one in use, and not someone else's.
+    for (const auto& d : devices["data"]["devices"])
+        if (d["this_device"] == true)
+            REQUIRE(pc.cmd({{"cmd", "remove_device"}, {"device_id", d["device_id"]}})["ok"] == false);
+    REQUIRE(bob.cmd({{"cmd", "remove_device"}, {"device_id", other}})["ok"] == false);
+    REQUIRE(pc.cmd({{"cmd", "remove_device"}, {"device_id", other}})["ok"] == true);
+    REQUIRE(pc.cmd({{"cmd", "list_devices"}})["data"]["devices"].size() == 1);
+    // What Bob sends now reaches the PC and no longer the laptop.
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "after the laptop was removed"}})["ok"] == true);
+    pc.wait_message("after the laptop was removed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    for (const auto& e : laptop.seen)
+        if (e["event"] == "event_received")
+            REQUIRE(e["data"]["content"].value("body", "") != "after the laptop was removed");
 }

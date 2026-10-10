@@ -27,6 +27,9 @@
  *       "" clears one. Sent encrypted to the chats you are in; no server sees it.
  *   {"cmd":"get_profile","user_id":"..."}     someone's profile as this device knows it (yours
  *       without user_id). "profile_updated" {user_id, profile} arrives when one changes.
+ *   {"cmd":"list_devices"}                    the devices signed in as you on a server:
+ *       [{device_id, added_at, this_device}]
+ *   {"cmd":"remove_device","device_id":"..."} sign another of your devices out for good
  *   {"cmd":"set_presence","status":"auto"}   auto (online while in use, away when not), dnd
  *       or invisible (others see you as offline). Kept across restarts.
  *   {"cmd":"set_active","active":false}      the frontend says nobody is using it right now
