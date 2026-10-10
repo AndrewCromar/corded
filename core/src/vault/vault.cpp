@@ -557,13 +557,13 @@ void Vault::set_event_status(ByteView room_id, ByteView event_id, const std::str
     st.bind(1, status).bind(2, room_id).bind(3, event_id).exec();
 }
 
-std::vector<EventRow> Vault::timeline(ByteView room_id, uint32_t limit) {
+std::vector<EventRow> Vault::timeline(ByteView room_id, uint32_t limit, uint64_t before_seq) {
     // Newest `limit` events, returned oldest first. Unsent events sort last.
     std::string sql = std::string("SELECT ") + kEventColumns +
-                      " FROM events WHERE room_id = ? "
-                      "ORDER BY (seq IS NULL) DESC, seq DESC, origin_ts DESC LIMIT ?";
+                      " FROM events WHERE room_id = ?1 AND (?3 = 0 OR (seq IS NOT NULL AND seq < ?3)) "
+                      "ORDER BY (seq IS NULL) DESC, seq DESC, origin_ts DESC LIMIT ?2";
     auto st = db_.prepare(sql.c_str());
-    st.bind(1, room_id).bind(2, limit);
+    st.bind(1, room_id).bind(2, limit).bind(3, before_seq);
     std::vector<EventRow> out;
     while (st.step()) out.push_back(read_event(st));
     std::reverse(out.begin(), out.end());
@@ -607,6 +607,19 @@ bool Vault::set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, u
                           "seq = excluded.seq WHERE excluded.seq > receipts.seq");
     st.bind(1, room_id).bind(2, user_id).bind(3, event_id).bind(4, seq).exec();
     return db_.changes() > 0;
+}
+
+uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
+    // Only what a person would call a message counts: not reactions, edits,
+    // membership changes or history handed over by someone else.
+    auto st = db_.prepare(
+        "SELECT COUNT(*) FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
+        "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction') "
+        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND (shared_by IS NULL OR length(shared_by) = 0)");
+    st.bind(1, room_id).bind(2, user_id);
+    return st.step() ? static_cast<uint32_t>(st.u64(0)) : 0;
 }
 
 std::vector<Vault::Receipt> Vault::receipts(ByteView room_id) {

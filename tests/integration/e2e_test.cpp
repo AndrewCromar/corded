@@ -1539,6 +1539,89 @@ TEST_CASE("typing notices and read receipts") {
     REQUIRE(read_by_bob() == third);
 }
 
+TEST_CASE("unread counts and loading older messages a page at a time") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    REQUIRE(bob.cmd({{"cmd", "status"}})["data"]["api"].get<int>() >= 2);
+
+    auto unread = [&](Client& c) {
+        json rooms = c.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"])
+            if (r["room_id"] == general) return r["unread"].get<int>();
+        return -1;
+    };
+    std::vector<std::string> ids;
+    for (int i = 1; i <= 7; ++i) {
+        std::string body = "message " + std::to_string(i);
+        REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", body}})["ok"] == true);
+        json got = bob.have_message(body);
+        REQUIRE(got["unread"] == i);  // each arrival reports the room's new count
+        ids.push_back(got["data"]["event_id"]);
+    }
+    REQUIRE(unread(bob) == 7);
+    REQUIRE(unread(alice) == 0);  // your own messages are never unread
+    // A reaction is not a message and does not count.
+    REQUIRE(alice.cmd({{"cmd", "send_event"}, {"room_id", general}, {"type", "m.reaction"},
+                       {"content", {{"key", "+1"}}},
+                       {"relation", {{"kind", "annotation"}, {"target", ids[0]}, {"key", "+1"}}}})["ok"] == true);
+    bob.wait("the reaction", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["type"] == "m.reaction";
+    });
+    REQUIRE(unread(bob) == 7);
+
+    // Reading part of the way leaves the rest unread, and the room says so.
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[4]}})["ok"] == true);
+    bob.have("count after reading five", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["unread"] == 2;
+    });
+    REQUIRE(unread(bob) == 2);
+    // The marker never moves backwards.
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[1]}})["data"]["sent"] == false);
+    REQUIRE(unread(bob) == 2);
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[6]}})["ok"] == true);
+    REQUIRE(unread(bob) == 0);
+
+    // Pages of three, newest first, walking back to the start.
+    auto bodies = [](const json& page) {
+        std::vector<std::string> out;
+        for (const auto& e : page["data"]["events"])
+            if (e["type"] == "m.text") out.push_back(e["content"]["body"]);
+        return out;
+    };
+    std::vector<std::string> seen_bodies;
+    json page = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 3}});
+    int pages = 0;
+    for (;; ++pages) {
+        REQUIRE(pages < 10);
+        auto b = bodies(page);
+        seen_bodies.insert(seen_bodies.begin(), b.begin(), b.end());
+        if (!page["data"]["more"].get<bool>()) break;
+        std::string oldest = page["data"]["oldest"];
+        page = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 3}, {"before", oldest}});
+        REQUIRE(page["ok"] == true);
+    }
+    REQUIRE(pages >= 2);
+    REQUIRE(seen_bodies.size() == 7);
+    for (int i = 0; i < 7; ++i) REQUIRE(seen_bodies[i] == "message " + std::to_string(i + 1));
+    REQUIRE(bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"before", general}})["ok"] == false);
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();

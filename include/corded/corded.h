@@ -76,7 +76,12 @@
  *   {"cmd":"delete_event","room_id":"...","event_id":"..."}
  *   {"cmd":"send_event","room_id":"...","type":"m.reaction","content":{...},
  *    "relation":{"kind":"annotation","target":"<event id>","key":"+1"}}
- *   {"cmd":"fetch_timeline","room_id":"...","limit":200}
+ *   {"cmd":"fetch_timeline","room_id":"...","limit":200}   the newest 200
+ *   {"cmd":"fetch_timeline","room_id":"...","limit":50,"before":"<message id>"}
+ *       an older page. The result has "more" (there may be older still) and
+ *       "oldest" (pass it as "before" to get the next page).
+ *  Every room carries "unread": messages from others after your read marker.
+ *  mark_read moves the marker; event_received carries the room's new count.
  *
  * Events (JSON objects, "event" names the event):
  *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
@@ -105,7 +110,7 @@ extern "C" {
 #endif
 
 #define CORDED_ABI_VERSION_MAJOR 0
-#define CORDED_ABI_VERSION_MINOR 1
+#define CORDED_ABI_VERSION_MINOR 2
 
 typedef struct corded_engine corded_engine;
 typedef int32_t corded_status;

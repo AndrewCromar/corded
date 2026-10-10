@@ -1,3 +1,4 @@
+#include "corded/corded.h"
 #include "engine/engine.hpp"
 
 #include "corded/common/sig.hpp"
@@ -280,6 +281,7 @@ Session::json Session::room_json(const RoomRow& room) {
             {"kind", kinds[room.kind >= 0 && room.kind <= 2 ? room.kind : 2]},
             {"is_group", room.kind == 2},
             {"disappear_after", room.ttl_s},
+            {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
             {"members", std::move(members)}};
 }
 
@@ -443,7 +445,8 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                 entry["connection"] = s->conn_name();
                 servers.push_back(std::move(entry));
             }
-            json data = {{"vault", vault_.unlocked() ? "unlocked" : vault_exists() ? "locked" : "missing"},
+            json data = {{"api", CORDED_ABI_VERSION_MINOR},
+                         {"vault", vault_.unlocked() ? "unlocked" : vault_exists() ? "locked" : "missing"},
                          {"connection", first ? first->conn_name() : "disconnected"},
                          {"is_admin", first && first->is_admin()},
                          {"servers", std::move(servers)}};
@@ -696,6 +699,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                                                  {"expires_in", 7 * 24 * 3600},
                                                  {"relation", {{"kind", "reference"}, {"target", b64(event_id)}}}});
             }
+            if (moved)
+                if (auto room = vault_.room(room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
             ok(req, {{"sent", moved}});
         } else if (name == "fetch_receipts") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
@@ -752,10 +757,30 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
         } else if (name == "fetch_timeline") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
             json events = json::array();
-            for (const auto& e : vault_.timeline(room_id, cmd.value("limit", 200u)))
+            // "before" names a message; the page returned ends just ahead of it.
+            uint64_t before_seq = 0;
+            if (cmd.contains("before")) {
+                auto anchor = vault_.event(room_id, need_b64(cmd, "before", 16));
+                if (!anchor || !anchor->seq) {
+                    fail(req, "not_found", "unknown message");
+                    return;
+                }
+                before_seq = *anchor->seq;
+            }
+            uint32_t limit = cmd.value("limit", 200u);
+            auto page = vault_.timeline(room_id, limit, before_seq);
+            for (const auto& e : page)
                 if (e.type != "m.history.share" && e.type != "m.receipt")
                     events.push_back(event_json(e));  // envelopes and receipts are not messages
-            ok(req, {{"room_id", b64(room_id)}, {"events", std::move(events)}});
+            // A full page means there may be older ones; ask again with "before"
+            // set to "oldest".
+            json data = {{"room_id", b64(room_id)}, {"events", std::move(events)}, {"more", page.size() == limit}};
+            for (const auto& e : page)
+                if (e.seq) {
+                    data["oldest"] = b64(e.event_id);
+                    break;
+                }
+            ok(req, std::move(data));
         } else {
             fail(req, "unknown_command", "unknown command: " + name);
         }
@@ -1586,6 +1611,10 @@ void Session::accept_receipt(const EventRow& receipt) {
     auto target = vault_.event(receipt.room_id, receipt.rel_target);
     if (!target || !target->seq) return;  // a receipt for something we never had
     if (!vault_.set_receipt(receipt.room_id, receipt.sender_user, receipt.rel_target, *target->seq)) return;
+    const auto& me = vault_.identity().user.pk;
+    // Read on another of this person's devices: the unread count drops here too.
+    if (receipt.sender_user.size() == 32 && std::equal(me.begin(), me.end(), receipt.sender_user.begin()))
+        if (auto room = vault_.room(receipt.room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
     json j = {{"event", "receipt"},
               {"room_id", b64(receipt.room_id)},
               {"user_id", b64(receipt.sender_user)},
@@ -1884,7 +1913,10 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
         return;  // shown on the message it refers to, not as a message
     }
     // Announce the event first, then whatever it changes.
-    emit({{"event", "event_received"}, {"room_id", b64(row.room_id)}, {"data", event_json(row)}});
+    emit({{"event", "event_received"},
+          {"room_id", b64(row.room_id)},
+          {"unread", vault_.unread(row.room_id, to_bytes(vault_.identity().user.pk))},
+          {"data", event_json(row)}});
     if (decrypted) {
         apply_state(row);
         apply_relation(row);

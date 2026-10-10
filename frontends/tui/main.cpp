@@ -226,6 +226,7 @@ private:
                 room.kind = r.value("kind", "direct");
                 room.server_id = r.value("server_id", int64_t{0});
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
+                room.unread = r.value("unread", room.unread);
             }
             if (members_selected()) command({{"cmd", "member_list"}});
             refresh_titles();  // re-sorts, so look the room up again
@@ -261,7 +262,7 @@ private:
             bool is_new = add_event(room, d);
             room.typing.erase(d.value("sender_name", ""));  // they sent it; no longer typing
             if (is_new && !d.value("mine", false) && current() != &room) {
-                ++room.unread;
+                room.unread = ev.value("unread", room.unread + 1);
                 refresh_titles();
             }
             if (current() == &room) mark_read(room);
@@ -543,7 +544,7 @@ private:
     // Tells the others in a chat that we have read up to its newest message.
     void mark_read(Room& room) {
         for (auto it = room.messages.rbegin(); it != room.messages.rend(); ++it) {
-            if (it->mine || it->status != "ok" || it->from_history) continue;
+            if (it->mine || it->from_history) continue;
             if (it->event_id != room.last_marked) {
                 room.last_marked = it->event_id;
                 command({{"cmd", "mark_read"}, {"room_id", room.id}, {"event_id", it->event_id}});

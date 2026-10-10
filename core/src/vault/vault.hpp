@@ -123,7 +123,9 @@ public:
     std::optional<EventRow> event(ByteView room_id, ByteView event_id);
     void confirm_event(ByteView room_id, ByteView event_id, uint64_t seq, uint64_t server_ts);
     void set_event_status(ByteView room_id, ByteView event_id, const std::string& status);
-    std::vector<EventRow> timeline(ByteView room_id, uint32_t limit);
+    // The newest `limit` events, oldest first. With `before_seq`, the newest
+    // `limit` among those the server ordered earlier than that.
+    std::vector<EventRow> timeline(ByteView room_id, uint32_t limit, uint64_t before_seq = 0);
     // Events that point at `target` with the given relation kind, oldest first.
     std::vector<EventRow> related(ByteView room_id, ByteView target, const std::string& kind);
     uint32_t related_count(ByteView room_id, ByteView target, const std::string& kind);
@@ -140,6 +142,8 @@ public:
     };
     bool set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, uint64_t seq);
     std::vector<Receipt> receipts(ByteView room_id);
+    // Messages from others that arrived after this person's read marker.
+    uint32_t unread(ByteView room_id, ByteView user_id);
     std::vector<OutboxRow> outbox();
     void outbox_remove(int64_t local_id);
 
