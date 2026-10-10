@@ -119,6 +119,16 @@ class _ServerScreenState extends State<ServerScreen> {
             },
           ),
           ListTile(
+            leading: Icon(r.archived ? Icons.unarchive_outlined : Icons.inventory_2_outlined),
+            title: Text(r.archived ? 'Bring back from the archive' : 'Archive'),
+            subtitle: const Text('Stays readable; nobody can write in it'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _do({'cmd': 'set_channel_archived', 'room_id': r.id, 'archived': !r.archived},
+                  r.archived ? 'The channel is open again.' : 'Archived.');
+            },
+          ),
+          ListTile(
             leading: Icon(r.nsfw ? Icons.visibility_outlined : Icons.visibility_off_outlined),
             title: Text(r.nsfw ? 'Remove the NSFW mark' : 'Mark as NSFW'),
             subtitle: const Text('People are warned before the channel opens'),
@@ -255,7 +265,9 @@ class _ServerScreenState extends State<ServerScreen> {
           for (final r in channels)
             ListTile(
               leading: const Icon(Icons.tag),
-              title: Text(r.title.replaceFirst('#', '') + (r.nsfw ? '  ·  NSFW' : '')),
+              title: Text(r.title.replaceFirst('#', '') +
+                  (r.nsfw ? '  ·  NSFW' : '') +
+                  (r.archived ? '  ·  archived' : '')),
               trailing: const Icon(Icons.more_vert),
               onTap: () => _channelActions(r),
             ),

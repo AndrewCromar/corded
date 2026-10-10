@@ -70,6 +70,7 @@ struct Room {
     std::map<std::string, std::map<std::string, std::pair<uint64_t, std::vector<int>>>> poll_votes;  // poll -> voter -> (when, choices)
     std::map<std::string, std::vector<int>> my_votes;  // poll -> this person's choices
     bool nsfw = false;                // warn before showing this channel
+    bool archived = false;            // readable, closed to writing
     bool uncovered = false;           // the person chose to see it, this visit
     std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
     std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
@@ -339,6 +340,7 @@ private:
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
                 room.unread = r.value("unread", room.unread);
                 room.nsfw = r.value("nsfw", false);
+                room.archived = r.value("archived", false);
                 room.pinned.clear();
                 for (const auto& pin : r.value("pinned", json::array())) room.pinned.push_back(pin.get<std::string>());
             }
@@ -810,7 +812,7 @@ private:
             if (current_server_ != 0 && r.server_id != current_server_) continue;
             if (r.id == open) selected_ = static_cast<int>(visible_.size());
             visible_.push_back(i);
-            titles_.push_back(r.title + (r.nsfw ? " [NSFW]" : "") +
+            titles_.push_back(r.title + (r.nsfw ? " [NSFW]" : "") + (r.archived ? " [archived]" : "") +
                               (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
         titles_.push_back("-- members --");
@@ -1257,6 +1259,8 @@ private:
                              {"deny", {"view_channel"}}});
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", rest},
                              {"allow", {"view_channel"}}});
+                } else if (sub == "archive" && (rest == "on" || rest == "off")) {
+                    command({{"cmd", "set_channel_archived"}, {"room_id", room->id}, {"archived", rest == "on"}});
                 } else if (sub == "nsfw" && (rest == "on" || rest == "off")) {
                     command({{"cmd", "set_channel_nsfw"}, {"room_id", room->id}, {"nsfw", rest == "on"}});
                 } else if (sub == "readonly") {
@@ -1410,7 +1414,7 @@ private:
                               text("/presence auto|dnd|invisible   how others see you (the members page shows everyone)"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
-                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open|nsfw on/off"),
+                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open|nsfw on/off|archive on/off"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                               text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
                               text("   /setnick <user> <name>   change someone's display name"),

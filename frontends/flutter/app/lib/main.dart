@@ -79,8 +79,10 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
             onDismissed: (_) => _dismissBanner(),
             child: Material(
               elevation: 6,
-              color: scheme.inverseSurface,
-              borderRadius: BorderRadius.circular(14),
+              color: scheme.surfaceContainerHighest,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(color: scheme.primary, width: 1.5)),
               child: InkWell(
                 borderRadius: BorderRadius.circular(14),
                 onTap: () {
@@ -91,18 +93,18 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   child: Row(children: [
-                    Icon(Icons.chat_bubble_outline, color: scheme.onInverseSurface, size: 20),
+                    Icon(Icons.chat_bubble_outline, color: scheme.onSurface, size: 20),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: scheme.onInverseSurface, fontWeight: FontWeight.bold)),
+                            style: TextStyle(color: scheme.onSurface, fontWeight: FontWeight.bold)),
                         Text(body,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: scheme.onInverseSurface)),
+                            style: TextStyle(color: scheme.onSurface)),
                       ]),
                     ),
                   ]),

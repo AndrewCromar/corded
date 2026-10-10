@@ -668,15 +668,26 @@ class _ChatScreenState extends State<ChatScreen> {
     ].join(' · ');
     // Other people's messages carry their picture; yours sit on the right without one.
     if (!m.mine) {
-      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 8, top: 6),
-          child: GestureDetector(
-            onTap: () => _showProfile(m),
-            child: PresenceAvatar(name: m.sender, radius: 16, picture: _store.picture(m.senderId)),
+      // The picture and name head a run of messages from one person, once.
+      final at = all.indexOf(m);
+      final before = at > 0 ? all[at - 1] : null;
+      final startsRun = before == null || before.mine || before.senderId != m.senderId;
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        if (startsRun)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: GestureDetector(
+              onTap: () => _showProfile(m),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                PresenceAvatar(name: m.sender, radius: 11, picture: _store.picture(m.senderId)),
+                const SizedBox(width: 8),
+                Text(m.sender,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+              ]),
+            ),
           ),
-        ),
-        Flexible(child: _bubbleColumn(m, all, gone, note, quoted, reactions, readers, foreground)),
+        _bubbleColumn(m, all, gone, note, quoted, reactions, readers, foreground),
       ]);
     }
     return Align(
@@ -692,7 +703,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return Align(
       alignment: m.mine ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * (m.mine ? 0.8 : 0.72)),
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
         child: Column(
           crossAxisAlignment: m.mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
@@ -743,12 +754,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ?.copyWith(color: foreground.withValues(alpha: 0.7))),
                       ]),
                     ),
-                  if (!m.mine)
-                    GestureDetector(
-                        onTap: () => _showProfile(m),
-                        child: Text(m.sender,
-                            style: theme.textTheme.labelMedium
-                                ?.copyWith(color: scheme.primary, fontWeight: FontWeight.bold))),
                   if (m.replyTo != null)
                     // Tap the quoted line to go to the message it quotes.
                     GestureDetector(
@@ -1021,33 +1026,47 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              IconButton(
-                  tooltip: 'Start a poll', icon: const Icon(Icons.poll_outlined), onPressed: _createPoll),
-              Expanded(
-                child: TextField(
-                  controller: _input,
-                  minLines: 1,
-                  maxLines: 5,
-                  textCapitalization: TextCapitalization.sentences,
-                  onChanged: (v) {
-                    // The core sends at most one of these every few seconds.
-                    if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
-                    setState(() {}); // the name suggestions follow what is typed
-                  },
-                  decoration: InputDecoration(
-                    hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          if (room?.archived ?? false)
+            Container(
+              width: double.infinity,
+              color: theme.colorScheme.surfaceContainerHigh,
+              padding: const EdgeInsets.all(14),
+              child: Row(children: [
+                Icon(Icons.inventory_2_outlined, size: 18, color: theme.colorScheme.outline),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('This channel is archived. It can be read but not written in.')),
+              ]),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                IconButton(
+                    tooltip: 'Start a poll', icon: const Icon(Icons.poll_outlined), onPressed: _createPoll),
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    minLines: 1,
+                    maxLines: 5,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (v) {
+                      // The core sends at most one of these every few seconds.
+                      if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
+                      setState(() {}); // the name suggestions follow what is typed
+                    },
+                    decoration: InputDecoration(
+                      hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
                   ),
                 ),
-              ),
-              IconButton.filled(
-                  onPressed: _send, tooltip: 'Send', icon: Icon(_editing != null ? Icons.check : Icons.send)),
-            ]),
-          ),
+                IconButton.filled(
+                    onPressed: _send,
+                    tooltip: 'Send',
+                    icon: Icon(_editing != null ? Icons.check : Icons.send)),
+              ]),
+            ),
         ]),
       ),
     );

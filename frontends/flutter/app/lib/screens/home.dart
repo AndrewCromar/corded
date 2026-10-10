@@ -68,7 +68,8 @@ class HomeScreen extends StatelessWidget {
     final status = _connectionWords.containsKey(server?.connection)
         ? _connectionWords[server?.connection]
         : sentence(server?.connection ?? '');
-    final channels = rooms.where((r) => r.kind == 'channel').toList();
+    final channels = rooms.where((r) => r.kind == 'channel' && !r.archived).toList();
+    final archived = rooms.where((r) => r.kind == 'channel' && r.archived).toList();
     final others = rooms.where((r) => r.kind != 'channel').toList();
 
     // In a direct chat, how present the other person is.
@@ -211,6 +212,8 @@ class HomeScreen extends StatelessWidget {
             ...others.map(tile),
             if (others.isEmpty)
               const ListTile(dense: true, title: Text('None yet. Use the button below to message someone.')),
+            if (archived.isNotEmpty) heading('Archived'),
+            for (final r in archived) Opacity(opacity: 0.55, child: tile(r)),
             const SizedBox(height: 80),
           ]),
         ),
