@@ -46,6 +46,8 @@ def main():
         heard = []
         alice = Bot(vault=os.path.join(tmp, "alice"), username="alice", is_bot=False, hear_bots=True)
         alice.on_message(lambda m: heard.append((m.sender, m.body)))
+        heard_where = []
+        alice.on_message(lambda m: heard_where.append((m.room_id, m.body)))
         alice.connect(address)
         threading.Thread(target=alice.run, daemon=True).start()
 
@@ -296,6 +298,37 @@ def main():
         wait_for("an unknown name", lambda item: "I don't know anyone called **nobody** here." in item[1])
         print("ok  birthday bot: list, reset, set and ask for the owner and for a role with Manage bots; "
               "refused to everyone else")
+
+        # The channel it announces in: #general until told otherwise, and kept through a restart.
+        alice.say(to_bot[alice], "channel")
+        wait_for("where it announces", lambda item: "Birthdays are announced in **#general**." in item[1])
+        alice.say(to_bot[alice], "channel #nowhere")
+        wait_for("a channel it cannot see", lambda item: "I can't see a channel called **#nowhere**" in item[1]
+                 and "`#general`" in item[1])
+        alice.request({"cmd": "create_channel", "name": "parties"})
+        time.sleep(3)
+        alice.say(to_bot[alice], "channel parties")
+        wait_for("the change", lambda item: "Done: birthdays are announced in **#parties** from now on." in item[1])
+        alice.say(to_bot[alice], "time")
+        wait_for("when it wishes", lambda item: "I wish people at **09:00**, by the clock" in item[1])
+        alice.say(to_bot[alice], "time half past")
+        wait_for("a time it cannot read", lambda item: "I can't read that as a time of day." in item[1])
+        alice.say(to_bot[alice], "time 7:30 am")
+        wait_for("the new time", lambda item: "Done: I wish people at **07:30** from now on" in item[1])
+        for running_bot in started[-3:]:
+            if "birthday_bot.py" in running_bot.args:
+                running_bot.terminate()
+                running_bot.wait()
+        birthdays()
+        alice.say(to_bot[alice], "channel")
+        wait_for("the choice kept", lambda item: "Birthdays are announced in **#parties**." in item[1])
+        alice.say(to_bot[alice], "time")
+        wait_for("the time kept", lambda item: "I wish people at **07:30**, by the clock" in item[1])
+        alice.say(to_bot[alice], "reset wishes @carol")
+        wait_for("a wish in the new channel", lambda item: item == (alice.room_id("#parties"),
+                 "🎂 **Happy birthday**, @carol! (22 today.)"), among=heard_where)
+        print("ok  birthday bot: the channel is #general and the time 09:00 until a manager changes them, "
+              "and the changes are kept")
 
         # The rest of the kit.
         assert mentioned_names("hi @Sage, mail me a@b.c or @sage-2") == {"sage", "sage-2"}

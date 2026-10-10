@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Asks new members for their birthday and wishes them a happy one.
 
-    python3 birthday_bot.py SERVER:PORT [--channel '#general'] [--at 09:00]
+    python3 birthday_bot.py SERVER:PORT [--channel '#birthdays'] [--at 09:00]
                             [--greet-existing]
+
+The channel it announces in and the time of day are kept in its files:
+#general and 09:00 to begin with, --channel and --at to choose others at the
+start, and afterwards whatever those who manage bots tell it with
+`channel #name` and `time 08:30`.
 
 When someone joins the server the bot opens a direct chat and asks, once, for
 their birthday. They answer there (05-17, 17 May, 2004-05-17) or put it in
@@ -14,8 +19,9 @@ ask again), private (no post in the channel), public. In a channel, !birthdays
 lists the next few and !help says what the bot is for.
 
 The server's owner, and anyone with a role that has the Manage bots
-permission, can also send it, in a direct chat: list, reset wishes, reset
-asked, reset @name, set @name 05-17, ask @name, ask everyone.
+permission, can also send it, in a direct chat: list, channel #name, time
+08:30, reset wishes, reset asked, reset @name, set @name 05-17, ask @name, ask
+everyone.
 
 Its messages use the marks the apps draw as styling: **bold**, `code`, lines
 starting with "- " as a list and "## " as a heading.
@@ -65,6 +71,18 @@ def parse_birthday(text, this_year):
     if year and not 1900 < int(year) <= this_year:
         return None
     return (f"{year}-" if year else "") + f"{month:02d}-{day:02d}"
+
+
+def parse_time(text):
+    """A time of day as someone wrote it (9:00, 09:00, 9am, 9:30 pm), as
+    "HH:MM"; None if it is not one."""
+    text = text.strip().lower().replace(" ", "").replace(".", "")
+    for form in ("%H:%M", "%I:%M%p", "%I%p"):
+        try:
+            return datetime.datetime.strptime(text, form).strftime("%H:%M")
+        except ValueError:
+            pass
+    return None
 
 
 def falls_on(birthday, today):
@@ -119,8 +137,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("address")
     parser.add_argument("old_channel", nargs="?", help=argparse.SUPPRESS)   # the channel used to be given here
-    parser.add_argument("--channel", default=None, help="where birthdays are announced (default #general)")
-    parser.add_argument("--at", default="09:00", help="when in the day, by this machine's clock")
+    parser.add_argument("--channel", default=None,
+                        help="where birthdays are announced: #general if never chosen; kept in the bot's files, "
+                             "and changed later with `channel #name` by those who manage bots")
+    parser.add_argument("--at", default=None,
+                        help="when in the day, by this machine's clock: 09:00 if never chosen; kept in the bot's "
+                             "files, and changed later with `time 08:30` by those who manage bots")
     parser.add_argument("--greet-existing", action="store_true",
                         help="also ask the people who were here before the bot")
     parser.add_argument("--username", default="birthdays")
@@ -134,8 +156,9 @@ def main():
     parser.add_argument("--tick", type=float, default=30, help=argparse.SUPPRESS)
     parser.add_argument("--join-delay", type=float, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    channel = args.channel or args.old_channel or "#general"
-    args.at = datetime.datetime.strptime(args.at, "%H:%M").strftime("%H:%M")   # 9:00 is 09:00
+    given = args.channel or args.old_channel
+    if args.at and not parse_time(args.at):
+        parser.error(f"--at {args.at}: not a time of day; write it like 09:00")
 
     bot = Bot(vault=args.vault, username=args.username, display_name=args.display_name, picture=args.picture,
               about="I remember birthdays. Tell me yours in a direct chat (like 05-17), or put it in your "
@@ -143,6 +166,34 @@ def main():
     if args.join_delay is not None:
         bot.join_delay = args.join_delay
     people = bot.store.setdefault("people", {})   # user id -> {"birthday", "asked", "no", "private", "wished"}
+
+    # Where birthdays are announced is kept in the bot's files. --channel
+    # counts when it is new or has changed, so that what a manager chose
+    # since is not undone by starting the bot again with the same command.
+    if given and given != bot.store.get("channel_given"):
+        bot.store.update(channel="#" + given.lstrip("#"), channel_given=given)
+        bot.store.pop("channel_id", None)
+        bot.store.save()
+    channel = bot.store.get("channel") or "#general"
+    # The time of day, in the same way.
+    if args.at and args.at != bot.store.get("at_given"):
+        bot.store.update(at=parse_time(args.at), at_given=args.at)
+        bot.store.save()
+    at = bot.store.get("at") or "09:00"
+
+    def follow():
+        """Keeps to the channel when it is given another name."""
+        nonlocal channel
+        room = bot.rooms.get(bot.store.get("channel_id", ""))
+        if room and room.get("title") != channel:
+            channel = bot.store["channel"] = room["title"]
+            bot.store.save()
+        elif not room:
+            try:
+                bot.store["channel_id"] = bot.room_id(channel)
+                bot.store.save()
+            except KeyError:
+                pass   # not a channel the bot can see; saying so is left to the wish that fails
 
     wishing = threading.Lock()   # the clock and an answer in a chat may both find a birthday
 
@@ -198,6 +249,8 @@ def main():
                 "",
                 "**Because you manage bots here**",
                 "- `list`: every birthday I know, and who I have asked",
+                f"- `channel #name`: announce birthdays somewhere else (now {channel})",
+                f"- `time 08:30`: wish people at another time of day (now {at})",
                 "- `reset wishes`: let this year's wishes go out again (`reset wishes @name` for one person)",
                 "- `reset asked`: let me ask people again (`reset asked @name` for one person)",
                 "- `reset @name`: forget everything about one person",
@@ -250,11 +303,43 @@ def main():
         """What the owner and those with the Manage bots permission may tell it."""
         if not bot.may(message.sender_id):
             return "Only the server's owner and people with the **Manage bots** permission can do that."
+        nonlocal channel, at
         words = message.body.split()
         verb, rest = words[0].lower(), words[1:]
         unknown = "I don't know anyone called **{}** here."
         if verb == "list":
             return listing()
+        if verb == "time":
+            clock = datetime.datetime.now().strftime("%H:%M")
+            if not rest:
+                return (f"I wish people at **{at}**, by the clock of the machine I run on (it is {clock} there "
+                        "now). To change that: `time 08:30`.")
+            chosen = parse_time(" ".join(rest))
+            if not chosen:
+                return "I can't read that as a time of day. Write it like `time 08:30` or `time 9am`."
+            at = chosen
+            bot.store["at"] = chosen
+            bot.store.save()
+            return (f"Done: I wish people at **{chosen}** from now on, by the clock of the machine I run on (it is "
+                    f"{clock} there now). I'll remember that when I'm restarted." +
+                    (" That time has passed today, so today's birthdays are wished now." if chosen <= clock else ""))
+        if verb == "channel":
+            follow()
+            if not rest:
+                return f"Birthdays are announced in **{channel}**. To change that: `channel #name`."
+            name = "#" + rest[0].lstrip("#")
+            try:
+                room = bot.rooms[bot.room_id(name)]
+            except KeyError:
+                seen = sorted(r.get("title", "") for r in bot.rooms.values() if r.get("kind") == "channel")
+                return (f"I can't see a channel called **{name}**. The ones I can see: " +
+                        ", ".join(f"`{title}`" for title in seen) + ".")
+            if room.get("can_send") is False:
+                return f"I'm not allowed to write in **{name}**. Let me write there, or choose another."
+            channel = name
+            bot.store.update(channel=name, channel_id=room["room_id"])
+            bot.store.save()
+            return f"Done: birthdays are announced in **{name}** from now on. I'll remember that when I'm restarted."
         if verb == "reset" and rest and rest[0].lower() in ("wishes", "asked"):
             what = rest[0].lower()
             keys = ("wished",) if what == "wishes" else ("asked", "seen")
@@ -311,7 +396,7 @@ def main():
             person.pop("asked", None)
             ask(member)
             return f"Done: I wrote to **{name_of(member)}**."
-        return ("I didn't follow that. What I take from those who manage bots: `list`, `reset wishes`, "
+        return ("I didn't follow that. What I take from those who manage bots: `list`, `channel #name`, `time 08:30`, `reset wishes`, "
                 "`reset asked`, `reset @name`, `set @name 05-17`, `ask @name`, `ask everyone`.")
 
     def ask(member):
@@ -378,12 +463,13 @@ def main():
         age = age_on(birthday, day)
         bot.dm(member["username"], f"🎂 **Happy birthday, {name_of(member)}!**" + (f" {age} today." if age else ""))
         if not person.get("private"):
+            follow()
             # By username with an @, so they are called to it as by any mention.
             bot.say(channel, f"🎂 **Happy birthday**, @{member['username']}!" + (f" ({age} today.)" if age else ""))
 
     def wish():
         now = datetime.datetime.now()
-        if not args.today and now.strftime("%H:%M") < args.at:
+        if not args.today and now.strftime("%H:%M") < at:
             return
         day = today()
         with wishing:
@@ -402,7 +488,7 @@ def main():
         person = people.setdefault(message.sender_id, {})
         word = message.body.strip().lower().strip(".!")
         lost = person.pop("lost", 0)
-        if word.split()[:1] and word.split()[0] in ("list", "reset", "set", "ask"):
+        if word.split()[:1] and word.split()[0] in ("list", "channel", "time", "reset", "set", "ask"):
             answer = manage(message)
             person = people.setdefault(message.sender_id, {})   # they may have reset themselves
         elif word in ("no", "stop", "no thanks"):
@@ -483,6 +569,7 @@ def main():
         ])
 
     bot.connect(args.address)
+    follow()
     print(f"{args.username} is connected", flush=True)
     if args.greet_existing:
         time.sleep(bot.join_delay)   # the bots already here say that they are bots when someone new arrives

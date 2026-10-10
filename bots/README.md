@@ -51,8 +51,15 @@ it found and that it will wish them then, and it says so too when someone it
 asked fills in their profile later. They answer there (`05-17`, `17 May`, `2004-05-17` to have their age
 shown) or put it in their profile; an answer in the chat wins. On the day, at
 `--at` by the clock of the machine the bot runs on, it wishes them in the
-direct chat and in `--channel` (`#general` if not given), where it mentions
-them by `@name` so that they are notified.
+direct chat and in a channel, where it mentions them by `@name` so that they
+are notified.
+
+The channel is kept in the bot's files. It is `#general` to begin with;
+`--channel '#birthdays'` chooses another when the bot is started, and from
+then on those who manage bots change it with `channel #name` in a direct chat
+(below). Starting the bot again with the same command does not undo that.
+The time of day works the same way: `09:00` to begin with, `--at` at the
+start, `time 08:30` from a manager afterwards.
 
 In the direct chat it also understands `help` (what it has for you and
 everything it knows), `when`, `forget`, `no` (never ask again), `private` (no
@@ -66,6 +73,8 @@ permission, can tell it more in a direct chat. Everyone else is refused.
 | | |
 |---|---|
 | `list` | Every birthday it knows (day and month), where each came from, and who it has asked. |
+| `channel #name` | Announce birthdays in another channel. `channel` alone says which it is now. |
+| `time 08:30` | Wish people at another time of day. `time` alone says when, and what the bot's clock reads. |
 | `reset wishes` | Let this year's wishes go out again; anyone whose birthday is today is wished at once. `reset wishes @name` for one person. |
 | `reset asked` | Let it ask people again. `reset asked @name` for one person. |
 | `reset @name` | Forget everything about one person. |
