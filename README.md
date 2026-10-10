@@ -30,8 +30,9 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 |---|---|
 | Design blueprint | Done ([PDF](master_plan/Modular%20E2EE%20Messaging%20Platform%20-%20Technical%20Architecture%20Blueprint.pdf)) |
 | Implementation plan | Done ([master_plan/](master_plan/00-overview.md)) |
-| Prototype | Working on Linux: server, core library, terminal client. One-to-one and group chats, end-to-end encrypted |
-| Everything else in the plan | Not started |
+| Prototype | Working: server, core library and terminal client on Linux, Raspberry Pi and Windows. Channels, direct and group chats, all end-to-end encrypted |
+| Android app | Working test builds (Flutter, on the same core). See below |
+| Desktop GUI, iOS, macOS, a browser client | Not started |
 
 ## Get it without building
 
@@ -65,6 +66,19 @@ can read them first: [install.ps1](packaging/install.ps1), [install.sh](packagin
 
 The Windows build is new and has had little real use; the commands and behaviour are the
 same as described below, with `.\corded-tui.exe` in place of `./build/dev/bin/corded-tui`.
+
+### Android
+
+The app is in testing. Each test build is a signed APK on the
+[releases page](https://github.com/AndrewCromar/corded/releases), named
+`android-test-N`; take the newest. It needs Android 9 or newer on a 64-bit ARM phone,
+and each build installs over the one before and keeps its data. Android will ask you to
+allow installing from your browser or file manager the first time.
+
+To join a server from the app, type its address, or scan an invite's QR code shown by
+someone already in it (Manage server, Make an invite link). The app and the terminal
+client can be the same person: sign in on both with a recovery key (see below) and they
+stay in step.
 
 ## Build it yourself
 
@@ -261,11 +275,24 @@ It does:
 - Safety numbers, so two people can check that nobody is sitting between them.
 - Typed events with relations instead of plain strings. Replies and reactions already use
   this, and it is what threads, edits and the rest will be built on.
+- Files and photos. A file is encrypted on your device under a key of its own and stored
+  on the server as bytes it cannot read; the key travels inside the message. The owner
+  sets how large a file may be and how much space files may take (`/set max_file_mb`,
+  `/set storage_limit_mb`). In the terminal: `/file <path>` and `/save <number>`.
+- Profiles (a name, a picture, a few lines about you, an "I am a bot" mark) that are shared
+  with the people you talk to and never shown to the server.
+- Presence, typing notices, read receipts, pinned messages, polls, mentions, search on the
+  device, unread counts with a "new" line, and marking a chat unread.
+- A list of your devices, and signing one out for good (`/devices`).
+- Channels can be marked NSFW (covered until you choose to look) or archived (kept to
+  read, closed to writing).
+- An Android app with all of the above, notifications while it is in the background, and
+  fingerprint unlock.
 - A frontend that uses only the public header, [`corded.h`](include/corded/corded.h).
 
 It does not, yet:
 
-- Categories, nicknames, role colours, transferring ownership.
+- Categories, role colours, transferring ownership.
 - Scale to large channels. Each message is encrypted once per member, which is fine for
   dozens of people and too slow for hundreds; sender keys are planned for that.
 - Hide channel names, role names or the member list from the server. Only message
@@ -273,10 +300,11 @@ It does not, yet:
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
-- Remove a lost device, or see a list of your devices.
-- A graphical client. There is a terminal client for Linux, Raspberry Pi and Windows; the
-  Flutter GUI is not started.
-- macOS, iOS or Android builds.
+- A graphical client for the desktop. There is a terminal client for Linux, Raspberry Pi
+  and Windows, and an app for Android; the same app is planned for the desktop.
+- macOS or iOS builds.
+- Push notifications through Google or Apple. The Android app keeps its own connection
+  open instead, which costs some battery.
 
 ## Where to look
 
@@ -298,6 +326,7 @@ Code layout:
 | `core/` | `libcorded`: crypto, vault, engine and the C ABI shim |
 | `include/corded/corded.h` | The public C interface |
 | `frontends/tui/` | `corded-tui`, the terminal client |
+| `frontends/flutter/` | The app (`app/`) and the Dart binding to the core it is built on (`packages/corded_dart/`) |
 | `tools/corded-cli.cpp` | A headless client that speaks JSON lines, for scripts and debugging |
 | `tests/` | Crypto unit tests, end-to-end tests, a TUI smoke test |
 
