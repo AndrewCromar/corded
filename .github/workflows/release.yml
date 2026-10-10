@@ -95,3 +95,63 @@ jobs:
             --notes "Pre-alpha build. Not security audited. See the README for how to run it."
           gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz" \
             "${{ steps.package.outputs.name }}.tar.gz.sha256" --clobber
+
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-windows-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-windows-
+
+      - name: Fetch vcpkg
+        shell: cmd
+        run: |
+          git submodule update --init --depth 1 external/vcpkg
+          call external\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --preset windows || exit /b 1
+          cmake --build --preset windows || exit /b 1
+
+      - name: Unit tests
+        shell: cmd
+        run: build\windows\bin\corded_unit_tests.exe
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $version = git describe --tags --always --dirty
+          $name = "corded-$version-windows-x64"
+          New-Item -ItemType Directory -Force "dist\$name" | Out-Null
+          Copy-Item build\windows\bin\cordedd.exe, build\windows\bin\corded-tui.exe, build\windows\bin\corded-cli.exe, build\windows\bin\corded.dll "dist\$name\"
+          Copy-Item packaging\README-windows.txt "dist\$name\README.txt"
+          Copy-Item LICENSE "dist\$name\"
+          Compress-Archive -Path "dist\$name" -DestinationPath "$name.zip"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.name }}.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
+            --notes "Pre-alpha build. Not security audited. See the README for how to run it."
+          gh release upload "$tag" "${{ steps.package.outputs.name }}.zip" --clobber
