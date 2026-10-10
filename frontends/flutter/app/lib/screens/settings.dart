@@ -535,7 +535,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ListTile(
           leading: const Icon(Icons.system_update_alt),
           title: const Text('Check for updates'),
-          subtitle: Text('This is ${appVersion == 'dev' ? 'a build made by hand' : releaseOf(appVersion)}'),
+          // The whole stamp, so a build made after a release can be told from the release.
+          subtitle: Text('This is ${appVersion == 'dev' ? 'a build made by hand' : appVersion}'),
           onTap: _checkForUpdates,
         ),
         ListTile(
