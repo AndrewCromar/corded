@@ -95,6 +95,10 @@ class _EventReader extends TaskHandler {
     }
     if (data == 'off_screen') _onScreen = false;
     if (data is Map && data['engine'] is int) _engine = data['engine'] as int;
+    // Names of the chats, for the titles of notifications.
+    if (data is Map && data['rooms'] is Map) {
+      (data['rooms'] as Map).forEach((id, title) => _roomTitles['$id'] = '$title');
+    }
   }
 
   @override

@@ -154,9 +154,46 @@ class _ServerScreenState extends State<ServerScreen> {
     );
   }
 
+  // Settings that take one of a few values are picked from a list, not typed.
+  static const _choices = {
+    'scope': {
+      'machine': 'This computer only',
+      'network': 'The local network',
+      'internet': 'Anyone on the internet',
+    },
+    'registration': {
+      'open': 'Anyone can create an account',
+      'invite': 'Only with an invite',
+      'closed': 'Nobody new',
+    },
+    'history_sharing': {'on': 'On', 'off': 'Off'},
+    'housekeeping': {'on': 'On', 'off': 'Off'},
+  };
+
+  Future<String?> _choose(String key, String current, Map<String, String> options, String description) =>
+      showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: Text(key),
+          children: [
+            Padding(padding: const EdgeInsets.fromLTRB(24, 0, 24, 8), child: Text(description)),
+            for (final o in options.entries)
+              ListTile(
+                leading: Icon(o.key == current ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+                title: Text(o.value),
+                subtitle: Text(o.key),
+                onTap: () => Navigator.pop(context, o.key),
+              ),
+          ],
+        ),
+      );
+
   Future<void> _editSetting(Map<String, dynamic> s) async {
     final key = '${s['key']}';
-    final value = await _ask(key, initial: '${s['value']}', hint: '${s['description'] ?? ''}');
+    final options = _choices[key];
+    final value = options != null
+        ? await _choose(key, '${s['value']}', options, '${s['description'] ?? ''}')
+        : await _ask(key, initial: '${s['value']}', hint: '${s['description'] ?? ''}');
     if (value == null || value == '${s['value']}') return;
     await _do(
         {'cmd': 'set_setting', 'key': key, 'value': value},

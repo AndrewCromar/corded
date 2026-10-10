@@ -67,8 +67,23 @@ class AppState extends ChangeNotifier {
     }
     backgroundMode = on;
     await prefs.setBool('background_mode', on);
+    if (on) {
+      // The task takes a moment to start listening.
+      Future<void>.delayed(const Duration(seconds: 2), () => _shareRoomTitles(force: true));
+    }
     notifyListeners();
     return null;
+  }
+
+  // The background task titles its notifications with the names of the chats.
+  String _sharedTitles = '';
+  void _shareRoomTitles({bool force = false}) {
+    if (!backgroundMode) return;
+    final titles = {for (final r in store.rooms.values) r.id: r.title};
+    final key = titles.toString();
+    if (!force && key == _sharedTitles) return;
+    _sharedTitles = key;
+    Background.tell({'rooms': titles});
   }
 
   /// Tells the background task whether someone is looking at the app.
@@ -94,7 +109,10 @@ class AppState extends ChangeNotifier {
       final store = CordedStore(engine);
       // The first vault_state event may already have gone by.
       store.vaultState = engine.vaultExists() ? 'locked' : 'missing';
-      _sub = store.changes.listen((_) => notifyListeners());
+      _sub = store.changes.listen((_) {
+        _shareRoomTitles();
+        notifyListeners();
+      });
       _engine = engine;
       _store = store;
       Background.onEvent((data) {
@@ -104,6 +122,7 @@ class AppState extends ChangeNotifier {
       if (serviceRunning) {
         Background.tell({'engine': engine.address});
         Background.tell('on_screen');
+        Future<void>.delayed(const Duration(seconds: 1), () => _shareRoomTitles(force: true));
         final status = await engine.command({'cmd': 'status'});
         if (status['vault'] == 'unlocked') {
           store.username = '${status['username'] ?? ''}';
