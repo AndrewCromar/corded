@@ -337,12 +337,19 @@ Session::json Session::event_json(const EventRow& e) {
 
 // ---------------------------------------------------------------- commands in
 
-uint64_t Engine::vault_create(Bytes passphrase, std::string username) {
+uint64_t Engine::vault_create(Bytes passphrase, std::string username, std::string recovery_key) {
     uint64_t req = next_request_++;
-    asio::post(io_, [this, req, pass = std::move(passphrase), name = std::move(username)]() mutable {
+    asio::post(io_, [this, req, pass = std::move(passphrase), name = std::move(username),
+                     recovery = std::move(recovery_key)]() mutable {
         try {
             if (vault_.unlocked()) throw VaultError("the vault is already open");
-            vault_.create(config_.vault_dir, pass, name, config_.fast_kdf);
+            std::optional<Key32> seed;
+            if (!recovery.empty()) {
+                seed = crypto::decode_recovery_key(recovery);
+                sodium_memzero(recovery.data(), recovery.size());
+                if (!seed) throw VaultError("that recovery key is not valid; check it for typing mistakes");
+            }
+            vault_.create(config_.vault_dir, pass, name, config_.fast_kdf, seed);
             sodium_memzero(pass.data(), pass.size());
             after_unlock();
             ok(req);
@@ -628,6 +635,10 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (cmd.contains("thread"))
                 ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
             cmd_send_event(req, ev);
+        } else if (name == "get_recovery_key") {
+            // The secret that lets this person set up another device. Whoever
+            // has it can become them, so frontends should show it with care.
+            ok(req, {{"recovery_key", crypto::encode_recovery_key(vault_.identity().seed())}});
         } else if (name == "request_history") {
             request_history(need_b64(cmd, "room_id", 16), req);
         } else if (name == "set_history_sharing") {
@@ -1200,6 +1211,9 @@ void Session::drop_connection(const std::string& reason) {
     writing_ = false;
     sending_ = false;
     bundle_requested_.clear();
+    devices_.clear();
+    devices_requested_.clear();
+    unreachable_.clear();
     // Tell everyone waiting on an answer that it is not coming.
     auto pending = std::move(pending_);
     pending_.clear();
@@ -1303,6 +1317,10 @@ void Session::on_frame(wire::FrameT& f) {
         case wire::FrameBody_RoomInfo: store_room(*f.body.AsRoomInfo()); break;
         case wire::FrameBody_ServerInfo: on_server_info(*f.body.AsServerInfo()); break;
         case wire::FrameBody_HistoryWanted: on_history_wanted(*f.body.AsHistoryWanted()); break;
+        case wire::FrameBody_DevicesChanged:
+            // Someone added a device; ask again who their devices are before the next send.
+            devices_.erase(f.body.AsDevicesChanged()->user_id);
+            break;
         case wire::FrameBody_Notice:
             emit({{"event", "server_notice"}, {"message", f.body.AsNotice()->message}});
             break;
@@ -1459,11 +1477,13 @@ void Session::request_history(const Bytes& room_id, uint64_t req) {
 
 // Someone new wants earlier messages from a room we are in.
 void Session::on_history_wanted(const wire::HistoryWantedT& wanted) {
-    if (vault_.meta("share_history").value_or("1") == "0") return;  // this member opted out
     auto room = vault_.room(wanted.room_id);
-    if (!room || room->server_id != id_ || room->kind == 1 || wanted.requester.size() != 32) return;
+    if (!room || room->server_id != id_ || wanted.requester.size() != 32) return;
     const Key32& me = vault_.identity().user.pk;
-    if (std::equal(wanted.requester.begin(), wanted.requester.end(), me.begin())) return;
+    // Another device of the same person always gets its own history; anyone
+    // else only if this member has not opted out.
+    bool own_device = std::equal(wanted.requester.begin(), wanted.requester.end(), me.begin());
+    if (!own_device && (room->kind == 1 || vault_.meta("share_history").value_or("1") == "0")) return;
     bool is_member = false;
     for (const auto& m : room->members)
         if (m.user_id == wanted.requester) is_member = true;
@@ -1621,7 +1641,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         tx.commit();
     }
     // New to this room: ask whether anyone will share what was said before.
-    if (first_sight && info.kind != 1 && members.size() > 1) request_history(info.room_id, 0);
+    if (first_sight && members.size() > 1) request_history(info.room_id, 0);
     if (auto room = vault_.room(info.room_id))
         emit({{"event", "room_updated"}, {"room", room_json(*room)}});
 }
@@ -1649,8 +1669,9 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
         // cursor commit together or not at all.
         db::Transaction tx(vault_.db());
         vault_.upsert_room(ev.room_id, {}, -1, "", id_);
-        auto peer = vault_.load_sessions(ev.sender_user).value_or(crypto::PeerSessions{});
-        bool same_device = peer.empty() || to_bytes(peer.device_id) == ev.sender_device;
+        // Sessions are per device. A device must keep belonging to the same person.
+        auto peer = vault_.load_sessions(ev.sender_device).value_or(crypto::PeerSessions{});
+        bool same_device = peer.empty() || to_bytes(peer.user_id) == ev.sender_user;
         peer.user_id = to_key32(ev.sender_user);
         peer.device_id = to_key32(ev.sender_device);
         std::optional<Bytes> plain;
@@ -1746,65 +1767,101 @@ void Session::pump_outbox() {
     auto room = vault_.room(row.room_id);
     auto event = vault_.event(row.room_id, row.event_id);
 
-    // Every other member needs a session before anything can be encrypted.
+    // Who gets a copy: every other member, or the one member an envelope is
+    // for. Each person may have several devices, and this person's own other
+    // devices get a copy too, so everything shows up everywhere.
     const Key32& me = vault_.identity().user.pk;
-    bool waiting = false;
+    const Bytes my_user = to_bytes(me);
+    const Bytes my_device = to_bytes(vault_.identity().device.pk);
     std::vector<Bytes> others;
-    for (const auto& m : room->members) {
-        if (m.user_id.size() != 32 || std::equal(m.user_id.begin(), m.user_id.end(), me.begin()))
-            continue;
-        others.push_back(m.user_id);
-        auto sessions = vault_.load_sessions(m.user_id);
-        if (sessions && !sessions->empty()) continue;
-        waiting = true;
-        if (!bundle_requested_.insert(m.user_id).second) continue;
-        wire::FetchBundleT q;
-        q.user_id = m.user_id;
-        request(std::move(q), [this, user = m.user_id, row](wire::FrameT& f) {
-            bundle_requested_.erase(user);
-            auto* b = f.body.AsBundle();
-            if (!b) {
-                auto* e = f.body.AsError();
-                if (e && e->code == kDisconnected) return;  // retried after reconnect
-                fail_outbox(row, e ? e->message : "could not fetch keys");
-                pump_outbox();
-                return;
-            }
-            try {
-                if (b->user_id != user || b->device_id.size() != 32 || b->dh_key.size() != 32 ||
-                    b->spk.size() != 32 || (b->has_otk && b->otk.size() != 32))
-                    throw crypto::CryptoError("malformed key bundle");
-                crypto::PeerBundle bundle;
-                bundle.user_id = to_key32(b->user_id);
-                bundle.device_id = to_key32(b->device_id);
-                bundle.dh_key = to_key32(b->dh_key);
-                bundle.cert = b->cert;
-                bundle.spk_id = b->spk_id;
-                bundle.spk = to_key32(b->spk);
-                bundle.spk_sig = b->spk_sig;
-                bundle.has_otk = b->has_otk;
-                bundle.otk_id = b->otk_id;
-                if (b->has_otk) bundle.otk = to_key32(b->otk);
-                crypto::PeerSessions peer;
-                crypto::start_session(vault_.identity(), bundle, peer);
-                vault_.save_sessions(peer);
-            } catch (const std::exception& e) {
-                fail_outbox(row, std::string("could not start a secure session: ") + e.what());
-            }
-            pump_outbox();
-        });
-    }
-    // Addressed to one member only (shared history): drop everyone else.
+    for (const auto& m : room->members)
+        if (m.user_id.size() == 32 && m.user_id != my_user) others.push_back(m.user_id);
+    std::vector<Bytes> users = others;
+    users.push_back(my_user);
     if (!row.only_user.empty()) {
-        bool present = std::find(others.begin(), others.end(), row.only_user) != others.end();
+        bool present = row.only_user == my_user ||
+                       std::find(others.begin(), others.end(), row.only_user) != others.end();
         if (!present) {
             vault_.outbox_remove(row.local_id);
             pump_outbox();
             return;
         }
-        auto session = vault_.load_sessions(row.only_user);
-        waiting = !session || session->empty();
-        others = {row.only_user};
+        users = {row.only_user};
+    }
+
+    // Learn each person's devices, then make sure there is a session with each.
+    bool waiting = false;
+    std::vector<Bytes> targets;  // device ids
+    for (const auto& user : users) {
+        auto known = devices_.find(user);
+        if (known == devices_.end()) {
+            waiting = true;
+            if (!devices_requested_.insert(user).second) continue;
+            wire::ListDevicesT q;
+            q.user_id = user;
+            request(std::move(q), [this, user](wire::FrameT& f) {
+                devices_requested_.erase(user);
+                auto* list = f.body.AsDeviceList();
+                if (!list) return;  // retried on the next attempt to send
+                std::vector<Bytes> ids;
+                for (const auto& d : list->devices)
+                    if (d && d->device_id.size() == 32) ids.push_back(d->device_id);
+                devices_[user] = std::move(ids);
+                pump_outbox();
+            });
+            continue;
+        }
+        for (const auto& device : known->second) {
+            if (device == my_device || unreachable_.count(device)) continue;
+            auto sessions = vault_.load_sessions(device);
+            if (sessions && !sessions->empty()) {
+                targets.push_back(device);
+                continue;
+            }
+            waiting = true;
+            if (!bundle_requested_.insert(device).second) continue;
+            wire::FetchBundleT q;
+            q.user_id = user;
+            q.device_id = device;
+            request(std::move(q), [this, user, device](wire::FrameT& f) {
+                bundle_requested_.erase(device);
+                auto* b = f.body.AsBundle();
+                if (!b) {
+                    auto* e = f.body.AsError();
+                    if (e && e->code == kDisconnected) return;  // retried after reconnect
+                    // A device that has published no keys cannot be reached yet;
+                    // carry on without it rather than hold everything up.
+                    unreachable_.insert(device);
+                    pump_outbox();
+                    return;
+                }
+                try {
+                    if (b->user_id != user || b->device_id != device || b->dh_key.size() != 32 ||
+                        b->spk.size() != 32 || (b->has_otk && b->otk.size() != 32))
+                        throw crypto::CryptoError("malformed key bundle");
+                    crypto::PeerBundle bundle;
+                    bundle.user_id = to_key32(b->user_id);
+                    bundle.device_id = to_key32(b->device_id);
+                    bundle.dh_key = to_key32(b->dh_key);
+                    bundle.cert = b->cert;
+                    bundle.spk_id = b->spk_id;
+                    bundle.spk = to_key32(b->spk);
+                    bundle.spk_sig = b->spk_sig;
+                    bundle.has_otk = b->has_otk;
+                    bundle.otk_id = b->otk_id;
+                    if (b->has_otk) bundle.otk = to_key32(b->otk);
+                    // start_session checks that the person's identity key signed this device.
+                    crypto::PeerSessions peer;
+                    crypto::start_session(vault_.identity(), bundle, peer);
+                    vault_.save_sessions(peer);
+                } catch (const std::exception& e) {
+                    unreachable_.insert(device);
+                    emit({{"event", "warning"},
+                          {"message", std::string("could not start a secure session with a device: ") + e.what()}});
+                }
+                pump_outbox();
+            });
+        }
     }
     if (waiting) return;
     // A channel may have nobody else in it yet; the message still gets its place.
@@ -1846,8 +1903,8 @@ void Session::pump_outbox() {
         // process, so a crash can never reuse a message key.
         db::Transaction tx(vault_.db());
         Bytes context = context_of(row.room_id, row.event_id);
-        for (const auto& user : others) {
-            auto peer = vault_.load_sessions(user);
+        for (const auto& device : targets) {
+            auto peer = vault_.load_sessions(device);
             auto r = std::make_unique<wire::RecipientT>();
             r->device_id = to_bytes(peer->device_id);
             r->ciphertext = crypto::encrypt(vault_.identity(), *peer, context, plaintext);

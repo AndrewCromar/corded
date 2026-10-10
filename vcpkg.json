@@ -14,14 +14,10 @@
     "spdlog",
     "nlohmann-json",
     "ftxui",
-    "catch2"
-  ],
-  "features": {
-    "vendored-sodium": {
-      "description": "Build libsodium with vcpkg instead of using the system copy (needs autoconf-archive installed)",
-      "dependencies": [
-        "libsodium"
-      ]
+    "catch2",
+    {
+      "name": "flatbuffers",
+      "host": true
     }
-  }
+  ]
 }

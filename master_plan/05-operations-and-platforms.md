@@ -13,9 +13,10 @@ plan in [04-community-model.md](04-community-model.md), section 6.
 | All server settings from the owner's client | D-34 | C16 | Built: `/settings`, `/set`, `/status` |
 | Scheduled maintenance and restarts | D-35 | C16 | Built: `/reboot`, `/set restart ...`, hourly housekeeping, retention window |
 | Remote update of the server | D-36 | C16 | Planned; needs a decision on release signing |
-| One person on several devices | D-37 | C13 | Planned |
+| One person on several devices | D-37 | C13 | Built with a recovery key; linking and device management not yet |
 | Clients on Linux, Windows, macOS, iOS, Android | D-38 | C14 | Planned |
-| A browser client | D-39 | C15 | Planned, last |
+| A browser client | D-39 | C15 | Set aside for now (owner decision) |
+| Hosting at home, isolated from the home network | D-40 | C17 | Planned |
 
 ## 1. Running a server without sitting at it (D-34, D-35, D-36)
 
@@ -193,6 +194,27 @@ forwards a port, or a tunnel from a machine that cannot accept connections direc
 The server-side features that make hosting easier are the scope setting (D-33), a single
 self-contained binary, and the remote administration in section 1.
 
+### Hosting at home without exposing the home (D-40)
+
+The owner wants to run the server on a Raspberry Pi at a family home, and the family
+must not have to trust the server's security. The isolation therefore comes from the
+network, not from Corded:
+
+- **The Pi sits on a guest network** (or behind its own cheap router). The home router
+  blocks it from every other device in the house, whatever happens on the Pi.
+- **An outgoing-tunnel mode**, to be built: the server connects out to a relay and is
+  reached through it, so the home router forwards nothing and accepts no incoming
+  connections. Until it exists, a third-party tunnel does the same job.
+- **A setup script for the Pi**, to be built: creates an unprivileged account for the
+  server, installs it as a service with the operating system's sandboxing switched on,
+  and sets a firewall that allows only the Corded port in and refuses outgoing
+  connections to private network addresses.
+- **A single-purpose machine.** The operator guide says plainly: keep nothing else on it.
+
+What this achieves: someone who fully takes over the server cannot reach the rest of the
+house. What it cannot achieve: zero risk of any kind; the Pi's own internet connection
+could still be misused.
+
 ## 6. Open questions for the owner
 
 1. **Who holds the release signing key?** Remote update is only as safe as that key. The
@@ -203,5 +225,5 @@ self-contained binary, and the remote administration in section 1.
    Recommended: the first, at least until there are other contributors.
 2. **Recovery phrase, linking, or both** for adding a device? Recommended: both, with
    linking as the everyday way and the phrase as the backup.
-3. **Flutter or Qt** for the GUI (decision D-20, still open). Recommended: Flutter,
-   because of mobile.
+3. ~~Flutter or Qt for the GUI.~~ Decided: Flutter for the reference GUI, with the
+   community free to build others.

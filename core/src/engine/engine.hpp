@@ -175,6 +175,10 @@ private:
     std::vector<RoleInfo> roles_;
     std::set<Bytes> bundle_requested_;
     bool history_sharing_ = true;  // what the server allows
+    // Each person's devices as the server last listed them, for this connection.
+    std::map<Bytes, std::vector<Bytes>> devices_;
+    std::set<Bytes> devices_requested_;
+    std::set<Bytes> unreachable_;  // devices with no keys to start a session from
     std::map<Bytes, uint64_t> history_asked_;  // room -> when we asked, in ms
 };
 
@@ -189,7 +193,8 @@ public:
 
     // All of these return a request id at once; the outcome arrives later as a
     // `command_result` event carrying the same id.
-    uint64_t vault_create(Bytes passphrase, std::string username);
+    // With a recovery key, the vault is for an existing person on a new device.
+    uint64_t vault_create(Bytes passphrase, std::string username, std::string recovery_key = "");
     uint64_t vault_unlock(Bytes passphrase);
     uint64_t command(std::string json_text);
 

@@ -3,6 +3,7 @@
 #include "corded/common/frame.hpp"
 #include "corded/common/sig.hpp"
 
+#include <cctype>
 #include <cstdio>
 
 namespace corded::crypto {
@@ -267,6 +268,91 @@ std::string safety_number(const Key32& user_a, const Key32& user_b) {
         out += all.substr(i, 5);
     }
     return out;
+}
+
+Identity Identity::from_seed(const Key32& seed) {
+    Identity id;
+    crypto_sign_seed_keypair(id.user.pk.data(), id.user.sk.data(), seed.data());
+    id.device = generate_sign();
+    id.dh = generate_dh();
+    id.cert = sign(id.user.sk, signed_message(kCtxDeviceCert, {id.device.pk, id.dh.pk}));
+    return id;
+}
+
+Key32 Identity::seed() const {
+    Key32 out;
+    crypto_sign_ed25519_sk_to_seed(out.data(), user.sk.data());
+    return out;
+}
+
+namespace {
+
+// Crockford's base32: no I, L, O or U, so it survives being read aloud or typed.
+constexpr std::string_view kBase32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+std::array<uint8_t, 2> recovery_check(const Key32& seed) {
+    constexpr std::string_view label = "corded/v1/recovery-key";
+    Bytes in;
+    append(in, label);
+    append(in, seed);
+    uint8_t h[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(h, in.data(), in.size());
+    return {h[0], h[1]};
+}
+
+}  // namespace
+
+std::string encode_recovery_key(const Key32& seed) {
+    Bytes payload(seed.begin(), seed.end());
+    auto check = recovery_check(seed);
+    payload.insert(payload.end(), check.begin(), check.end());
+    std::string out;
+    uint32_t acc = 0;
+    int bits = 0, count = 0;
+    auto put = [&](uint32_t v) {
+        if (count && count % 5 == 0) out += '-';
+        out += kBase32[v & 31];
+        ++count;
+    };
+    for (uint8_t b : payload) {
+        acc = (acc << 8) | b;
+        bits += 8;
+        while (bits >= 5) {
+            put(acc >> (bits - 5));
+            bits -= 5;
+        }
+    }
+    if (bits > 0) put(acc << (5 - bits));
+    sodium_memzero(payload.data(), payload.size());
+    return out;
+}
+
+std::optional<Key32> decode_recovery_key(std::string_view text) {
+    Bytes payload;
+    uint32_t acc = 0;
+    int bits = 0, symbols = 0;
+    for (char raw : text) {
+        char ch = static_cast<char>(std::toupper(static_cast<unsigned char>(raw)));
+        if (ch == '-' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch == 'O') ch = '0';
+        if (ch == 'I' || ch == 'L') ch = '1';
+        auto pos = kBase32.find(ch);
+        if (pos == std::string_view::npos) return std::nullopt;
+        acc = (acc << 5) | static_cast<uint32_t>(pos);
+        bits += 5;
+        ++symbols;
+        if (bits >= 8) {
+            payload.push_back(static_cast<uint8_t>(acc >> (bits - 8)));
+            bits -= 8;
+        }
+    }
+    if (symbols != 55 || payload.size() != 34) return std::nullopt;
+    Key32 seed = to_key32(ByteView(payload).subspan(0, 32));
+    auto check = recovery_check(seed);
+    bool good = payload[32] == check[0] && payload[33] == check[1];
+    sodium_memzero(payload.data(), payload.size());
+    if (!good) return std::nullopt;
+    return seed;
 }
 
 bool verify_device_cert(ByteView user_id, ByteView device_id, ByteView dh_key, ByteView cert) {

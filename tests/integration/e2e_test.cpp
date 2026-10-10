@@ -146,6 +146,14 @@ struct Client {
                                     pass.size(), name.c_str(), &req) == CORDED_OK);
         return result(req);
     }
+    // Sets this client up as another device of an existing person.
+    json restore(const std::string& name, const std::string& recovery_key,
+                 const std::string& pass = "correct horse") {
+        corded_request req = 0;
+        REQUIRE(corded_vault_restore(engine, reinterpret_cast<const uint8_t*>(pass.data()), pass.size(),
+                                     name.c_str(), recovery_key.c_str(), &req) == CORDED_OK);
+        return result(req);
+    }
     json unlock(const std::string& pass = "correct horse") {
         corded_request req = 0;
         REQUIRE(corded_vault_unlock(engine, reinterpret_cast<const uint8_t*>(pass.data()),
@@ -1376,4 +1384,90 @@ TEST_CASE("the owner runs the server from a client") {
     for (const auto& r : rooms) if (r["title"] == "#general") general = r["room_id"];
     REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "after the restart"}})["ok"] == true);
     bob.wait_message("after the restart");
+}
+
+TEST_CASE("one person on two devices") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client pc((tmp.path / "alice-pc").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&pc, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    pc.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    // Some history before the second device exists: a channel message and a direct message.
+    REQUIRE(pc.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "sent from the pc"}})["ok"] == true);
+    bob.wait_message("sent from the pc");
+    json dm = pc.cmd({{"cmd", "start_chat"}, {"username", "bob"}});
+    std::string direct = dm["data"]["room"]["room_id"];
+    bob.have("the direct chat", [&](const json& e) { return e["event"] == "room_updated" && e["room"]["room_id"] == direct; });
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "private note to alice"}})["ok"] == true);
+    pc.wait_message("private note to alice");
+
+    // Alice sets up her laptop with the recovery key from her PC.
+    std::string key = pc.cmd({{"cmd", "get_recovery_key"}})["data"]["recovery_key"];
+    std::string user_id = pc.cmd({{"cmd", "status"}})["data"]["user_id"];
+    Client laptop((tmp.path / "alice-laptop").string());
+    REQUIRE(laptop.restore("alice", "0000-" + key.substr(5))["ok"] == false);  // a mistyped key is caught
+    REQUIRE(laptop.restore("alice", key, "a different passphrase")["ok"] == true);
+    REQUIRE(laptop.cmd({{"cmd", "status"}})["data"]["user_id"] == user_id);   // the same person
+    REQUIRE(laptop.cmd(connect)["ok"] == true);
+    laptop.have("live", live);
+    // The server sees one member, not two, and she still owns it.
+    REQUIRE(pc.cmd({{"cmd", "member_list"}})["data"]["members"].size() == 2);
+    REQUIRE(laptop.cmd({{"cmd", "server_info"}})["data"]["is_owner"] == true);
+
+    // Her own earlier messages and the direct message arrive from her PC.
+    laptop.wait("own history", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["content"].value("body", "") == "sent from the pc";
+    });
+    laptop.have("direct message history", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["content"].value("body", "") == "private note to alice";
+    });
+
+    // What Bob sends now reaches both of her devices.
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hello both devices"}})["ok"] == true);
+    pc.wait_message("hello both devices");
+    laptop.wait_message("hello both devices");
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "second private note"}})["ok"] == true);
+    pc.wait_message("second private note");
+    laptop.wait_message("second private note");
+
+    // What she sends from one device shows up on the other as her own.
+    auto own_copy = [](const std::string& body) {
+        return [body](const json& e) {
+            return e["event"] == "event_received" && e["data"]["content"].value("body", "") == body &&
+                   e["data"]["mine"] == true && e["data"]["status"] == "ok";
+        };
+    };
+    REQUIRE(laptop.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "typed on the laptop"}})["ok"] == true);
+    bob.wait_message("typed on the laptop");
+    pc.wait("copy on the pc", own_copy("typed on the laptop"));
+    REQUIRE(pc.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "typed on the pc"}})["ok"] == true);
+    bob.wait_message("typed on the pc");
+    laptop.wait("copy on the laptop", own_copy("typed on the pc"));
+    // Bob sees one Alice throughout.
+    REQUIRE(bob.cmd({{"cmd", "safety_numbers"}, {"room_id", direct}})["data"]["safety_numbers"].size() == 1);
+
+    // Each device works alone: the PC goes away, the laptop carries on.
+    pc.close();
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "while the pc is off"}})["ok"] == true);
+    laptop.wait_message("while the pc is off");
+    REQUIRE(laptop.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "laptop answering"}})["ok"] == true);
+    bob.wait_message("laptop answering");
+    pc.open();
+    REQUIRE(pc.unlock()["ok"] == true);
+    pc.wait_message("while the pc is off");
+    pc.have("laptop message caught up", own_copy("laptop answering"));
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", "typed on the laptop"));
 }

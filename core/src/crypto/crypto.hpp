@@ -48,7 +48,17 @@ struct Identity {
     Bytes cert;          // user signature over (device id, dh key)
 
     static Identity generate();
+    // The same person on another device: the user identity comes from `seed`,
+    // the device keys are new.
+    static Identity from_seed(const Key32& seed);
+    Key32 seed() const;  // the secret a recovery key encodes
 };
+
+// A recovery key is the user identity's seed written so a person can copy it:
+// groups of letters and digits with a built-in check for typing mistakes.
+// Anyone who has it can become this person on a new device.
+std::string encode_recovery_key(const Key32& seed);
+std::optional<Key32> decode_recovery_key(std::string_view text);
 
 // A number two people can compare out of band (in person, on a call) to check
 // that nobody is sitting between them. Both sides compute the same value:

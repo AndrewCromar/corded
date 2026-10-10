@@ -154,6 +154,19 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
     }
 
     // Returns 0 on success or an error code.
+    std::vector<DeviceRow> devices_of_user(ByteView user_id) {
+        std::vector<Bytes> ids;
+        {
+            auto st = db_.prepare("SELECT device_id FROM devices WHERE user_id = ? ORDER BY created_at");
+            st.bind(1, user_id);
+            while (st.step()) ids.push_back(st.blob(0));
+        }
+        std::vector<DeviceRow> out;
+        for (const auto& id : ids)
+            if (auto d = find_device(id)) out.push_back(std::move(*d));
+        return out;
+    }
+
     uint16_t register_user(const wire::RegisterT& r) {
         db::Transaction tx(db_);
         {
@@ -191,9 +204,11 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
     }
 
     // Hands out (and deletes) one one-time prekey if any remain.
-    std::optional<wire::BundleT> take_bundle(ByteView user_id) {
-        auto dev = device_of_user(user_id);
-        if (!dev) return std::nullopt;
+    std::optional<wire::BundleT> take_bundle(ByteView user_id, ByteView device_id = {}) {
+        auto dev = device_id.empty() ? device_of_user(user_id) : find_device(device_id);
+        if (!dev || dev->user_id.size() != user_id.size() ||
+            !std::equal(dev->user_id.begin(), dev->user_id.end(), user_id.begin()))
+            return std::nullopt;
         db::Transaction tx(db_);
         wire::BundleT b;
         b.user_id = dev->user_id;

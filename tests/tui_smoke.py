@@ -244,6 +244,33 @@ def main():
         dave.expect("#general")
         print("ok  invite link made in the client lets a new person join")
 
+        # Bob sets up a second device with his recovery key and is the same person there.
+        bob.type("/recovery-key\r")
+        bob.expect("Your recovery key")
+        import re as _re
+        key = _re.search(r"((?:[0-9A-Z]{5}-){10}[0-9A-Z]{5})", bob.screen).group(1)
+        bob.type("/help\r")
+        bob.type("/help\r")
+        bob2 = Tui(f"{bindir}/corded-tui", ["--vault", f"{tmp}/bob-second", "--name", "bob",
+                                             "--server", f"127.0.0.1:{port}", "--recovery-key", key])
+        clients.append(bob2)
+        bob2.expect("Setting up this device with your recovery key")
+        bob2.type("another passphrase")
+        bob2.type(DOWN)
+        bob2.type("another passphrase")
+        bob2.type("\r")
+        bob2.expect("live", timeout=30)
+        bob2.expect("#dev")
+        bob2.expect("[mods]" if False else "#general")
+        alice.type("/open general\r")
+        alice.type("to both of bob's devices\r")
+        bob2.type("/open general\r")
+        bob2.expect("to both of bob's devices")
+        bob.type("/open general\r")
+        bob.expect("to both of bob's devices")
+        bob.type("/open dev\r")
+        print("ok  a second device set up with a recovery key is the same person")
+
         # A second server: alice joins it from inside the client and switches between the two.
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -263,6 +290,8 @@ def main():
         alice.clear()
         alice.type("/help\r")
         alice.pump(1.0)
+        if "#dev" not in alice.screen:
+            print("DEBUG alice screen:\n" + alice.screen[-2500:])
         assert "#dev" in alice.screen, "switching back did not show the first server's channels"
         assert "hello second server" not in alice.screen, "a message from the other server is showing"
         alice.type("/help\r")

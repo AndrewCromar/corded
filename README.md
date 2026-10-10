@@ -35,8 +35,12 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 
 ## Try the prototype
 
-You need Linux, a C++20 compiler (GCC 13+ or Clang 17+), CMake 3.25+, git, Python 3 and
-the libsodium development package (1.0.19 or newer).
+You need Linux, a C++20 compiler (GCC 12+ or Clang 17+), CMake 3.25+, make, git, curl,
+zip, unzip, tar, pkg-config, perl and Python 3. On Ubuntu or Debian:
+
+```sh
+sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar perl
+```
 
 ```sh
 git clone https://github.com/AndrewCromar/corded.git
@@ -107,6 +111,7 @@ Talking:
 | `/verified <username>` | Marks someone as checked after comparing numbers |
 | `/history` | Asks members again for earlier messages in the open chat |
 | `/share-history on` or `off` | Whether your client shares earlier messages with newcomers who ask |
+| `/recovery-key` | Shows the key for setting up another device as you |
 | `/members`, `/roles` | Lists the server's members and roles |
 | `/help` | Shows the command list |
 | `/exit` or `/quit` | Leaves |
@@ -185,6 +190,11 @@ It does:
   can manage channels sets the timer; in a direct message or group, anyone in it can.
   Like deletion, this relies on everyone's client cooperating: it cannot stop someone
   who copied the text or runs a modified client.
+- One person on several devices. `/recovery-key` shows a key; starting a client on
+  another machine with `--recovery-key '<key>'` makes it the same person there, with its
+  own passphrase. Messages reach every device, what you send from one shows up on the
+  others, and a new device gets its history from your other one. Treat the key like a
+  password: anyone who has it can become you.
 - Running the server from a client: every setting is stored in the server and can be
   changed with `/set`, including a regular restart (`/set restart weekly sun 04:00`) and
   how long messages are kept (30 days by default). `/reboot` restarts it on the spot.
@@ -226,7 +236,7 @@ It does not, yet:
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
-- More than one device per user.
+- Remove a lost device, or see a list of your devices.
 - Run anywhere but Linux.
 
 ## Where to look

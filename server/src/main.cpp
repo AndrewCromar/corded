@@ -433,6 +433,7 @@ public:
                     on_publish_prekeys(*c, rid, *f.body.AsPublishPrekeys());
                     break;
                 case wire::FrameBody_FetchBundle: on_fetch_bundle(*c, rid, *f.body.AsFetchBundle()); break;
+                case wire::FrameBody_ListDevices: on_list_devices(*c, rid, *f.body.AsListDevices()); break;
                 case wire::FrameBody_LookupUser: on_lookup_user(*c, rid, *f.body.AsLookupUser()); break;
                 case wire::FrameBody_CreateRoom: on_create_room(*c, rid, *f.body.AsCreateRoom()); break;
                 case wire::FrameBody_ListRooms: on_list_rooms(*c, rid); break;
@@ -541,13 +542,17 @@ private:
         // accounts are subject to the registration policy.
         bool used_invite = false;
         auto before = storage_.find_device(r.device_id);
-        if (before && before->access_level == kBanned) {
+        // The person may already be a member through another device.
+        bool known_user = storage_.user_exists(r.user_id);
+        int level = known_user ? storage_.access_level(r.user_id) : kUser;
+        if (level == kBanned) {
             c->fail(rid, err::Forbidden, "this account is banned from the server");
             return;
         }
         // Someone who was kicked may come back, on the same terms as a newcomer.
-        bool rejoining = before && before->access_level == kKicked;
-        if (!before || rejoining) {
+        bool rejoining = known_user && level == kKicked;
+        bool new_device = known_user && !before && level >= 0;
+        if (!known_user || rejoining) {
             using Reg = Options::Registration;
             bool allowed = options_.registration == Reg::Open;
             if (options_.registration == Reg::Invite) {
@@ -592,7 +597,15 @@ private:
         }
         mark_online(c, *dev);
         // A new member changes who is in every channel they can see.
-        if (!before || rejoining) broadcast_state();
+        if (!known_user || rejoining) broadcast_state();
+        if (new_device) {
+            // Everyone who sends to this person must now include the new device.
+            spdlog::info("{} added a device", dev->username);
+            wire::DevicesChangedT changed;
+            changed.user_id = dev->user_id;
+            for (auto& [device, weak] : online_)
+                if (auto conn = weak.lock()) conn->reply(0, wire::DevicesChangedT(changed));
+        }
     }
 
     void on_authenticate(const std::shared_ptr<Conn>& c, uint32_t rid, const wire::AuthenticateT& a) {
@@ -630,12 +643,30 @@ private:
     }
 
     void on_fetch_bundle(Conn& c, uint32_t rid, const wire::FetchBundleT& q) {
-        auto bundle = storage_.take_bundle(q.user_id);
+        auto bundle = storage_.take_bundle(q.user_id, q.device_id);
         if (!bundle) {
             c.fail(rid, err::NotFound, "no keys published for that user");
             return;
         }
         c.reply(rid, std::move(*bundle));
+    }
+
+    void on_list_devices(Conn& c, uint32_t rid, const wire::ListDevicesT& q) {
+        wire::DeviceListT list;
+        list.user_id = q.user_id;
+        if (storage_.access_level(q.user_id) >= 0)
+            for (const auto& d : storage_.devices_of_user(q.user_id)) {
+                auto ref = std::make_unique<wire::DeviceRefT>();
+                ref->device_id = d.device_id;
+                list.devices.push_back(std::move(ref));
+            }
+        c.reply(rid, std::move(list));
+    }
+
+    // To every device of this person that is online.
+    template <typename T>
+    void push_user(const Bytes& user_id, const T& body) {
+        for (const auto& d : storage_.devices_of_user(user_id)) push(d.device_id, body);
     }
 
     void on_lookup_user(Conn& c, uint32_t rid, const wire::LookupUserT& q) {
@@ -674,7 +705,7 @@ private:
         if (created) {
             for (const auto& m : info.members) {
                 if (m->user_id == c.user_id) continue;
-                if (auto dev = storage_.device_of_user(m->user_id)) push(dev->device_id, info);
+                push_user(m->user_id, info);
             }
         }
         c.reply(rid, std::move(info));
@@ -684,7 +715,7 @@ private:
     void announce_room(const wire::RoomInfoT& info, const Bytes& except_user) {
         for (const auto& m : info.members) {
             if (m->user_id == except_user) continue;
-            if (auto dev = storage_.device_of_user(m->user_id)) push(dev->device_id, info);
+            push_user(m->user_id, info);
         }
     }
 
@@ -750,15 +781,15 @@ private:
         return true;
     }
     void drop_connection_of(const Bytes& user_id, const std::string& why) {
-        auto dev = storage_.device_of_user(user_id);
-        if (!dev) return;
-        auto it = online_.find(dev->device_id);
-        if (it == online_.end()) return;
-        if (auto conn = it->second.lock()) {
-            conn->fail(0, err::Forbidden, why);
-            conn->close_when_flushed();
+        for (const auto& dev : storage_.devices_of_user(user_id)) {
+            auto it = online_.find(dev.device_id);
+            if (it == online_.end()) continue;
+            if (auto conn = it->second.lock()) {
+                conn->fail(0, err::Forbidden, why);
+                conn->close_when_flushed();
+            }
+            online_.erase(it);
         }
-        online_.erase(it);
     }
 
     void on_get_members(Conn& c, uint32_t rid) {
@@ -926,22 +957,30 @@ private:
             c.fail(rid, err::Forbidden, "this server does not allow sharing earlier messages");
             return;
         }
-        if (!storage_.is_member(q.room_id, c.user_id) || storage_.kind(q.room_id) == kDirect) {
+        if (!storage_.is_member(q.room_id, c.user_id)) {
             c.fail(rid, err::Forbidden, "not a member of that room");
             return;
         }
+        // A direct message has no newcomers: only the asker's own other
+        // devices are asked, never the other person.
+        bool direct = storage_.kind(q.room_id) == kDirect;
         wire::HistoryWantedT wanted;
         wanted.room_id = q.room_id;
         wanted.requester = c.user_id;
         wanted.limit = std::min<uint32_t>(q.limit ? q.limit : 200, 200);
         int asked = 0;
-        for (const auto& m : storage_.room_info(q.room_id).members) {
-            if (m->user_id == c.user_id || asked >= 2) continue;  // two answers are plenty
-            auto dev = storage_.device_of_user(m->user_id);
-            if (!dev || !online_.count(dev->device_id)) continue;
-            push(dev->device_id, wanted);
-            ++asked;
-        }
+        // The asker's own other devices first: they hold exactly their history.
+        std::vector<Bytes> candidates{c.user_id};
+        if (!direct)
+            for (const auto& m : storage_.room_info(q.room_id).members)
+                if (m->user_id != c.user_id) candidates.push_back(m->user_id);
+        for (const auto& user : candidates)
+            for (const auto& dev : storage_.devices_of_user(user)) {
+                if (asked >= 2) break;  // two answers are plenty
+                if (dev.device_id == c.device_id || !online_.count(dev.device_id)) continue;
+                push(dev.device_id, wanted);
+                ++asked;
+            }
         if (asked == 0) {
             c.fail(rid, err::NotFound, "nobody who could share earlier messages is online right now");
             return;

@@ -9,6 +9,10 @@
 
 #include <algorithm>
 #include <atomic>
+#ifndef _WIN32
+#include <csignal>
+#include <pthread.h>
+#endif
 #include <cstdlib>
 #include <ctime>
 #include <map>
@@ -90,11 +94,14 @@ std::string snippet(const std::string& s, size_t n = 40) {
     return s.size() <= n ? s : s.substr(0, n) + "...";
 }
 
+std::atomic<bool> g_screen_open{false};
+
 class TuiApp {
 public:
     TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint,
-           std::string invite, std::string join_link)
+           std::string invite, std::string join_link, std::string recovery_key)
         : join_link_(std::move(join_link)),
+          recovery_key_(std::move(recovery_key)),
           vault_dir_(std::move(vault_dir)),
           server_(std::move(server)),
           name_(std::move(name)),
@@ -127,7 +134,25 @@ public:
             }
         });
 
+#ifndef _WIN32
+        // SIGTERM and SIGHUP were blocked in main(), so this thread is the only
+        // one that sees them. It asks the screen to close, and the normal
+        // shutdown below then locks the vault properly.
+        std::thread([this] {
+            sigset_t set;
+            sigemptyset(&set);
+            sigaddset(&set, SIGTERM);
+            sigaddset(&set, SIGHUP);
+            int sig = 0;
+            sigwait(&set, &sig);
+            if (!g_screen_open) return;
+            screen_.Post([this] { screen_.Exit(); });
+            screen_.PostEvent(Event::Custom);
+        }).detach();
+#endif
+        g_screen_open = true;
         screen_.Loop(root_);
+        g_screen_open = false;
         running_ = false;
         pump.join();
         corded_engine_destroy(engine_);
@@ -278,6 +303,19 @@ private:
             room_for(id).title = ev["data"]["room"].value("title", "?");
             refresh_titles();
             select_room(id);
+            return;
+        }
+        if (ok && ev["data"].contains("recovery_key")) {
+            info_box_ = vbox({
+                            text("Your recovery key") | bold,
+                            text("  " + ev["data"].value("recovery_key", "")) | color(Color::Cyan),
+                            text("Use it to set up another device as you:") | dim,
+                            text("  corded-tui --vault <new folder> --name " + username_ + " --recovery-key '<the key>' --server ...") | dim,
+                            text("Anyone who has this key can become you. Do not share it or leave it on screen.") |
+                                color(Color::Red),
+                        }) |
+                        border;
+            show_info_ = true;
             return;
         }
         if (ok && ev["data"].contains("settings")) {
@@ -449,7 +487,10 @@ private:
     }
     // Copies the current server's details into the fields the views read.
     void apply_current() {
-        const ServerState& st = servers_[current_server_];
+        servers_.erase(0);  // 0 means "no server yet"; never list it
+        auto it = servers_.find(current_server_);
+        if (it == servers_.end()) return;
+        const ServerState& st = it->second;
         server_name_ = st.name;
         is_owner_ = st.is_owner;
         permissions_ = st.permissions;
@@ -555,9 +596,11 @@ private:
         if (pass_.empty()) return;
         auto* p = reinterpret_cast<const uint8_t*>(pass_.data());
         busy_ = true;
-        corded_status st = creating_
-                               ? corded_vault_create(engine_, p, pass_.size(), name_.c_str(), &login_request_)
-                               : corded_vault_unlock(engine_, p, pass_.size(), &login_request_);
+        corded_status st =
+            !creating_ ? corded_vault_unlock(engine_, p, pass_.size(), &login_request_)
+            : !recovery_key_.empty()
+                ? corded_vault_restore(engine_, p, pass_.size(), name_.c_str(), recovery_key_.c_str(), &login_request_)
+                : corded_vault_create(engine_, p, pass_.size(), name_.c_str(), &login_request_);
         if (st != CORDED_OK) {
             busy_ = false;
             login_error_ = corded_status_message(st);
@@ -715,6 +758,8 @@ private:
                 json c = {{"cmd", "create_invite"}};
                 if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
                 command(c);
+            } else if (cmd == "/recovery-key") {
+                command({{"cmd", "get_recovery_key"}});
             } else if (cmd == "/settings") {
                 command({{"cmd", "get_settings"}});
             } else if (cmd == "/set" && arg.find(' ') != std::string::npos) {
@@ -846,7 +891,8 @@ private:
         rows.push_back(text("pre-alpha prototype, not audited") | dim | center);
         rows.push_back(separator());
         if (creating_) {
-            rows.push_back(text("No vault here yet. Create your identity."));
+            rows.push_back(text(recovery_key_.empty() ? "No vault here yet. Create your identity."
+                                                      : "Setting up this device with your recovery key."));
             rows.push_back(text(vault_dir_) | dim);
             rows.push_back(hbox({text("username:   "), name_input_->Render()}));
             rows.push_back(hbox({text("passphrase: "), pass_input_->Render()}));
@@ -864,7 +910,37 @@ private:
         return vbox(std::move(rows)) | border | size(WIDTH, LESS_THAN, 70) | center;
     }
 
+    // Help takes over the message area, so it never pushes the rest off screen.
+    Element help_view() {
+        return vbox({
+                              text("/chat <username>   start or open a chat"),
+                              text("/group a b c : Name  start a group chat (the name is optional)"),
+                              text("/name <text>       rename the open chat"),
+                              text("/add <username>    add someone to the open group        /leave  leave it"),
+                              text("/verify            show safety numbers for the people in this chat"),
+                              text("Messages have numbers. /reply, /thread, /react, /edit and /delete take one:"),
+                              text("   /reply 12 agreed     /react 12 +1     /delete 12      (no number = the latest)"),
+                              text("/servers           list your servers    /server switch <name>   /server join <link>"),
+                              text("/reply <text>      reply to the last message you received"),
+                              text("/thread <text>     reply in a thread under the last message you received"),
+                              text("/react <emoji>     react to the last message you received"),
+                              text("/edit <text>       change your last message        /delete  remove it"),
+                              text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
+                              text("/connect host:port connect to a server"),
+                              text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
+                              text("/recovery-key      show the key for setting up another device as you"),
+                              text("/history           ask members for earlier messages     /share-history on|off"),
+                              text("/open <name>       open a channel or chat by name      /members  /roles"),
+                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
+                              text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
+                              text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
+                              text("   /invite [uses]   make an invite link for someone to join"),
+                              text("   /remove   delete the last message someone else posted in this channel"),
+                          }) | yframe | flex;
+    }
+
     Element messages_view() {
+        if (show_help_) return help_view();
         Room* room = current();
         if (!room) {
             return vbox({text(""), text("No conversations yet.") | center,
@@ -939,7 +1015,7 @@ private:
                              rooms_.empty() ? text("(none)") | dim : room_menu_->Render() | yframe | flex}) |
                        size(WIDTH, EQUAL, 24);
         Element right = vbox({
-            hbox({text(room ? room->title : "") | bold,
+            hbox({text(show_help_ ? "Commands   (/help again to close)" : room ? room->title : "") | bold,
                   text(room && room->disappear_after
                            ? "   messages disappear after " + describe_duration(room->disappear_after)
                            : "") | color(Color::Yellow)}),
@@ -949,32 +1025,6 @@ private:
             hbox({text("> "), input_->Render() | flex}),
         }) | flex;
         Elements all = {header, hbox({left, separator(), right}) | flex | border};
-        if (show_help_)
-            all.push_back(vbox({
-                              text("/chat <username>   start or open a chat"),
-                              text("/group a b c : Name  start a group chat (the name is optional)"),
-                              text("/name <text>       rename the open chat"),
-                              text("/add <username>    add someone to the open group        /leave  leave it"),
-                              text("/verify            show safety numbers for the people in this chat"),
-                              text("Messages have numbers. /reply, /thread, /react, /edit and /delete take one:"),
-                              text("   /reply 12 agreed     /react 12 +1     /delete 12      (no number = the latest)"),
-                              text("/servers           list your servers    /server switch <name>   /server join <link>"),
-                              text("/reply <text>      reply to the last message you received"),
-                              text("/thread <text>     reply in a thread under the last message you received"),
-                              text("/react <emoji>     react to the last message you received"),
-                              text("/edit <text>       change your last message        /delete  remove it"),
-                              text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
-                              text("/connect host:port connect to a server"),
-                              text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
-                              text("/history           ask members for earlier messages     /share-history on|off"),
-                              text("/open <name>       open a channel or chat by name      /members  /roles"),
-                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
-                              text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
-                              text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
-                              text("   /invite [uses]   make an invite link for someone to join"),
-                              text("   /remove   delete the last message someone else posted in this channel"),
-                          }) |
-                          border);
         if (show_info_) all.push_back(info_box_);
         if (show_verify_) {
             Elements rows = {text("Safety numbers") | bold,
@@ -1029,7 +1079,7 @@ private:
         if (creating_ && !name_.empty()) pass_input_->TakeFocus();
     }
 
-    std::string join_link_;
+    std::string join_link_, recovery_key_;
     std::string vault_dir_, server_, name_, fingerprint_, invite_;
     std::string server_fp_, pin_notice_;
     corded_engine* engine_ = nullptr;
@@ -1064,7 +1114,17 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string vault, server, name, fingerprint, invite, join;
+#ifndef _WIN32
+    // Before any thread exists, so every thread inherits it: a termination
+    // signal is handled by one dedicated thread instead of killing the program
+    // mid-write.
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGTERM);
+    sigaddset(&blocked, SIGHUP);
+    pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
+#endif
+    std::string vault, server, name, fingerprint, invite, join, recovery;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -1074,9 +1134,13 @@ int main(int argc, char** argv) {
         else if (a == "--fingerprint") fingerprint = next();
         else if (a == "--invite") invite = next();
         else if (a == "--join") join = next();
+        else if (a == "--recovery-key") recovery = next();
         else {
             std::printf("usage: corded-tui [--vault DIR] [--server HOST:PORT] [--name USERNAME]\n"
-                        "                  [--fingerprint KEY] [--invite CODE] [--join LINK]\n\n"
+                        "                  [--fingerprint KEY] [--invite CODE] [--join LINK]\n"
+                        "                  [--recovery-key KEY]\n\n"
+                        "  --recovery-key set this device up as someone who already has an account on\n"
+                        "                 another device; get the key there with /recovery-key\n"
                         "  --join         an invite link (corded://...) from a member of the server;\n"
                         "                 replaces --server, --fingerprint and --invite\n"
                         "  --vault        where this identity is stored (default: ~/.corded/default)\n"
@@ -1092,5 +1156,5 @@ int main(int argc, char** argv) {
         const char* home = std::getenv("HOME");
         vault = std::string(home ? home : ".") + "/.corded/default";
     }
-    return TuiApp(vault, server, name, fingerprint, invite, join).run();
+    return TuiApp(vault, server, name, fingerprint, invite, join, recovery).run();
 }

@@ -38,16 +38,48 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# libsodium: the vcpkg copy if the `vendored-sodium` manifest feature is on,
-# otherwise the system copy.
+# libsodium. On Windows vcpkg provides it. Elsewhere the system's copy is used
+# if it is new enough; otherwise the official release is downloaded and built
+# as a static library, which needs only a C compiler and make.
+option(CORDED_BUNDLED_SODIUM "Build libsodium from its official release instead of using the system's" OFF)
 add_library(corded_sodium INTERFACE)
 find_package(unofficial-sodium CONFIG QUIET)
 if(TARGET unofficial-sodium::sodium)
   target_link_libraries(corded_sodium INTERFACE unofficial-sodium::sodium)
 else()
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.19)
-  target_link_libraries(corded_sodium INTERFACE PkgConfig::SODIUM)
+  if(NOT CORDED_BUNDLED_SODIUM)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium>=1.0.19)
+    endif()
+  endif()
+  if(SODIUM_FOUND AND NOT CORDED_BUNDLED_SODIUM)
+    message(STATUS "libsodium: using the system's ${SODIUM_VERSION}")
+    target_link_libraries(corded_sodium INTERFACE PkgConfig::SODIUM)
+  else()
+    message(STATUS "libsodium: building the bundled 1.0.20")
+    include(ExternalProject)
+    set(sodium_prefix ${CMAKE_BINARY_DIR}/sodium)
+    ExternalProject_Add(corded_sodium_build
+      URL https://download.libsodium.org/libsodium/releases/libsodium-1.0.20.tar.gz
+          https://github.com/jedisct1/libsodium/releases/download/1.0.20-RELEASE/libsodium-1.0.20.tar.gz
+      URL_HASH SHA256=ebb65ef6ca439333c2bb41a0c1990587288da07f6c7fd07cb3a18cc18d30ce19
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+      CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=${sodium_prefix} --libdir=${sodium_prefix}/lib
+                        --disable-shared --enable-static --with-pic --disable-dependency-tracking
+                        CC=${CMAKE_C_COMPILER}
+      BUILD_COMMAND make -j4
+      INSTALL_COMMAND make install
+      BUILD_BYPRODUCTS ${sodium_prefix}/lib/libsodium.a
+      LOG_CONFIGURE ON LOG_BUILD ON LOG_INSTALL ON)
+    file(MAKE_DIRECTORY ${sodium_prefix}/include)
+    add_library(corded_sodium_static STATIC IMPORTED GLOBAL)
+    set_target_properties(corded_sodium_static PROPERTIES
+      IMPORTED_LOCATION ${sodium_prefix}/lib/libsodium.a
+      INTERFACE_INCLUDE_DIRECTORIES ${sodium_prefix}/include)
+    add_dependencies(corded_sodium_static corded_sodium_build)
+    target_link_libraries(corded_sodium INTERFACE corded_sodium_static Threads::Threads)
+  endif()
 endif()
 
 # Encrypted SQLite for the client vault. vcpkg has no SQLCipher port for
@@ -71,8 +103,12 @@ else()
 endif()
 
 # ---- wire schema ----------------------------------------------------------
+# flatc is a build tool: when building for another kind of machine than this
+# one, vcpkg keeps it with the host's packages.
 find_program(FLATC flatc
-  HINTS ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/flatbuffers REQUIRED)
+  HINTS ${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/flatbuffers
+        ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/flatbuffers
+  REQUIRED)
 set(CORDED_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 add_custom_command(
   OUTPUT ${CORDED_GENERATED_DIR}/corded_generated.h

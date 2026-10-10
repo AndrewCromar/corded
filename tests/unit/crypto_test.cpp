@@ -264,3 +264,29 @@ TEST_CASE("safety numbers match on both sides and differ between people") {
         else REQUIRE((ab[i] >= '0' && ab[i] <= '9'));
     }
 }
+
+TEST_CASE("a recovery key recreates the same person on another device") {
+    Identity first = Identity::generate();
+    std::string key = encode_recovery_key(first.seed());
+    // 55 symbols in groups of five.
+    REQUIRE(key.size() == 55 + 10);
+    auto seed = decode_recovery_key(key);
+    REQUIRE(seed.has_value());
+    Identity second = Identity::from_seed(*seed);
+    REQUIRE(second.user.pk == first.user.pk);        // the same person
+    REQUIRE(second.device.pk != first.device.pk);    // a different device
+    REQUIRE(second.dh.pk != first.dh.pk);
+    REQUIRE(verify_device_cert(first.user.pk, second.device.pk, second.dh.pk, second.cert));
+
+    // Forgiving about how it is typed, strict about what it says.
+    std::string sloppy;
+    for (char ch : key) sloppy += ch == '-' ? ' ' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    REQUIRE(decode_recovery_key(sloppy) == seed);
+    std::string wrong = key;
+    wrong[0] = wrong[0] == 'A' ? 'B' : 'A';
+    REQUIRE_FALSE(decode_recovery_key(wrong).has_value());
+    REQUIRE_FALSE(decode_recovery_key(key.substr(0, 40)).has_value());
+    REQUIRE_FALSE(decode_recovery_key("").has_value());
+    REQUIRE_FALSE(decode_recovery_key("not a recovery key at all!").has_value());
+    REQUIRE(encode_recovery_key(Identity::generate().seed()) != key);
+}

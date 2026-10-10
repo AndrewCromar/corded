@@ -72,8 +72,9 @@ public:
     static bool exists(const std::string& dir);
 
     // fast_kdf lowers the Argon2id cost; it exists for tests only.
+    // With `seed`, the vault is for an existing person on a new device.
     void create(const std::string& dir, ByteView passphrase, const std::string& username,
-                bool fast_kdf);
+                bool fast_kdf, const std::optional<Key32>& seed = std::nullopt);
     void unlock(const std::string& dir, ByteView passphrase);
     void lock();
     bool unlocked() const { return db_.is_open(); }
@@ -91,7 +92,8 @@ public:
     std::optional<crypto::KeyPair> signed_prekey(uint32_t id) override;
     std::optional<crypto::KeyPair> take_one_time(uint32_t id) override;
 
-    std::optional<crypto::PeerSessions> load_sessions(ByteView peer_user);
+    // Encrypted sessions are kept per device, since one person may have several.
+    std::optional<crypto::PeerSessions> load_sessions(ByteView peer_device);
     void save_sessions(const crypto::PeerSessions& peer);
 
     // People whose safety number the user has checked.

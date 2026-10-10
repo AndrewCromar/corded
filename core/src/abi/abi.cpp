@@ -85,6 +85,19 @@ corded_status corded_vault_create(corded_engine* engine, const uint8_t* passphra
     });
 }
 
+corded_status corded_vault_restore(corded_engine* engine, const uint8_t* passphrase,
+                                   size_t passphrase_len, const char* username,
+                                   const char* recovery_key, corded_request* out_request) {
+    return guarded([&]() -> corded_status {
+        if (!engine || !passphrase || passphrase_len == 0 || !username || !recovery_key || !*recovery_key)
+            return CORDED_ERR_INVALID_ARGUMENT;
+        auto req = engine->engine.vault_create(corded::Bytes(passphrase, passphrase + passphrase_len),
+                                               username, recovery_key);
+        if (out_request) *out_request = req;
+        return CORDED_OK;
+    });
+}
+
 corded_status corded_vault_unlock(corded_engine* engine, const uint8_t* passphrase,
                                   size_t passphrase_len, corded_request* out_request) {
     return guarded([&]() -> corded_status {

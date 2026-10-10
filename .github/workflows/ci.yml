@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar \
-            autoconf autoconf-archive automake libtool perl
+            perl
 
       # Dependencies are built by vcpkg; caching its binary archives keeps
       # later runs fast.
@@ -33,9 +33,9 @@ jobs:
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
           restore-keys: vcpkg-${{ runner.os }}-
 
-      # Ubuntu's libsodium is too old (HKDF needs 1.0.19), so build it too.
+      # Ubuntu's libsodium is too old, so the build fetches and builds its own.
       - name: Build
-        run: ./build.sh -DVCPKG_MANIFEST_FEATURES=vendored-sodium
+        run: ./build.sh
 
       - name: Test
         run: ctest --preset dev

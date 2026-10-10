@@ -64,7 +64,7 @@ bool Vault::exists(const std::string& dir) {
 }
 
 void Vault::create(const std::string& dir, ByteView passphrase, const std::string& username,
-                   bool fast_kdf) {
+                   bool fast_kdf, const std::optional<Key32>& seed) {
     if (exists(dir)) throw VaultError("a vault already exists here");
     fs::create_directories(dir);
     fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace);
@@ -86,7 +86,7 @@ void Vault::create(const std::string& dir, ByteView passphrase, const std::strin
     sodium_memzero(vault_key.data(), vault_key.size());
     migrate();
 
-    identity_ = crypto::Identity::generate();
+    identity_ = seed ? crypto::Identity::from_seed(*seed) : crypto::Identity::generate();
     username_ = username;
     {
         db::Transaction tx(db_);
@@ -255,6 +255,12 @@ CREATE TABLE IF NOT EXISTS outbox (
         db_.exec("ALTER TABLE events ADD COLUMN shared_by BLOB");
         db_.exec("ALTER TABLE outbox ADD COLUMN only_user BLOB");
     }
+    // Sessions used to be kept per person; they are per device now.
+    db_.exec("CREATE TABLE IF NOT EXISTS device_sessions ("
+             "peer_device BLOB PRIMARY KEY, peer_user BLOB NOT NULL, state BLOB NOT NULL) WITHOUT ROWID");
+    db_.exec("INSERT OR IGNORE INTO device_sessions (peer_device, peer_user, state) "
+             "SELECT peer_device, peer_user, state FROM sessions");
+    db_.exec("DELETE FROM sessions");
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -332,17 +338,17 @@ std::optional<crypto::KeyPair> Vault::take_one_time(uint32_t id) {
     return kp;
 }
 
-std::optional<crypto::PeerSessions> Vault::load_sessions(ByteView peer_user) {
-    auto st = db_.prepare("SELECT state FROM sessions WHERE peer_user = ?");
-    st.bind(1, peer_user);
+std::optional<crypto::PeerSessions> Vault::load_sessions(ByteView peer_device) {
+    auto st = db_.prepare("SELECT state FROM device_sessions WHERE peer_device = ?");
+    st.bind(1, peer_device);
     if (!st.step()) return std::nullopt;
     return crypto::PeerSessions::parse(st.blob(0));
 }
 
 void Vault::save_sessions(const crypto::PeerSessions& peer) {
-    auto st = db_.prepare("INSERT OR REPLACE INTO sessions (peer_user, peer_device, state) "
+    auto st = db_.prepare("INSERT OR REPLACE INTO device_sessions (peer_device, peer_user, state) "
                           "VALUES (?,?,?)");
-    st.bind(1, peer.user_id).bind(2, peer.device_id).bind(3, peer.serialize()).exec();
+    st.bind(1, peer.device_id).bind(2, peer.user_id).bind(3, peer.serialize()).exec();
 }
 
 bool Vault::is_verified(ByteView user_id) {

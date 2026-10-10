@@ -238,6 +238,7 @@ build on it.
 | **C13** | **Several devices per person** (D-37): linking and recovery phrase, several devices per account on the server, a session per device. See [05-operations-and-platforms.md](05-operations-and-platforms.md), section 2. | Server, core crypto, engine, TUI | Tests: the same person on two devices receives everything on both; a removed device receives nothing further |
 | **C14** | **Windows build, then GUI on every platform** (D-38). Section 3 of the same document. | Build system, CI, new GUI | The terminal client runs natively on Windows; CI builds every platform |
 | **C15** | **Browser client** (D-39). Section 4 of the same document. | Server (WebSocket listener), core (WebAssembly build), new web frontend | A browser joins a server and talks to an installed client |
+| **C17** | **Isolated home hosting** (D-40): a Pi setup script (unprivileged account, sandboxed service, firewall) and an outgoing-tunnel mode. Section 5 of the same document. | Packaging, server | A Pi set up by the script cannot reach private addresses; a server in tunnel mode is reachable with no port forwarded |
 | **C16** | **Remote administration** (D-34, D-35, D-36): settings stored in the server and editable from the client, housekeeping and scheduled restarts, `/reboot`, and signed remote `/update`. Section 1 of the same document. | Server, engine, TUI, release pipeline | Tests: a setting changed from the client survives a restart; a scheduled restart happens and clients return; an update with a bad signature is refused |
 | **C10** | **Polish that makes it feel like a community:** categories, channel topics, nicknames, role colours, `@role` mentions, unread and mention counts per channel, ownership transfer. | Server, engine, TUI | Per feature |
 
@@ -257,7 +258,10 @@ build on it.
 | C10 Polish, C11 Optional unencrypted servers | Not started |
 | C12 Server scope | Built: `--scope machine`, `network` or `internet`; machine is the default for a new server; network scope turns away non-local addresses; internet scope makes registration invite-only unless told otherwise. The extra limits for internet scope (accounts per address per day, handshake timeouts) are not built |
 | C16 Remote administration | Partly built: settings stored in the server and changed from a client, `/status`, `/reboot`, scheduled restarts, hourly housekeeping with a retention window. Remote update is not built; it waits on the release signing decision |
-| C13 Several devices, C14 Windows and GUI, C15 Browser client | Not started; designed in [05-operations-and-platforms.md](05-operations-and-platforms.md) |
+| C13 Several devices | Built: a recovery key recreates the identity on another device; the server keeps several devices per person; clients keep a session per device and send to every device, including the sender's own others; a new device gets history from the person's other device. Not built: linking by code or QR, listing and removing devices, telling contacts a device was added |
+| C14 Windows and GUI | In progress: the code is ported and a Windows build runs in CI; no GUI yet |
+| C15 Browser client | Set aside (owner decision) |
+| C17 Isolated home hosting | Not started |
 
 Simplifications in what is built, to be revisited: after any change to roles, channels or
 membership the server sends every online member a full fresh picture instead of a small

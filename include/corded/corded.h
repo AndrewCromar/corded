@@ -59,6 +59,7 @@
  *    "thread":"<id of the message that started the thread, optional>",
  *    "expires_in":<seconds until this one message disappears, optional>}
  *   {"cmd":"set_disappearing","room_id":"...","seconds":3600}   (0 turns it off)
+ *   {"cmd":"get_recovery_key"}        the secret for adding another device; handle with care
  *   {"cmd":"request_history","room_id":"..."}       ask members for earlier messages
  *   {"cmd":"set_history_sharing","enabled":false}   stop answering such requests
  *   {"cmd":"fetch_thread","room_id":"...","event_id":"<thread's first message>"}
@@ -126,6 +127,12 @@ CORDED_API corded_status corded_vault_exists(corded_engine* engine, int32_t* out
 CORDED_API corded_status corded_vault_create(corded_engine* engine, const uint8_t* passphrase,
                                              size_t passphrase_len, const char* username,
                                              corded_request* out_request);
+/* Sets up this device for a person who already exists on another device.
+ * recovery_key is what {"cmd":"get_recovery_key"} returned there. The new
+ * device has the same identity, its own keys and its own passphrase. */
+CORDED_API corded_status corded_vault_restore(corded_engine* engine, const uint8_t* passphrase,
+                                              size_t passphrase_len, const char* username,
+                                              const char* recovery_key, corded_request* out_request);
 CORDED_API corded_status corded_vault_unlock(corded_engine* engine, const uint8_t* passphrase,
                                              size_t passphrase_len, corded_request* out_request);
 

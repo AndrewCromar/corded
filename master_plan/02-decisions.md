@@ -33,7 +33,7 @@ To change a decision, edit this file in the same pull request as the change.
 | D-17 | C ABI event delivery | Callback and pull queue, JSON payloads | Proposed | 5 |
 | D-18 | TUI toolkit | FTXUI | Proposed | 5 |
 | D-19 | Test framework | Catch2 v3, CTest, libFuzzer | Proposed | 0 |
-| D-20 | Reference GUI toolkit | Flutter (dart:ffi) | Open | 6 |
+| D-20 | Reference GUI toolkit | Flutter (dart:ffi). The community is free to build other clients on the same C interface, using platform-specific tools where they are faster | Locked (owner decision) | 6 |
 | D-21 | Server retention | Ciphertext kept for a configurable window, default 30 days | Proposed | 2 |
 | D-22 | Naming | `libcorded`, `cordedd`, `corded-tui`, `corded_` prefix | Proposed | 0 |
 | D-23 | Ratchet implementation | Write X3DH, Double Ratchet and sender keys in C++ on libsodium, or wrap an audited library | Open | 4 |
@@ -47,7 +47,8 @@ To change a decision, edit this file in the same pull request as the change.
 | D-36 | Remote update | The owner can update the server from their client. Only official releases verified by signature are installed, never an older one, with rollback on failure | Locked (owner requirement); who holds the signing key is open | 2, 7 |
 | D-37 | Several devices per person | The same identity on several devices, added by linking or by a recovery phrase. The secret that makes two clients the same person is the identity key, which the server never sees | Locked (owner requirement); builds on D-15 | 1, 2, 3, 4 |
 | D-38 | Client platforms | Linux, Windows, macOS, iOS and Android from one GUI codebase, built on GitHub's machines so no Mac is needed. Windows first | Locked (owner requirement) | 6 |
-| D-39 | Browser client | Possible, by compiling the core to WebAssembly and adding a WebSocket listener to the server. Built last, and labelled as less secure than installed clients | Proposed | 6 |
+| D-39 | Browser client | Not being pursued for now (owner decision). Recorded as possible later, by compiling the core to WebAssembly and adding a WebSocket listener to the server | Deferred | none |
+| D-40 | Isolated home hosting | A server at home must be able to run walled off from the home network, without relying on the server being secure: the Pi on a guest network or its own router, a setup script that applies a firewall and an unprivileged account, and an outgoing-tunnel mode so the home router accepts no incoming connections | Locked (owner requirement) | 2, 7 |
 | D-33 | Server scope | The person running a server chooses who can reach it: this machine only, the local network, or the internet. The safe choice is the default, and the wider scopes switch on the protections they need | Locked (owner requirement); details proposed | 2 |
 | D-32 | Turning end-to-end encryption off | Always on by default; can be disabled if wanted. Proposed shape: a per-server switch held by the owner, shown plainly in every client | Locked in principle (owner decision); details proposed | 2, 3, 5 |
 | D-29 | What the server sees of a community | Channel names, role names and the member list are visible to the server; message content is not | Proposed | 1 |

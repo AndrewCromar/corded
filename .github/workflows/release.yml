@@ -51,7 +51,7 @@ jobs:
           restore-keys: vcpkg-debian12-${{ matrix.arch }}-
 
       - name: Build
-        run: ./build.sh
+        run: ./build.sh -DCORDED_BUNDLED_SODIUM=ON
 
       - name: Test
         run: ctest --preset dev

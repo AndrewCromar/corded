@@ -27,7 +27,13 @@ table Ok {}
 
 // ---- keys ----
 table PublishPrekeys { spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte]; otks: [KeyEntry]; }
-table FetchBundle { user_id: [ubyte]; }
+// With device_id, the bundle for that device; without, for the person's first device.
+table FetchBundle { user_id: [ubyte]; device_id: [ubyte]; }
+// One person may use several devices. Senders encrypt to each of them.
+table DeviceRef { device_id: [ubyte]; }
+table ListDevices { user_id: [ubyte]; }
+table DeviceList { user_id: [ubyte]; devices: [DeviceRef]; }
+table DevicesChanged { user_id: [ubyte]; }   // pushed when someone adds a device
 table Bundle {
   user_id: [ubyte]; device_id: [ubyte]; dh_key: [ubyte]; cert: [ubyte];
   spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte];
@@ -118,7 +124,8 @@ union FrameBody {
   CreateChannel, UpdateChannel, DeleteChannel, SetOverride,
   NewInvite, Invite, RevokeInvite,
   HistoryRequest, HistoryWanted,
-  GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice
+  GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
+  ListDevices, DeviceList, DevicesChanged
 }
 
 table Frame { request_id: uint32; body: FrameBody; }
