@@ -504,6 +504,9 @@ public:
                 case wire::FrameBody_SetSetting: on_set_setting(*c, rid, *f.body.AsSetSetting()); break;
                 case wire::FrameBody_Restart: on_restart(*c, rid); break;
                 case wire::FrameBody_UpdateServer: on_update(*c, rid); break;
+                case wire::FrameBody_SetChannelFeatured:
+                    on_set_channel_featured(*c, rid, *f.body.AsSetChannelFeatured());
+                    break;
                 case wire::FrameBody_GetStatus: on_get_status(*c, rid); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
@@ -1109,6 +1112,13 @@ private:
         }
         if (row->owner != c.user_id && !require(c, rid, perm::ManageMessages)) return;
         drop_blob(q.blob_id);
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_set_channel_featured(Conn& c, uint32_t rid, const wire::SetChannelFeaturedT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        storage_.set_channel_featured(q.room_id, q.featured);
+        broadcast_state();
         c.reply(rid, wire::OkT{});
     }
 

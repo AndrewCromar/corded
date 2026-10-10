@@ -126,6 +126,11 @@ CREATE TABLE IF NOT EXISTS blobs (
             db_.exec("ALTER TABLE rooms ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
         }
         try {
+            db_.exec("SELECT featured FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN featured INTEGER NOT NULL DEFAULT 0");
+        }
+        try {
             db_.exec("SELECT channel_type FROM rooms LIMIT 0");
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE rooms ADD COLUMN channel_type TEXT NOT NULL DEFAULT ''");
@@ -566,6 +571,10 @@ CREATE TABLE IF NOT EXISTS blobs (
         st.bind(1, room_id);
         return st.step() && st.i64(0) != 0;
     }
+    void set_channel_featured(ByteView room_id, bool featured) {
+        auto st = db_.prepare("UPDATE rooms SET featured = ? WHERE room_id = ? AND kind = 0");
+        st.bind(1, static_cast<int64_t>(featured ? 1 : 0)).bind(2, room_id).exec();
+    }
     void set_channel_nsfw(ByteView room_id, bool nsfw) {
         auto st = db_.prepare("UPDATE rooms SET nsfw = ? WHERE room_id = ? AND kind = 0");
         st.bind(1, static_cast<int64_t>(nsfw ? 1 : 0)).bind(2, room_id).exec();
@@ -627,7 +636,7 @@ CREATE TABLE IF NOT EXISTS blobs (
         info.room_id = to_bytes(room_id);
         {
             auto st = db_.prepare(
-                "SELECT created_at, kind, name, nsfw, archived, channel_type FROM rooms WHERE room_id = ?");
+                "SELECT created_at, kind, name, nsfw, archived, channel_type, featured FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
@@ -637,6 +646,7 @@ CREATE TABLE IF NOT EXISTS blobs (
                 info.nsfw = st.i64(3) != 0;
                 info.archived = st.i64(4) != 0;
                 info.channel_type = st.text(5);
+                info.featured = st.i64(6) != 0;
             }
         }
         if (info.kind == kChannel) {

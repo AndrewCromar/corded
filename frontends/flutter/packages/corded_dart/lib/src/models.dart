@@ -35,6 +35,7 @@ class Room {
   List<String> pinned = const []; // ids of the pinned messages, oldest pin first
   bool nsfw = false; // a channel marked so that clients warn before showing it
   bool archived = false; // a channel kept to read, closed to writing
+  bool featured = false; // a channel pinned to the top of everyone's list
   String channelType = ''; // how a channel is laid out: '' for messages, 'tasks' for a task list
   bool get isTaskList => channelType == 'tasks';
   String firstUnread = ''; // where this person's unread messages start; empty if none
@@ -48,6 +49,7 @@ class Room {
     disappearAfter = (j['disappear_after'] as num?)?.toInt() ?? disappearAfter;
     nsfw = j['nsfw'] as bool? ?? nsfw;
     archived = j['archived'] as bool? ?? archived;
+    featured = j['featured'] as bool? ?? featured;
     channelType = j['channel_type'] as String? ?? channelType;
     firstUnread = j['first_unread'] as String? ?? firstUnread;
     final p = j['pinned'] as List?;

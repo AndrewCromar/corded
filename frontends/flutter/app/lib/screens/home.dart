@@ -78,7 +78,10 @@ class HomeScreen extends StatelessWidget {
     final status = _connectionWords.containsKey(server?.connection)
         ? _connectionWords[server?.connection]
         : sentence(server?.connection ?? '');
-    final channels = rooms.where((r) => r.kind == 'channel' && !r.archived && !r.nsfw).toList();
+    // Channels the people who run the server pinned to the top, for everyone.
+    final pinned = rooms.where((r) => r.kind == 'channel' && !r.archived && !r.nsfw && r.featured).toList();
+    final channels =
+        rooms.where((r) => r.kind == 'channel' && !r.archived && !r.nsfw && !r.featured).toList();
     // Kept apart from the everyday channels, further down the list.
     final nsfw = rooms.where((r) => r.kind == 'channel' && !r.archived && r.nsfw).toList();
     final archived = rooms.where((r) => r.kind == 'channel' && r.archived).toList();
@@ -238,6 +241,8 @@ class HomeScreen extends StatelessWidget {
           ),
         Expanded(
           child: ListView(children: [
+            if (pinned.isNotEmpty) heading('Pinned'),
+            ...pinned.map(tile),
             if (channels.isNotEmpty) heading('Channels'),
             ...channels.map(tile),
             heading('Direct messages'),

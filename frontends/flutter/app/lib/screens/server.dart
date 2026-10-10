@@ -152,6 +152,16 @@ class _ServerScreenState extends State<ServerScreen> {
             },
           ),
           ListTile(
+            leading: Icon(r.featured ? Icons.push_pin : Icons.push_pin_outlined),
+            title: Text(r.featured ? 'Unpin from the top' : 'Pin to the top'),
+            subtitle: const Text('Pinned channels head everyone\'s list'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _do({'cmd': 'set_channel_featured', 'room_id': r.id, 'featured': !r.featured},
+                  r.featured ? 'Unpinned.' : 'Pinned to the top.');
+            },
+          ),
+          ListTile(
             leading: Icon(r.nsfw ? Icons.visibility_outlined : Icons.visibility_off_outlined),
             title: Text(r.nsfw ? 'Remove the NSFW mark' : 'Mark as NSFW'),
             subtitle: const Text('People are warned before the channel opens'),

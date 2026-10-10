@@ -2383,3 +2383,34 @@ TEST_CASE("a server that only this computer may reach stays that way after a res
     alice.wait("live again", live, 40000);
     REQUIRE(scope() == "machine");
 }
+
+TEST_CASE("a channel pinned to the top is pinned for everyone") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        json room = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"];
+        general = room["room_id"];
+        REQUIRE(room["featured"] == false);
+    }
+    auto pinned_is = [&](bool pinned) {
+        return [&, pinned](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["featured"] == pinned;
+        };
+    };
+    // Only those who manage channels may; then everyone sees it.
+    REQUIRE(bob.cmd({{"cmd", "set_channel_featured"}, {"room_id", general}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_channel_featured"}, {"room_id", general}})["ok"] == true);
+    bob.wait("pinned", pinned_is(true));
+    REQUIRE(alice.cmd({{"cmd", "set_channel_featured"}, {"room_id", general}, {"featured", false}})["ok"] == true);
+    bob.wait("unpinned", pinned_is(false));
+}

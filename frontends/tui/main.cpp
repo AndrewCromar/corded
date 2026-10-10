@@ -70,6 +70,7 @@ struct Room {
     std::map<std::string, std::map<std::string, std::pair<uint64_t, std::vector<int>>>> poll_votes;  // poll -> voter -> (when, choices)
     std::map<std::string, std::vector<int>> my_votes;  // poll -> this person's choices
     bool nsfw = false;                // warn before showing this channel
+    bool featured = false;            // pinned to the top of the list
     bool archived = false;            // readable, closed to writing
     bool tasks = false;               // a task list: what is typed becomes a task
     bool uncovered = false;           // the person chose to see it, this visit
@@ -341,6 +342,7 @@ private:
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
                 room.unread = r.value("unread", room.unread);
                 room.nsfw = r.value("nsfw", false);
+                room.featured = r.value("featured", false);
                 room.archived = r.value("archived", false);
                 room.tasks = r.value("channel_type", "") == "tasks";
                 room.pinned.clear();
@@ -823,6 +825,8 @@ private:
     void refresh_titles() {
         std::string open = current_id();
         std::stable_sort(rooms_.begin(), rooms_.end(), [](const Room& a, const Room& b) {
+            // Pinned channels first, then the other channels, then the rest.
+            if (a.featured != b.featured) return a.featured;
             bool ac = a.kind == "channel", bc = b.kind == "channel";
             return ac != bc ? ac : a.title < b.title;
         });
@@ -833,7 +837,8 @@ private:
             if (current_server_ != 0 && r.server_id != current_server_) continue;
             if (r.id == open) selected_ = static_cast<int>(visible_.size());
             visible_.push_back(i);
-            titles_.push_back(r.title + (r.tasks ? " [tasks]" : "") + (r.nsfw ? " [NSFW]" : "") +
+            titles_.push_back(r.title + (r.featured ? " [pinned]" : "") + (r.tasks ? " [tasks]" : "") +
+                              (r.nsfw ? " [NSFW]" : "") +
                               (r.archived ? " [archived]" : "") +
                               (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
@@ -1330,6 +1335,8 @@ private:
                              {"allow", {"view_channel"}}});
                 } else if (sub == "archive" && (rest == "on" || rest == "off")) {
                     command({{"cmd", "set_channel_archived"}, {"room_id", room->id}, {"archived", rest == "on"}});
+                } else if (sub == "pin" && (rest == "on" || rest == "off")) {
+                    command({{"cmd", "set_channel_featured"}, {"room_id", room->id}, {"featured", rest == "on"}});
                 } else if (sub == "nsfw" && (rest == "on" || rest == "off")) {
                     command({{"cmd", "set_channel_nsfw"}, {"room_id", room->id}, {"nsfw", rest == "on"}});
                 } else if (sub == "readonly") {
@@ -1338,7 +1345,7 @@ private:
                 } else if (sub == "open") {
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"}});
                 } else {
-                    notice_ = "/channel new <name> | tasks <name> | rename <name> | delete | private <role> | readonly | open";
+                    notice_ = "/channel new <name> | tasks <name> | rename <name> | delete | private <role> | readonly | open | pin on|off";
                 }
             } else if (cmd == "/role" && !arg.empty()) {
                 // /role new <name> [permission ...] | delete <name> | give <user> <role> | take <user> <role>

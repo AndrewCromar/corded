@@ -330,6 +330,8 @@ Session::json Session::room_json(const RoomRow& room) {
             {"disappear_after", room.ttl_s},
             {"pinned", pins(room.room_id)},
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
+            // Pinned to the top of the list by whoever manages the channels.
+            {"featured", vault_.meta("featured:" + b64(room.room_id)).value_or("0") == "1"},
             {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
             // How a channel is laid out: "" for messages, "tasks" for a task list.
             {"channel_type", vault_.meta("channel_type:" + b64(room.room_id)).value_or("")},
@@ -842,6 +844,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
+                   name == "set_channel_featured" ||
                    name == "list_devices" || name == "remove_device" || name == "set_channel_archived" ||
                    name == "kick" ||
                    name == "ban_user" ||
@@ -1273,6 +1276,12 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         wire::SetChannelArchivedT q;
         q.room_id = need_b64(cmd, "room_id", 16);
         q.archived = cmd.value("archived", true);
+        simple_request(req, std::move(q));
+    } else if (name == "set_channel_featured") {
+        // Pins a channel to the top of everyone's list, or lets it go.
+        wire::SetChannelFeaturedT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.featured = cmd.value("featured", true);
         simple_request(req, std::move(q));
     } else if (name == "set_channel_nsfw") {
         // Marks a channel so that clients warn before showing it.
@@ -2572,6 +2581,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         db::Transaction tx(vault_.db());
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
+        vault_.set_meta("featured:" + b64(info.room_id), info.featured ? "1" : "0");
         vault_.set_meta("archived:" + b64(info.room_id), info.archived ? "1" : "0");
         vault_.set_meta("channel_type:" + b64(info.room_id), info.channel_type);
         tx.commit();

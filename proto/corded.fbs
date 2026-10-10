@@ -59,6 +59,7 @@ table RoomInfo {
   nsfw: bool;   // channels only: clients warn before showing it
   archived: bool;   // channels only: kept to read, closed to writing
   channel_type: string;   // channels only: empty for messages, "tasks" for a task list
+  featured: bool;   // channels only: pinned to the top of everyone's list
 }
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
@@ -124,6 +125,8 @@ table DeleteBlob { blob_id: [ubyte]; }
 // The owner asks the server to install the newest signed release and restart.
 // Answered at once with Ok; how it went follows as a Notice.
 table UpdateServer {}
+// Pins a channel to the top of everyone's list (an announcements channel, say).
+table SetChannelFeatured { room_id: [ubyte]; featured: bool; }
 // Invites: a code that lets someone create an account on an invite-only server.
 // max_uses 0 means unlimited; expires_in_s 0 means it never expires.
 table NewInvite { max_uses: uint32; expires_in_s: uint64; }
@@ -169,7 +172,7 @@ union FrameBody {
   GetOverrides, Overrides, SetChannelNsfw, RemoveDevice,
   SetChannelArchived,
   PutBlob, GetBlob, Blob, DeleteBlob,
-  UpdateServer
+  UpdateServer, SetChannelFeatured
 }
 
 table Frame { request_id: uint32; body: FrameBody; }
