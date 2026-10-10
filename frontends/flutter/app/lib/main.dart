@@ -12,6 +12,7 @@ import 'screens/add_server.dart';
 import 'screens/catch_up.dart';
 import 'screens/chat.dart';
 import 'screens/home.dart';
+import 'screens/members.dart';
 import 'screens/quick_switch.dart';
 import 'screens/settings.dart';
 import 'screens/unlock.dart';
@@ -94,6 +95,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       if (screen == 'settings') state.openPage(context, (_) => SettingsScreen(state: state));
       if (screen == 'catchup') state.openPage(context, (_) => CatchUpScreen(state: state));
       if (screen == 'switch') showQuickSwitch(context, state);
+      if (screen == 'members') state.openPage(context, (_) => MembersScreen(state: state));
     };
     final shot = Platform.environment['CORDED_SCREENSHOT'];
     if (shot != null && shot.isNotEmpty) {
