@@ -144,9 +144,9 @@ class _TasksViewState extends State<TasksView> {
               padding: const EdgeInsets.only(top: 10, bottom: 6),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(task.body,
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                        decoration: task.taskDone ? TextDecoration.lineThrough : null,
-                        color: task.taskDone ? theme.colorScheme.outline : null)),
+                    // Done is shown by the ticked box, the grey and the place in the list.
+                    style: theme.textTheme.bodyLarge
+                        ?.copyWith(color: task.taskDone ? theme.colorScheme.outline : null)),
                 Text(note, style: theme.textTheme.labelSmall),
                 if (reactions.isNotEmpty)
                   Wrap(spacing: 4, children: [

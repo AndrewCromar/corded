@@ -121,6 +121,9 @@ table GetBlob { blob_id: [ubyte]; offset: uint64; }
 table Blob { blob_id: [ubyte]; offset: uint64; data: [ubyte]; total: uint64; }
 // The uploader, or someone who manages messages, removes a stored file.
 table DeleteBlob { blob_id: [ubyte]; }
+// The owner asks the server to install the newest signed release and restart.
+// Answered at once with Ok; how it went follows as a Notice.
+table UpdateServer {}
 // Invites: a code that lets someone create an account on an invite-only server.
 // max_uses 0 means unlimited; expires_in_s 0 means it never expires.
 table NewInvite { max_uses: uint32; expires_in_s: uint64; }
@@ -165,7 +168,8 @@ union FrameBody {
   RemoveAccount, SetNickname, Ephemeral,
   GetOverrides, Overrides, SetChannelNsfw, RemoveDevice,
   SetChannelArchived,
-  PutBlob, GetBlob, Blob, DeleteBlob
+  PutBlob, GetBlob, Blob, DeleteBlob,
+  UpdateServer
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

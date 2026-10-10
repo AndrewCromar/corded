@@ -59,7 +59,7 @@ jobs:
       - name: Package
         id: package
         run: |
-          version=$(git describe --tags --always --dirty)
+          version=$(git describe --tags --match 'v*' --always --dirty)
           name="corded-${version}-linux-${{ matrix.arch }}"
           cmake --install build/dev --prefix "dist/${name}" --strip
           cp packaging/README.txt "dist/${name}/README.txt"
@@ -76,6 +76,23 @@ jobs:
           tar -C dist -czf "${name}.tar.gz" "${name}"
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      # A server that updates itself installs only what carries this signature
+      # (server/src/update.hpp). The private key exists only as this secret.
+      - name: Sign the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          name="${{ steps.package.outputs.name }}"
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then echo "no release key set; this release goes out unsigned"; exit 0; fi
+          apt-get install -y --no-install-recommends openssl >/dev/null
+          key="$(mktemp)"; chmod 600 "$key"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" -in "${name}.tar.gz" -out "${name}.tar.gz.sig"
+          rm -f "$key"
+          openssl pkeyutl -verify -rawin -pubin -inkey packaging/release-signing.pub \
+            -in "${name}.tar.gz" -sigfile "${name}.tar.gz.sig"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -95,6 +112,9 @@ jobs:
             --notes "Pre-alpha build. Not security audited. See the README for how to run it."
           gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz" \
             "${{ steps.package.outputs.name }}.tar.gz.sha256" --clobber
+          if [ -f "${{ steps.package.outputs.name }}.tar.gz.sig" ]; then
+            gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz.sig" --clobber
+          fi
 
   android:
     name: Android app
@@ -151,7 +171,7 @@ jobs:
           flutter pub get
           flutter analyze
           flutter build apk --release --target-platform android-arm64 \
-            --build-name "$(git describe --tags --always | sed 's/^v//')" --build-number "${{ github.run_number }}"
+            --build-name "$(git describe --tags --match 'v*' --always | sed 's/^v//')" --build-number "${{ github.run_number }}"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/corded-android-arm64.apk"
 
       - uses: actions/upload-artifact@v4
@@ -204,7 +224,7 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $version = git describe --tags --always --dirty
+          $version = git describe --tags --match 'v*' --always --dirty
           $name = "corded-$version-windows-x64"
           New-Item -ItemType Directory -Force "dist\$name" | Out-Null
           Copy-Item build\windows\bin\cordedd.exe, build\windows\bin\corded-tui.exe, build\windows\bin\corded-cli.exe, build\windows\bin\corded.dll "dist\$name\"

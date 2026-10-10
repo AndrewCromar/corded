@@ -1264,6 +1264,9 @@ private:
                 if (settings_selected()) load_settings_page();
             } else if (cmd == "/reboot") {
                 command({{"cmd", "restart_server"}});
+            } else if (cmd == "/update") {
+                command({{"cmd", "update_server"}});
+                notice_ = "asked the server to install the newest release; it will say how it went";
             } else if (cmd == "/notify" && (arg == "on" || arg == "bell" || arg == "off")) {
                 notify_mode_ = arg;
                 std::ofstream(vault_dir_ + "/tui-notify") << arg;  // remembered for next time
@@ -1488,6 +1491,7 @@ private:
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open|nsfw on/off|archive on/off"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                               text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
+                              text("   /update   the owner: install the newest signed release and restart"),
                               text("   /setnick <user> <name>   change someone's display name"),
                               text("   /remove-account <user>   delete an account for good and free its name"),
                               text("   /invite [uses]   make an invite link for someone to join"),

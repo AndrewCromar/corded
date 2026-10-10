@@ -87,6 +87,8 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
                 borderRadius: BorderRadius.circular(14),
                 onTap: () {
                   _dismissBanner();
+                  // A notice from the server leads nowhere; a message leads to its chat.
+                  if (roomId.isEmpty) return;
                   state.openFromNotification(
                       {'room_id': roomId, if (threadRoot != null) 'thread': threadRoot});
                 },
@@ -102,7 +104,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(color: scheme.onSurface, fontWeight: FontWeight.bold)),
                         Text(body,
-                            maxLines: 2,
+                            maxLines: roomId.isEmpty ? 5 : 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(color: scheme.onSurface)),
                       ]),
@@ -117,7 +119,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
     );
     _banner = entry;
     overlay.insert(entry);
-    _bannerTimer = Timer(const Duration(seconds: 5), _dismissBanner);
+    _bannerTimer = Timer(Duration(seconds: roomId.isEmpty ? 9 : 5), _dismissBanner);
   }
 
   // Notifications are for when nobody is looking at the app.

@@ -71,7 +71,9 @@ class HomeScreen extends StatelessWidget {
     final status = _connectionWords.containsKey(server?.connection)
         ? _connectionWords[server?.connection]
         : sentence(server?.connection ?? '');
-    final channels = rooms.where((r) => r.kind == 'channel' && !r.archived).toList();
+    final channels = rooms.where((r) => r.kind == 'channel' && !r.archived && !r.nsfw).toList();
+    // Kept apart from the everyday channels, further down the list.
+    final nsfw = rooms.where((r) => r.kind == 'channel' && !r.archived && r.nsfw).toList();
     final archived = rooms.where((r) => r.kind == 'channel' && r.archived).toList();
     final others = rooms.where((r) => r.kind != 'channel').toList();
 
@@ -231,6 +233,8 @@ class HomeScreen extends StatelessWidget {
             ...others.map(tile),
             if (others.isEmpty)
               const ListTile(dense: true, title: Text('None yet. Use the button below to message someone.')),
+            if (nsfw.isNotEmpty) heading('NSFW'),
+            for (final r in nsfw) tile(r),
             if (archived.isNotEmpty) heading('Archived'),
             for (final r in archived) Opacity(opacity: 0.55, child: tile(r)),
             const SizedBox(height: 80),

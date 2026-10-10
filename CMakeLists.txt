@@ -194,10 +194,21 @@ endif()
 
 # ---- server ---------------------------------------------------------------
 add_executable(cordedd server/src/main.cpp)
-target_compile_definitions(cordedd PRIVATE ASIO_STANDALONE)
+# The server knows which release it is, and carries the public key that
+# updates are checked against (see server/src/update.hpp).
+execute_process(COMMAND git describe --tags --match v* --always
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE CORDED_BUILD_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT CORDED_BUILD_VERSION)
+  set(CORDED_BUILD_VERSION "dev")
+endif()
+file(STRINGS "${CMAKE_SOURCE_DIR}/packaging/release-signing.pub" CORDED_RELEASE_KEY_LINES REGEX "^[A-Za-z0-9+/=]+$")
+list(JOIN CORDED_RELEASE_KEY_LINES "" CORDED_RELEASE_KEY)
+target_compile_definitions(cordedd PRIVATE ASIO_STANDALONE
+  CORDED_BUILD_VERSION="${CORDED_BUILD_VERSION}" CORDED_RELEASE_KEY="${CORDED_RELEASE_KEY}")
 target_link_libraries(cordedd PRIVATE
   corded_common unofficial::sqlite3::sqlite3 asio::asio spdlog::spdlog Threads::Threads
-  corded_warnings)
+  nlohmann_json::nlohmann_json corded_warnings)
 
 # ---- frontends: they use the public header and nothing else ---------------
 add_executable(corded-cli tools/corded-cli.cpp)

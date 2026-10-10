@@ -290,3 +290,48 @@ TEST_CASE("a recovery key recreates the same person on another device") {
     REQUIRE_FALSE(decode_recovery_key("not a recovery key at all!").has_value());
     REQUIRE(encode_recovery_key(Identity::generate().seed()) != key);
 }
+
+#include "corded/common/release.hpp"
+
+TEST_CASE("a release is accepted only with the release key's signature") {
+    REQUIRE(sodium_init() >= 0);
+    unsigned char pk[crypto_sign_PUBLICKEYBYTES], sk[crypto_sign_SECRETKEYBYTES];
+    crypto_sign_keypair(pk, sk);
+    // The public key as openssl writes it.
+    corded::Bytes der = {0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00};
+    der.insert(der.end(), pk, pk + sizeof pk);
+    std::string line(sodium_base64_encoded_len(der.size(), sodium_base64_VARIANT_ORIGINAL), '\0');
+    sodium_bin2base64(line.data(), line.size(), der.data(), der.size(), sodium_base64_VARIANT_ORIGINAL);
+    line.resize(std::strlen(line.c_str()));
+    auto key = corded::release::public_key_from_pem("-----BEGIN PUBLIC KEY-----\n" + line + "\n-----END PUBLIC KEY-----\n");
+    REQUIRE(key.has_value());
+    REQUIRE(std::equal(key->begin(), key->end(), pk));
+    REQUIRE(corded::release::public_key_from_pem(line).has_value());  // the bare line works too
+    REQUIRE_FALSE(corded::release::public_key_from_pem("not a key").has_value());
+
+    corded::Bytes archive(5000, 0x42), signature(crypto_sign_BYTES);
+    crypto_sign_detached(signature.data(), nullptr, archive.data(), archive.size(), sk);
+    REQUIRE(corded::release::signed_by(archive, signature, *key));
+    archive[100] ^= 1;  // one bit of the archive changed
+    REQUIRE_FALSE(corded::release::signed_by(archive, signature, *key));
+    archive[100] ^= 1;
+    signature[0] ^= 1;
+    REQUIRE_FALSE(corded::release::signed_by(archive, signature, *key));
+    REQUIRE_FALSE(corded::release::signed_by(archive, corded::Bytes(10), *key));
+
+    // A signature made by openssl, as the build system makes them, with a throwaway key.
+    {
+        auto theirs = corded::release::public_key_from_pem("MCowBQYDK2VwAyEAg6Fv/KvCVW84bfNgEkuFrM76LnVeIpKFH2Zhus+yaNg=");
+        REQUIRE(theirs.has_value());
+        std::string text = "corded release fixture: these bytes are signed by a throwaway key\n";
+        std::string encoded = "dW8PEKCeCcI5rlXgnFVjmbuAXVWqdXqpok0qzxAeIYou9SLUrqQkOBZFg+LMMeVkn0rqfwrvRMndOOhQEOj2Ag==";
+        corded::Bytes made(crypto_sign_BYTES);
+        size_t len = 0;
+        REQUIRE(sodium_base642bin(made.data(), made.size(), encoded.data(), encoded.size(), nullptr, &len, nullptr,
+                                  sodium_base64_VARIANT_ORIGINAL) == 0);
+        REQUIRE(len == crypto_sign_BYTES);
+        REQUIRE(corded::release::signed_by(corded::Bytes(text.begin(), text.end()), made, *theirs));
+    }
+    REQUIRE(corded::release::release_of("v0.5.0-3-gabc1234") == "v0.5.0");
+    REQUIRE(corded::release::release_of("v0.5.0") == "v0.5.0");
+}

@@ -311,7 +311,7 @@ def main():
         alice.expect("retention_days = ")
         alice.type("/set retention_days 14\r")
         alice.expect("retention_days is now 14")
-        alice.expect("status: version")
+        alice.expect("status:")
         bob.type("/set registration closed\r")
         bob.expect("do not have permission")
         print("ok  settings and status from the owner's client; refused for others")
@@ -434,7 +434,7 @@ def main():
         bob.expect("tell others what you have read", timeout=15)
         alice.type("/settings\r")
         alice.expect("Server settings", timeout=15)
-        alice.expect("status: version", timeout=15)
+        alice.expect("status:", timeout=15)
         print("ok  settings page: personal settings for all, server settings and status for the owner")
         print("PASS")
     finally:

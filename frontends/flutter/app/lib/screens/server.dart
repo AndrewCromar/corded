@@ -374,6 +374,22 @@ class _ServerScreenState extends State<ServerScreen> {
               subtitle: Text('${_status['members'] ?? 0} members, ${_status['online'] ?? 0} online, '
                   '${(((_status['stored_bytes'] as num?) ?? 0) / 1024).round()} KB stored'),
             ),
+          if (_server.isOwner)
+            ListTile(
+              leading: const Icon(Icons.system_update_alt),
+              title: const Text('Update the server'),
+              subtitle: const Text('Installs the newest release, checks its signature, and restarts'),
+              onTap: () async {
+                if (await _confirm(
+                    'Update the server?',
+                    'The server downloads the newest release and installs it only if it carries the '
+                        'release signature. Then it restarts; everyone reconnects by themselves. '
+                        'It tells you how it went.',
+                    'Update')) {
+                  await _do({'cmd': 'update_server'}, 'The server is looking for an update.');
+                }
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.restart_alt),
             title: const Text('Restart the server'),

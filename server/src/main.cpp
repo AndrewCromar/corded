@@ -3,6 +3,7 @@
 //
 // Prototype limits: one device per user, a single I/O thread.
 #include "storage.hpp"
+#include "update.hpp"
 
 #include "corded/common/sig.hpp"
 #include "corded/common/tls.hpp"
@@ -24,6 +25,10 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <thread>
+
+// Where this program was started from, noted before anything can replace it.
+inline std::string g_program_path;
 
 namespace corded::server {
 
@@ -31,7 +36,7 @@ using asio::ip::tcp;
 
 class Server;
 
-inline constexpr const char* kVersion = "0.1.0";
+inline constexpr const char* kVersion = CORDED_BUILD_VERSION;
 
 // Settings are kept in the server's database so they survive restarts and can
 // be changed from the owner's client. Command-line flags set the stored value.
@@ -52,7 +57,7 @@ inline constexpr SettingSpec kSettings[] = {
     {"history_sharing", "on", false, false, "whether newcomers may ask members for earlier messages: on, off"},
     {"retention_days", "30", false, false,
      "days the server keeps stored messages and files; 0 keeps them forever"},
-    {"max_file_mb", "25", false, false, "the largest file a member may send, in megabytes; 0 turns files off"},
+    {"max_file_mb", "25", false, false, "the largest file a member may send, in megabytes; 0 sets no limit"},
     {"storage_limit_mb", "0", false, false,
      "how much space files may take in all, in megabytes; 0 sets no limit"},
     {"restart", "off", false, false,
@@ -494,6 +499,7 @@ public:
                 case wire::FrameBody_GetSettings: on_get_settings(*c, rid); break;
                 case wire::FrameBody_SetSetting: on_set_setting(*c, rid, *f.body.AsSetSetting()); break;
                 case wire::FrameBody_Restart: on_restart(*c, rid); break;
+                case wire::FrameBody_UpdateServer: on_update(*c, rid); break;
                 case wire::FrameBody_GetStatus: on_get_status(*c, rid); break;
                 case wire::FrameBody_SendRoomEvent:
                     on_send_room_event(*c, rid, *f.body.AsSendRoomEvent());
@@ -1020,12 +1026,10 @@ private:
                 return;
             }
             if (!require(c, rid, perm::AttachFiles)) return;
-            if (largest == 0) {
-                c.fail(rid, err::Forbidden, "this server does not take files");
-                return;
-            }
+            // 0 means no limit, as with the other limits. Who may send files
+            // at all is a permission (attach_files), not a size.
             // The encrypted form is a few bytes longer than the file itself.
-            if (q.total > largest + 1024) {
+            if (largest > 0 && q.total > largest + 1024) {
                 c.fail(rid, err::Forbidden,
                        "that file is larger than this server allows (" + setting("max_file_mb") + " MB)");
                 return;
@@ -1253,6 +1257,44 @@ private:
         note.message = s->needs_restart ? q.key + " is now " + q.value + "; it takes effect when the server restarts (/reboot)"
                                         : q.key + " is now " + q.value;
         c.reply(0, std::move(note));
+    }
+
+    // Only the owner: this replaces the programs the server runs.
+    void on_update(Conn& c, uint32_t rid) {
+        if (!storage_.is_owner(c.user_id)) {
+            c.fail(rid, err::Forbidden, "only the owner can update the server");
+            return;
+        }
+        if (updating_ || restart_pending_) {
+            c.fail(rid, err::Forbidden, "an update or a restart is already under way");
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::path install_dir = std::filesystem::path(g_program_path).parent_path();
+        if (g_program_path.empty() || !std::filesystem::exists(install_dir / "cordedd", ec)) {
+            c.fail(rid, err::Internal, "this server cannot tell where its own program is");
+            return;
+        }
+        updating_ = true;
+        c.reply(rid, wire::OkT{});
+        spdlog::info("{} asked for an update; looking for the newest release", c.username);
+        // Downloading takes a while; it happens off the network thread.
+        std::thread([this, device = c.device_id, who = c.username, install_dir,
+                     work = std::filesystem::path(options_.data_dir) / "update"] {
+            update::Outcome outcome = update::install_newest(kVersion, install_dir, work, CORDED_RELEASE_KEY);
+            asio::post(io_, [this, device, who, outcome] {
+                updating_ = false;
+                spdlog::info("update: {}", outcome.message);
+                if (auto it = online_.find(device); it != online_.end())
+                    if (auto conn = it->second.lock()) {
+                        wire::NoticeT note;
+                        note.message = "update: " + outcome.message;
+                        conn->reply(0, std::move(note));
+                    }
+                if (outcome.installed)
+                    restart_soon(who + " updated the server; it restarts in a moment and you will be reconnected", 3);
+            });
+        }).detach();
     }
 
     void on_restart(Conn& c, uint32_t rid) {
@@ -1508,6 +1550,7 @@ private:
     std::map<std::string, int> per_address_;
     asio::steady_timer restart_timer_{io_};
     bool restart_pending_ = false, restart_ = false;
+    bool updating_ = false;  // an update is being downloaded and checked
     uint64_t started_at_ = now_ms();
     std::map<Bytes, std::weak_ptr<Conn>> online_;
     std::map<Bytes, std::string> announced_;  // person -> the presence others were last told
@@ -1585,8 +1628,6 @@ static bool run_server(const corded::server::Options& opt) {
     return server.restart_requested();
 }
 
-// Where this program was started from, noted before anything can replace it.
-static std::string g_program_path;
 
 int main(int argc, char** argv) {
 #ifndef _WIN32

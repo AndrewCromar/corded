@@ -846,7 +846,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "ban_user" ||
                    name == "remove_account" || name == "set_nickname" ||
                    name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
-                   name == "set_setting" || name == "restart_server" || name == "server_status") {
+                   name == "set_setting" || name == "restart_server" || name == "server_status" ||
+                   name == "update_server") {
             community_command(req, name, cmd);
         } else if (name == "leave_room") {
             if (conn_ != Conn::Live) {
@@ -1348,6 +1349,10 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         q.key = cmd.at("key").get<std::string>();
         q.value = cmd.at("value").is_string() ? cmd.at("value").get<std::string>() : cmd.at("value").dump();
         simple_request(req, std::move(q));
+    } else if (name == "update_server") {
+        // The owner asks the server to install the newest signed release.
+        // How it went arrives afterwards as a server notice.
+        simple_request(req, wire::UpdateServerT{});
     } else if (name == "restart_server") {
         simple_request(req, wire::RestartT{});
     } else if (name == "server_status") {

@@ -317,6 +317,12 @@ class AppState extends ChangeNotifier {
       Background.listenForTaps(openFromNotification);
       engine.events.listen((event) {
         if (event['event'] == 'event_received') _maybeBanner(event);
+        // What a server tells the people who run it: a setting changed, an
+        // update went through, file space is running out.
+        if (event['event'] == 'server_notice' && _onScreen && onBanner != null) {
+          final from = store.servers[(event['server_id'] as num?)?.toInt()]?.name ?? '';
+          onBanner!(from.isEmpty ? 'Server' : from, '${event['message'] ?? ''}', '', null);
+        }
       });
       _engine = engine;
       _store = store;
