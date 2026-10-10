@@ -50,6 +50,7 @@
  *   {"cmd":"server_status"}
  *   {"cmd":"kick","username":"dave"}
  *   {"cmd":"ban_user","username":"dave","banned":true}
+ *   {"cmd":"remove_account","username":"dave"}    deletes the account and frees its name
  *  Permission names: view_channel, send_messages, add_reactions, attach_files,
  *  mention_everyone, manage_messages, manage_channels, manage_roles,
  *  manage_nicknames, kick_members, ban_members, create_invite, manage_server,

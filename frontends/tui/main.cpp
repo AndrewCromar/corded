@@ -759,6 +759,8 @@ private:
                     }
                 }
                 if (!found) notice_ = "no chat matches \"" + arg + "\"";
+            } else if (cmd == "/remove-account" && !arg.empty()) {
+                command({{"cmd", "remove_account"}, {"username", arg}});
             } else if (cmd == "/kick" && !arg.empty()) {
                 command({{"cmd", "kick"}, {"username", arg}});
             } else if ((cmd == "/ban" || cmd == "/unban") && !arg.empty()) {
@@ -947,6 +949,7 @@ private:
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                               text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
+                              text("   /remove-account <user>   delete an account for good and free its name"),
                               text("   /invite [uses]   make an invite link for someone to join"),
                               text("   /remove   delete the last message someone else posted in this channel"),
                           }) | yframe | flex;

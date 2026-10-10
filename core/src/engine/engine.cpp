@@ -618,6 +618,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "kick" || name == "ban_user" ||
+                   name == "remove_account" ||
                    name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
                    name == "set_setting" || name == "restart_server" || name == "server_status") {
             community_command(req, name, cmd);
@@ -926,6 +927,12 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
     } else if (name == "kick") {
         admin_action(req, cmd.at("username").get<std::string>(), [this, req](const Bytes& user_id) {
             wire::KickT q;
+            q.user_id = user_id;
+            simple_request(req, std::move(q));
+        });
+    } else if (name == "remove_account") {
+        admin_action(req, cmd.at("username").get<std::string>(), [this, req](const Bytes& user_id) {
+            wire::RemoveAccountT q;
             q.user_id = user_id;
             simple_request(req, std::move(q));
         });

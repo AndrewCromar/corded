@@ -441,6 +441,7 @@ public:
                 case wire::FrameBody_LeaveRoom: on_leave_room(*c, rid, *f.body.AsLeaveRoom()); break;
                 case wire::FrameBody_BanUser: on_ban_user(*c, rid, *f.body.AsBanUser()); break;
                 case wire::FrameBody_Kick: on_kick(*c, rid, *f.body.AsKick()); break;
+                case wire::FrameBody_RemoveAccount: on_remove_account(*c, rid, *f.body.AsRemoveAccount()); break;
                 case wire::FrameBody_GetMembers: on_get_members(*c, rid); break;
                 case wire::FrameBody_NewRole: on_create_role(*c, rid, *f.body.AsNewRole()); break;
                 case wire::FrameBody_EditRole: on_update_role(*c, rid, *f.body.AsEditRole()); break;
@@ -1061,6 +1062,27 @@ private:
         if (!outranks(c, rid, q.user_id)) return;
         storage_.kick(q.user_id);
         drop_connection_of(q.user_id, "you were removed from this server");
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Stronger than a kick: the account is gone and its name can be taken by
+    // someone else. Needs the ban permission and a higher rank than the target.
+    void on_remove_account(Conn& c, uint32_t rid, const wire::RemoveAccountT& q) {
+        if (!require(c, rid, perm::BanMembers)) return;
+        if (!storage_.user_exists(q.user_id)) {
+            c.fail(rid, err::NotFound, "unknown user");
+            return;
+        }
+        if (!outranks(c, rid, q.user_id)) return;
+        drop_connection_of(q.user_id, "this account was removed from the server");
+        storage_.remove_account(q.user_id);
+        spdlog::info("{} removed an account", c.username);
+        // Everyone should stop sending to the removed account's devices.
+        wire::DevicesChangedT changed;
+        changed.user_id = q.user_id;
+        for (auto& [device, weak] : online_)
+            if (auto conn = weak.lock()) conn->reply(0, wire::DevicesChangedT(changed));
         broadcast_state();
         c.reply(rid, wire::OkT{});
     }

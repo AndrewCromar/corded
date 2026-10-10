@@ -263,6 +263,24 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         st.bind(1, level).bind(2, user_id).exec();
     }
 
+    // Deletes an account outright: its devices, keys, memberships, roles and
+    // the messages waiting for it. The username becomes free again.
+    void remove_account(ByteView user_id) {
+        db::Transaction tx(db_);
+        for (const char* sql : {
+                 "DELETE FROM room_events WHERE recipient_device IN (SELECT device_id FROM devices WHERE user_id = ?)",
+                 "DELETE FROM one_time_prekeys WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)",
+                 "DELETE FROM signed_prekeys WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)",
+                 "DELETE FROM devices WHERE user_id = ?",
+                 "DELETE FROM member_roles WHERE user_id = ?",
+                 "DELETE FROM memberships WHERE user_id = ?",
+                 "DELETE FROM users WHERE user_id = ?"}) {
+            auto st = db_.prepare(sql);
+            st.bind(1, user_id).exec();
+        }
+        tx.commit();
+    }
+
     // Removes someone from the community. They may join again, subject to the
     // registration policy, and start with no roles.
     void kick(ByteView user_id) {

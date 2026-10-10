@@ -859,6 +859,27 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
     REQUIRE(carol.cmd(connect)["ok"] == true);
     carol.wait_live();
 
+    // Removing an account deletes it and frees its name for someone else.
+    {
+        REQUIRE(refused(bob.cmd({{"cmd", "remove_account"}, {"username", "carol"}})));      // staff cannot
+        REQUIRE(refused(alice.cmd({{"cmd", "remove_account"}, {"username", "alice"}})));    // nor can the owner remove herself
+        REQUIRE(alice.cmd({{"cmd", "remove_account"}, {"username", "carol"}})["ok"] == true);
+        carol.wait("removed", [](const json& e) {
+            return e["event"] == "connection_state" && e["state"] == "disconnected";
+        }, 20000);
+        REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["members"].size() == 2);
+        REQUIRE(refused(alice.cmd({{"cmd", "remove_account"}, {"username", "carol"}})));    // already gone
+        Client newcomer((tmp.path / "second-carol").string());
+        REQUIRE(newcomer.create("carol")["ok"] == true);                                    // the name is free again
+        REQUIRE(newcomer.cmd(connect)["ok"] == true);
+        newcomer.wait_live();
+        REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["members"].size() == 3);
+        REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hello to the new carol"}})["ok"] == true);
+        newcomer.wait_message("hello to the new carol");
+        bob.wait_message("hello to the new carol");
+        REQUIRE(alice.cmd({{"cmd", "remove_account"}, {"username", "carol"}})["ok"] == true);
+    }
+
     // Taking the role away takes the private channel with it.
     REQUIRE(alice.cmd({{"cmd", "delete_role"}, {"role", "staff"}})["ok"] == true);
     bob.have("staff-room gone", room_gone(staff_room));

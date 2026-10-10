@@ -97,6 +97,8 @@ table Invite { code: string; max_uses: uint32; expires_at: uint64; }
 table RevokeInvite { code: string; }
 table Kick { user_id: [ubyte]; }                      // remove from the server; may rejoin
 table BanUser { user_id: [ubyte]; banned: bool; }     // a banned user cannot sign in
+// Deletes an account and everything the server holds for it, freeing its name.
+table RemoveAccount { user_id: [ubyte]; }
 table ListRooms {}
 table RoomList { rooms: [RoomInfo]; }
 
@@ -125,7 +127,8 @@ union FrameBody {
   NewInvite, Invite, RevokeInvite,
   HistoryRequest, HistoryWanted,
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
-  ListDevices, DeviceList, DevicesChanged
+  ListDevices, DeviceList, DevicesChanged,
+  RemoveAccount
 }
 
 table Frame { request_id: uint32; body: FrameBody; }
