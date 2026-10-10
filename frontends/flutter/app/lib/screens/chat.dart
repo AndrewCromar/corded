@@ -141,12 +141,17 @@ class _ChatScreenState extends State<ChatScreen> {
         await widget.state.engine
             .command({'cmd': 'edit_event', 'room_id': _room, 'event_id': editing.id, 'body': text});
       } else {
+        // A message has one relation. In a thread it belongs to the thread,
+        // so what it replies to travels in its content instead.
         await widget.state.engine.command({
-          'cmd': 'send_text',
+          'cmd': 'send_event',
           'room_id': _room,
-          'body': text,
-          // A message has one relation: inside a thread it belongs to the thread.
-          if (_thread != null) 'thread': _thread else if (replyingTo != null) 'reply_to': replyingTo.id,
+          'type': 'm.text',
+          'content': {'body': text, if (_thread != null && replyingTo != null) 'reply_to': replyingTo.id},
+          if (_thread != null)
+            'relation': {'kind': 'thread', 'target': _thread}
+          else if (replyingTo != null)
+            'relation': {'kind': 'reply', 'target': replyingTo.id},
         });
       }
     });
@@ -210,18 +215,17 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ]),
-          if (_thread == null)
-            ListTile(
-              leading: const Icon(Icons.reply),
-              title: const Text('Reply'),
-              onTap: () {
-                Navigator.pop(sheet);
-                setState(() {
-                  _replyingTo = m;
-                  _editing = null;
-                });
-              },
-            ),
+          ListTile(
+            leading: const Icon(Icons.reply),
+            title: const Text('Reply'),
+            onTap: () {
+              Navigator.pop(sheet);
+              setState(() {
+                _replyingTo = m;
+                _editing = null;
+              });
+            },
+          ),
           // A reply inside a thread can start a thread of its own.
           if (m.id != _thread)
             ListTile(
@@ -284,7 +288,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _bubble(Message m, List<Message> all) {
     final gone = m.status == 'redacted' || m.status == 'undecryptable';
     return SwipeToReply(
-      enabled: !gone && _thread == null,
+      enabled: !gone,
       onReply: () => setState(() {
         _replyingTo = m;
         _editing = null;

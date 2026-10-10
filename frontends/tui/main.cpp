@@ -523,6 +523,10 @@ private:
         m.disappearing = d.value("expires_at", uint64_t{0}) != 0;
         m.from_history = d.value("shared_history", false);
         if (rel_kind == "reply") m.reply_to = rel_target;
+        // A reply made inside a thread names what it quotes in its content.
+        if (d.contains("content") && d["content"].is_object() && d["content"].contains("reply_to") &&
+            d["content"]["reply_to"].is_string())
+            m.reply_to = d["content"]["reply_to"].get<std::string>();
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
         else if (type == "m.text") m.body = d["content"].value("body", "");

@@ -71,6 +71,8 @@ class Message {
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
+    // A reply made inside a thread names what it quotes here.
+    if (content['reply_to'] is String) replyTo = content['reply_to'] as String;
     final relation = j['relation'] as Map?;
     if (relation != null) {
       if (relation['kind'] == 'reply') replyTo = relation['target'] as String?;

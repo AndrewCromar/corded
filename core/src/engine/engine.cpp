@@ -696,8 +696,12 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
             if (cmd.contains("expires_in")) ev["expires_in"] = cmd.at("expires_in");
             // A thread message points at the message that started the thread.
-            if (cmd.contains("thread"))
+            // A message has one relation, so a reply made inside a thread
+            // belongs to the thread and names what it quotes in its content.
+            if (cmd.contains("thread")) {
                 ev["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
+                if (cmd.contains("reply_to")) ev["content"]["reply_to"] = cmd.at("reply_to");
+            }
             cmd_send_event(req, ev);
         } else if (name == "typing") {
             // "I am typing in this room." Not stored anywhere; at most one every

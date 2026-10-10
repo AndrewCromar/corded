@@ -147,13 +147,27 @@ void main() {
     expect(aliceStore.threadCount(room.id, last), 1);
     expect(bobStore.thread(room.id, last.id).single.body, 'in the thread');
 
+    // Inside a thread a message can still quote another one.
+    await alice.command({
+      'cmd': 'send_text',
+      'room_id': room.id,
+      'body': 'quoting inside the thread',
+      'thread': last.id,
+      'reply_to': aliceStore.thread(room.id, last.id).single.id,
+    });
+    final quoting = await eventually(
+        () => bobStore.thread(room.id, last.id).where((m) => m.body == 'quoting inside the thread').firstOrNull,
+        'the quoting reply');
+    expect(quoting.threadRoot, last.id);
+    expect(quoting.replyTo, bobStore.thread(room.id, last.id).first.id);
+
     // A reply in a thread can start a thread of its own, to any depth.
-    final inner = aliceStore.thread(room.id, last.id).single;
+    final inner = aliceStore.thread(room.id, last.id).first;
     await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'one level deeper', 'thread': inner.id});
     await eventually(() => bobStore.thread(room.id, inner.id).length == 1 ? true : null, 'the nested reply');
-    expect(bobStore.thread(room.id, last.id).length, 1); // the outer thread is unchanged
+    expect(bobStore.thread(room.id, last.id).length, 2); // the outer thread is unchanged
     expect(bobStore.messages(room.id).length, before); // and so is the conversation
-    expect(bobStore.threadCount(room.id, bobStore.thread(room.id, last.id).single), 1);
+    expect(bobStore.threadCount(room.id, bobStore.thread(room.id, last.id).first), 1);
     final deepest = bobStore.thread(room.id, inner.id).single;
     await bob.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'and deeper still', 'thread': deepest.id});
     await eventually(() => aliceStore.thread(room.id, deepest.id).length == 1 ? true : null, 'three levels');
@@ -224,7 +238,7 @@ void main() {
     await againStore.open(room.id);
     expect(againStore.messages(room.id).length, 7);
     await againStore.openThread(room.id, last.id);
-    expect(againStore.thread(room.id, last.id).length, 1);
+    expect(againStore.thread(room.id, last.id).length, 2);
     expect(againStore.username, 'bob');
   }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
 }
