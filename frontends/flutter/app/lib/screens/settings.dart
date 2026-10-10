@@ -347,11 +347,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             isThreeLine: true,
           ),
         if (server != null &&
-            (server.can('manage_channels') || server.can('create_invite') || server.can('manage_server')))
+            (server.can('manage_channels') ||
+                server.can('manage_roles') ||
+                server.can('create_invite') ||
+                server.can('manage_server')))
           ListTile(
             leading: const Icon(Icons.tune),
             title: const Text('Manage this server'),
-            subtitle: const Text('Channels, invites, settings, restart'),
+            subtitle: const Text('Channels, roles, invites, settings, restart'),
             onTap: () =>
                 Navigator.push(context, MaterialPageRoute(builder: (_) => ServerScreen(state: widget.state))),
           ),

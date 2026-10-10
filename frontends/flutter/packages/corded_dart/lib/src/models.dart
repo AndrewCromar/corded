@@ -94,6 +94,19 @@ class Message {
       };
 }
 
+/// A role on a server and what it lets its holders do.
+class Role {
+  Role.fromJson(Map<String, dynamic> j)
+      : name = '${j['name']}',
+        isEveryone = j['is_everyone'] == true,
+        position = (j['position'] as num?)?.toInt() ?? 0,
+        permissions = ((j['permissions'] as List?) ?? const []).map((e) => '$e').toSet();
+  final String name;
+  final bool isEveryone; // the role every member has
+  final int position;
+  final Set<String> permissions;
+}
+
 class ServerInfo {
   ServerInfo(this.id);
   final int id;
@@ -103,6 +116,7 @@ class ServerInfo {
   bool isOwner = false;
   Set<String> permissions = {};
   List<String> roles = const []; // the roles that can be given to members
+  List<Role> roleDetails = const []; // every role, the one everybody has included
 
   /// Whether this person may do something that needs [permission] here.
   bool can(String permission) =>
@@ -117,6 +131,10 @@ class ServerInfo {
     if (p != null) permissions = p.map((e) => '$e').toSet();
     final r = j['roles'] as List?;
     if (r != null) {
+      roleDetails = [
+        for (final role in r)
+          if (role is Map) Role.fromJson(role.cast<String, dynamic>())
+      ]..sort((a, b) => b.position.compareTo(a.position));
       roles = [
         for (final role in r)
           if (role is Map && role['is_everyone'] != true) '${role['name']}'

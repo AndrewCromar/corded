@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'roles.dart';
 
 /// Running the server from the app: channels, invites, settings, restart.
 /// Each part shows only to those the server lets do it.
@@ -235,6 +236,17 @@ class _ServerScreenState extends State<ServerScreen> {
               onTap: () => _channelActions(r),
             ),
           ListTile(leading: const Icon(Icons.add), title: const Text('New channel'), onTap: _newChannel),
+        ],
+        if (_server.can('manage_roles')) ...[
+          heading('Roles'),
+          ListTile(
+            leading: const Icon(Icons.shield_outlined),
+            title: const Text('Roles and permissions'),
+            subtitle: Text(_server.roles.isEmpty ? 'Only "everyone" so far' : _server.roles.join(', ')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () =>
+                Navigator.push(context, MaterialPageRoute(builder: (_) => RolesScreen(state: widget.state))),
+          ),
         ],
         if (_server.can('create_invite')) ...[
           heading('Invites'),

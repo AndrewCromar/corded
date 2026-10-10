@@ -87,6 +87,18 @@ void main() {
     expect(bobServer.can('kick_members'), isFalse);
     await alice.command({'cmd': 'create_role', 'name': 'helper', 'permissions': ['kick_members']});
     await eventually(() => aliceServer.roles.contains('helper') ? true : null, 'the new role');
+    // A role's permissions can be changed without touching its name.
+    Role helper() => aliceServer.roleDetails.firstWhere((r) => r.name == 'helper');
+    expect(helper().permissions, {'kick_members'});
+    expect(aliceServer.roleDetails.any((r) => r.isEveryone), isTrue);
+    await alice.command({
+      'cmd': 'edit_role',
+      'role': 'helper',
+      'name': 'helper',
+      'permissions': ['kick_members', 'manage_messages'],
+    });
+    await eventually(() => helper().permissions.contains('manage_messages') ? true : null, 'the edited role');
+    expect(helper().name, 'helper');
     await alice.command({'cmd': 'grant_role', 'username': 'bob', 'role': 'helper', 'grant': true});
     await eventually(() => bobServer.can('kick_members') ? true : null, 'bob may kick now');
     final listed = await alice.command({'cmd': 'member_list'});
