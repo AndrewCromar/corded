@@ -32,7 +32,8 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 | Implementation plan | Done ([master_plan/](master_plan/00-overview.md)) |
 | Prototype | Working: server, core library and terminal client on Linux, Raspberry Pi and Windows. Channels, direct and group chats, all end-to-end encrypted |
 | Android app | Working test builds (Flutter, on the same core). See below |
-| Desktop GUI, iOS, macOS, a browser client | Not started |
+| Desktop app | Early builds for Linux and Windows: the same app as on Android, in a window. See below |
+| iOS, macOS, a browser client | Not started |
 
 ## Get it without building
 
@@ -79,6 +80,17 @@ To join a server from the app, type its address, or scan an invite's QR code sho
 someone already in it (Manage server, Make an invite link). The app and the terminal
 client can be the same person: sign in on both with a recovery key (see below) and they
 stay in step.
+
+### Desktop (Linux and Windows)
+
+The desktop app is the Android app in a window: the chats listed on the left, the open
+one on the right. Enter sends, Shift+Enter starts a new line, and a right-click on a
+message brings up reply, react, thread and the rest. From the release after v0.5.0, each
+[release](https://github.com/AndrewCromar/corded/releases) carries
+`corded-app-<version>-windows-x64.zip` and `corded-app-<version>-linux-x86_64.tar.gz`.
+Unpack one anywhere and run `corded_app` inside it; the folder is the whole app.
+
+It is new and has been checked far less than the phone app.
 
 ## Build it yourself
 
@@ -300,8 +312,6 @@ It does not, yet:
 - Warn you when a contact's key changes. You can compare safety numbers with `/verify`,
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
-- A graphical client for the desktop. There is a terminal client for Linux, Raspberry Pi
-  and Windows, and an app for Android; the same app is planned for the desktop.
 - macOS or iOS builds.
 - Push notifications through Google or Apple. The Android app keeps its own connection
   open instead, which costs some battery.
