@@ -32,6 +32,8 @@ class CordedStore {
   final Map<String, Map<String, DateTime>> _typing = {}; // room -> name -> until
   final Map<String, Map<String, String>> _readUpTo = {}; // room -> name -> message id
   final Map<int, Map<String, String>> _presence = {}; // server -> person -> online, away or dnd
+  final Map<String, Map<String, Map<String, (int, List<int>)>>> _votes = {}; // room -> poll -> voter -> (when, choices)
+  final Map<String, Map<String, List<int>>> _myVotes = {}; // room -> poll -> this person's choices
   final Map<String, Uint8List?> _pictures = {}; // person -> their picture; null if they have none
   final Set<String> _loaded = {};
   final Map<String, String?> _oldest = {}; // room -> where the next older page starts; null = none left
@@ -157,6 +159,57 @@ class CordedStore {
 
   /// How present someone is on a server: online, away, dnd or offline.
   String presence(int serverId, String userId) => _presence[serverId]?[userId] ?? 'offline';
+
+  /// How many people chose each option of a poll, by option number.
+  Map<int, int> pollCounts(String roomId, String pollId) {
+    final counts = <int, int>{};
+    for (final vote in (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{}).values) {
+      for (final choice in vote.$2.toSet()) {
+        counts[choice] = (counts[choice] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
+  /// How many people have voted in a poll.
+  int pollVoters(String roomId, String pollId) =>
+      (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{}).values.where((v) => v.$2.isNotEmpty).length;
+
+  /// What this person chose in a poll.
+  List<int> myPollChoices(String roomId, String pollId) => _myVotes[roomId]?[pollId] ?? const [];
+
+  /// Votes, or changes a vote. One choice replaces the last unless the poll
+  /// allows several; choosing what is already chosen takes it back.
+  Future<void> votePoll(Message poll, int option) async {
+    final mine = {...myPollChoices(poll.roomId, poll.id)};
+    if (mine.contains(option)) {
+      mine.remove(option);
+    } else {
+      if (!poll.pollMultiple) mine.clear();
+      mine.add(option);
+    }
+    await engine.command({
+      'cmd': 'send_event',
+      'room_id': poll.roomId,
+      'type': 'm.poll.vote',
+      'content': {'choices': mine.toList()..sort()},
+      'relation': {'kind': 'annotation', 'target': poll.id, 'key': 'vote'},
+    });
+  }
+
+  /// Starts a poll. In a thread when [thread] is given.
+  Future<void> createPoll(String roomId, String question, List<String> options,
+      {bool multiple = false, String? thread}) async {
+    await engine.command({
+      'cmd': 'send_event',
+      'room_id': roomId,
+      'type': 'm.poll',
+      // What clients that do not know polls show instead.
+      'fallback_text': 'Poll: $question (${options.join(' / ')})',
+      'content': {'question': question, 'options': options, 'multiple': multiple},
+      if (thread != null) 'relation': {'kind': 'thread', 'target': thread},
+    });
+  }
 
   /// Display names of those typing in a room right now.
   List<String> typing(String roomId) {
@@ -288,7 +341,24 @@ class CordedStore {
       if (j['mine'] == true) ((_myReactions[roomId] ??= {})[target] ??= {})[key] = id;
       return (((_reactions[roomId] ??= {})[target] ??= {})[key] ??= {}).add(id);
     }
-    if (type != 'm.text') return false; // edits, deletions and room changes arrive as updates
+    if (type == 'm.poll.vote') {
+      // A person's newest vote on a poll replaces their earlier one.
+      final target = relation['target'] as String?;
+      final voter = j['sender_user'] as String? ?? '';
+      if (target == null || voter.isEmpty || j['status'] == 'redacted') return false;
+      final at = (j['seq'] as num?)?.toInt() ?? (j['origin_ts'] as num?)?.toInt() ?? 0;
+      final votes = (_votes[roomId] ??= {})[target] ??= {};
+      final earlier = votes[voter];
+      if (earlier != null && earlier.$1 > at) return false;
+      final choices = [
+        for (final c in ((j['content'] as Map?)?['choices'] as List? ?? const []))
+          if (c is num) c.toInt()
+      ];
+      votes[voter] = (at, choices);
+      if (j['mine'] == true) ((_myVotes[roomId] ??= {})[target] = choices);
+      return false;
+    }
+    if (type != 'm.text' && type != 'm.poll') return false; // edits, deletions and room changes arrive as updates
     final list = _messages[roomId] ??= [];
     for (final m in list) {
       if (m.id == id) {

@@ -249,6 +249,28 @@ void main() {
     await freshStore.dispose();
     await bobStore.open(room.id);
 
+    // A poll: one choice each, the newest vote counts, and a vote can be taken back.
+    await aliceStore.createPoll(room.id, 'Lunch?', ['Pizza', 'Tacos', 'Soup']);
+    final poll = await eventually(
+        () => bobStore.messages(room.id).where((m) => m.isPoll).firstOrNull, 'the poll at bob');
+    expect(poll.body, 'Lunch?');
+    expect(poll.pollOptions, ['Pizza', 'Tacos', 'Soup']);
+    await bobStore.votePoll(poll, 1);
+    await eventually(() => aliceStore.pollCounts(room.id, poll.id)[1] == 1 ? true : null, "bob's vote");
+    await bobStore.votePoll(poll, 0); // changes his mind
+    await eventually(() => aliceStore.pollCounts(room.id, poll.id)[0] == 1 ? true : null, 'the changed vote');
+    expect(aliceStore.pollCounts(room.id, poll.id)[1], isNull);
+    final alicePoll = aliceStore.messages(room.id).firstWhere((m) => m.isPoll);
+    await aliceStore.votePoll(alicePoll, 0);
+    await eventually(() => bobStore.pollCounts(room.id, poll.id)[0] == 2 ? true : null, 'two votes for pizza');
+    expect(bobStore.pollVoters(room.id, poll.id), 2);
+    expect(bobStore.myPollChoices(room.id, poll.id), [0]);
+    await bobStore.votePoll(poll, 0); // takes it back
+    await eventually(() => aliceStore.pollCounts(room.id, poll.id)[0] == 1 ? true : null, 'the vote taken back');
+    expect(aliceStore.pollVoters(room.id, poll.id), 1);
+    // Votes are not messages and are not unread.
+    expect(bobStore.messages(room.id).where((m) => m.type == 'm.poll.vote'), isEmpty);
+
     // The owner pins a message; everyone's copy of the room says so.
     await alice.command({'cmd': 'pin_event', 'room_id': room.id, 'event_id': last.id});
     await eventually(() => bobStore.rooms[room.id]!.pinned.contains(last.id) ? true : null, 'the pin');
@@ -281,7 +303,7 @@ void main() {
     await expectLater(again.unlock('not it'), throwsA(isA<CordedError>()));
     await eventually(() => againStore.rooms[room.id], 'rooms after restart');
     await againStore.open(room.id);
-    expect(againStore.messages(room.id).length, 7);
+    expect(againStore.messages(room.id).length, 8); // six texts, the reply, and the poll
     await againStore.openThread(room.id, last.id);
     expect(againStore.thread(room.id, last.id).length, 2);
     expect(againStore.username, 'bob');

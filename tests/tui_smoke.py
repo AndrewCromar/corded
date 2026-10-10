@@ -155,6 +155,22 @@ def main():
         bob.expect("you can only edit your own messages")
         print("ok  commands take a message number")
 
+        # A poll: started by one, voted on by the other, counted for both.
+        bob.type("/poll Lunch? | Pizza | Tacos\r")
+        alice.expect("[poll] Lunch?", timeout=20)
+        alice.expect("2) Tacos")
+        alice.clear()
+        alice.type("/help\r")
+        alice.type("/help\r")
+        alice.pump(1.5)
+        import re as _re
+        number = _re.findall(r"(\d+) \d\d:\d\d bob: \[poll\] Lunch\?", alice.screen)
+        assert number, "could not find the poll's number on alice's screen"
+        alice.type(f"/vote {number[-1]} 2\r")
+        bob.expect("Tacos  1", timeout=20)
+        alice.expect("(your vote)")
+        print("ok  poll: started, voted on, counted")
+
         # Search looks through what this device holds.
         bob.type("/search very first\r")
         bob.expect("Found for")

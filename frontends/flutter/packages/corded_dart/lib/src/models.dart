@@ -67,6 +67,11 @@ class Message {
   /// Null until the server has confirmed a message this device sent.
   int? seq;
 
+  /// For a poll: what can be chosen, and whether more than one may be.
+  List<String> pollOptions = const [];
+  bool pollMultiple = false;
+  bool get isPoll => type == 'm.poll';
+
   /// Whether it mentions the person using this device (set by the store).
   bool mentionsMe = false;
 
@@ -80,6 +85,11 @@ class Message {
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
+    if (type == 'm.poll') {
+      body = content['question'] as String? ?? body;
+      pollOptions = ((content['options'] as List?) ?? const []).map((o) => '$o').toList();
+      pollMultiple = content['multiple'] == true;
+    }
     // A reply made inside a thread names what it quotes here.
     if (content['reply_to'] is String) replyTo = content['reply_to'] as String;
     final relation = j['relation'] as Map?;

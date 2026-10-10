@@ -121,7 +121,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
               if (p.bio.isNotEmpty)
                 row(Icons.notes, 'About', LinkedText(p.bio, linkColor: theme.colorScheme.primary)),
               for (final link in p.links)
-                row(Icons.link, 'Link', LinkedText(link, linkColor: theme.colorScheme.primary)),
+                () {
+                  final parts = splitProfileLink(link);
+                  return row(
+                      Icons.link,
+                      parts.label.isEmpty ? 'Link' : parts.label,
+                      LinkedText(parts.url.contains('://') ? parts.url : 'https://${parts.url}',
+                          linkColor: theme.colorScheme.primary));
+                }(),
               if (p.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(24),
@@ -158,7 +165,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _fullName = TextEditingController();
   final _birthday = TextEditingController();
   final _bio = TextEditingController();
-  final _links = TextEditingController();
+  // Each link: what it is called, and where it leads.
+  final _links = <(TextEditingController, TextEditingController)>[];
   bool _loaded = false;
   String _picture = ''; // base64, as it will be saved
   bool _pictureChanged = false;
@@ -195,7 +203,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _fullName.text = p.fullName;
         _birthday.text = p.birthday;
         _bio.text = p.bio;
-        _links.text = p.links.join('\n');
+        for (final link in p.links) {
+          final parts = splitProfileLink(link);
+          _links.add((TextEditingController(text: parts.label), TextEditingController(text: parts.url)));
+        }
         _picture = p.picture;
         _loaded = true;
       });
@@ -224,8 +235,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               'bio': _bio.text.trim(),
               if (_pictureChanged) 'picture': _picture,
               'links': [
-                for (final line in _links.text.split('\n'))
-                  if (line.trim().isNotEmpty) line.trim()
+                for (final (label, url) in _links)
+                  if (url.text.trim().isNotEmpty) joinProfileLink(label.text.trim(), url.text.trim())
               ],
             }));
     if (ok) {
@@ -294,11 +305,68 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               field(_fullName, 'Full name', max: 80),
               field(_birthday, 'Birthday', helper: '2004-05-17, or 05-17 without the year'),
               field(_bio, 'About you', lines: 3, max: 500),
-              field(_links, 'Links', helper: 'One per line, up to five', lines: 2),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('Links', style: Theme.of(context).textTheme.titleSmall),
+              ),
+              for (final (i, (label, url)) in _links.indexed)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                          controller: label,
+                          decoration: const InputDecoration(
+                              labelText: 'Label',
+                              hintText: 'GitHub',
+                              border: OutlineInputBorder(),
+                              isDense: true)),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 3,
+                      child: TextField(
+                          controller: url,
+                          autocorrect: false,
+                          keyboardType: TextInputType.url,
+                          decoration: const InputDecoration(
+                              labelText: 'Address',
+                              hintText: 'https://',
+                              border: OutlineInputBorder(),
+                              isDense: true)),
+                    ),
+                    IconButton(
+                        tooltip: 'Remove this link',
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () => setState(() => _links.removeAt(i))),
+                  ]),
+                ),
+              if (_links.length < 5)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                      onPressed: () =>
+                          setState(() => _links.add((TextEditingController(), TextEditingController()))),
+                      icon: const Icon(Icons.add),
+                      label: Text(_links.isEmpty ? 'Add a link' : 'Add another link')),
+                ),
               const SizedBox(height: 80),
             ]),
       floatingActionButton: FloatingActionButton.extended(
           onPressed: _save, icon: const Icon(Icons.check), label: const Text('Save')),
     );
   }
+}
+
+/// A profile link is kept as "label|address" (or just the address).
+({String label, String url}) splitProfileLink(String link) {
+  final bar = link.indexOf('|');
+  if (bar < 0) return (label: '', url: link);
+  return (label: link.substring(0, bar), url: link.substring(bar + 1));
+}
+
+String joinProfileLink(String label, String url) {
+  final clean = label.replaceAll('|', ' ').trim();
+  return clean.isEmpty ? url : '$clean|$url';
 }

@@ -47,6 +47,8 @@ struct Message {
     bool edited = false;
     bool disappearing = false;
     bool from_history = false;  // handed over by another member, not received first-hand
+    std::vector<std::string> poll_options;  // for a poll: what can be chosen
+    bool poll_multiple = false;
     int num = 0;  // short number shown next to the message, for commands like /reply 12
 };
 
@@ -65,6 +67,8 @@ struct Room {
     int64_t server_id = 0;
     int next_num = 1;
     std::vector<std::string> pinned;  // ids of the pinned messages
+    std::map<std::string, std::map<std::string, std::pair<uint64_t, std::vector<int>>>> poll_votes;  // poll -> voter -> (when, choices)
+    std::map<std::string, std::vector<int>> my_votes;  // poll -> this person's choices
     bool nsfw = false;                // warn before showing this channel
     bool uncovered = false;           // the person chose to see it, this visit
     std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
@@ -530,7 +534,13 @@ private:
             line("full name", p.value("full_name", ""));
             line("birthday", p.value("birthday", ""));
             line("about", p.value("bio", ""));
-            for (const auto& link : p.value("links", json::array())) line("link", link.get<std::string>());
+            for (const auto& link : p.value("links", json::array())) {
+                // Kept as "label|address".
+                std::string value = link.get<std::string>();
+                auto bar = value.find('|');
+                if (bar == std::string::npos) line("link", value);
+                else line(value.substr(0, bar).c_str(), value.substr(bar + 1));
+            }
             if (rows.size() == 1) rows.push_back(text("Nothing here yet.") | dim);
             rows.push_back(text("Sent only to people who share a chat with its owner; no server sees it.") | dim);
             info_box_ = vbox(std::move(rows)) | border;
@@ -656,6 +666,19 @@ private:
         }
         // Edits and deletions are not lines of their own; they arrive again as
         // event_updated for the message they change.
+        if (type == "m.poll.vote") {
+            // A person's newest vote on a poll replaces their earlier one.
+            uint64_t at = d.value("origin_ts", uint64_t{0});
+            std::string voter = d.value("sender_user", "");
+            auto& vote = room.poll_votes[rel_target][voter];
+            if (vote.first > at) return false;
+            vote.first = at;
+            vote.second.clear();
+            for (const auto& c : d["content"].value("choices", json::array()))
+                if (c.is_number_integer()) vote.second.push_back(c.get<int>());
+            if (d.value("mine", false)) room.my_votes[rel_target] = vote.second;
+            return false;
+        }
         if (type == "m.edit" || type == "m.redaction" || type == "m.history.share") return false;
         for (auto& m : room.messages) {
             if (m.event_id != id) continue;
@@ -681,6 +704,11 @@ private:
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
         else if (type == "m.text") m.body = d["content"].value("body", "");
+        else if (type == "m.poll") {
+            m.body = "[poll] " + d["content"].value("question", "");
+            for (const auto& o : d["content"].value("options", json::array())) m.poll_options.push_back(o.get<std::string>());
+            m.poll_multiple = d["content"].value("multiple", false);
+        }
         else if (type == "m.room.member")
             m.body = d["content"].value("action", "") == "left"
                          ? "left the chat"
@@ -1079,6 +1107,48 @@ private:
                 command({{"cmd", "set_nickname"}, {"nickname", ""}});
                 notice_ = arg.empty() ? "display name cleared" : "you now appear as " + arg;
                 if (members_selected()) command({{"cmd", "member_list"}});
+            } else if (room && cmd == "/poll" && arg.find('|') != std::string::npos) {
+                // /poll Question | option | option ...
+                std::vector<std::string> parts;
+                std::stringstream in(arg);
+                for (std::string part; std::getline(in, part, '|');) {
+                    part.erase(0, part.find_first_not_of(' '));
+                    part.erase(part.find_last_not_of(' ') + 1);
+                    if (!part.empty()) parts.push_back(part);
+                }
+                if (parts.size() < 3) notice_ = "a poll needs a question and at least two options: /poll Lunch? | Pizza | Tacos";
+                else {
+                    json options = json::array();
+                    std::string summary;
+                    for (size_t i = 1; i < parts.size(); ++i) {
+                        options.push_back(parts[i]);
+                        summary += (i > 1 ? " / " : "") + parts[i];
+                    }
+                    command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.poll"},
+                             {"fallback_text", "Poll: " + parts[0] + " (" + summary + ")"},
+                             {"content", {{"question", parts[0]}, {"options", options}, {"multiple", false}}}});
+                }
+            } else if (cmd == "/poll") {
+                notice_ = "/poll Question | option | option ...     vote with /vote <message number> <option number>";
+            } else if (room && cmd == "/vote") {
+                // /vote <message number> <option number>; the same again takes it back.
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                int option = std::atoi(rest.c_str());
+                if (!target || target->poll_options.empty()) notice_ = "give the poll's number: /vote 12 2";
+                else if (option < 1 || option > static_cast<int>(target->poll_options.size())) notice_ = "that poll has no such option";
+                else {
+                    std::vector<int> mine = room->my_votes[target->event_id];
+                    auto had = std::find(mine.begin(), mine.end(), option - 1);
+                    if (had != mine.end()) mine.erase(had);
+                    else {
+                        if (!target->poll_multiple) mine.clear();
+                        mine.push_back(option - 1);
+                    }
+                    command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.poll.vote"},
+                             {"content", {{"choices", mine}}},
+                             {"relation", {{"kind", "annotation"}, {"target", target->event_id}, {"key", "vote"}}}});
+                }
             } else if (cmd == "/search" && arg.size() >= 2) {
                 // Everything on this device; add "here" first to search only the open chat.
                 bool here = arg.rfind("here ", 0) == 0 && room;
@@ -1317,6 +1387,7 @@ private:
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
+                              text("/poll Question | option | option     start a poll      /vote <n> <option number>"),
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
                               text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
@@ -1469,6 +1540,18 @@ private:
                     r += "[" + key + (ids.size() > 1 ? " x" + std::to_string(ids.size()) : "") + "] ";
                 }
                 if (any) lines.push_back(text(r) | color(Color::Yellow));
+            }
+            // A poll's options, each with how many chose it; "/vote <n> <option>".
+            for (size_t i = 0; i < m.poll_options.size(); ++i) {
+                int count = 0;
+                if (auto votes = room->poll_votes.find(m.event_id); votes != room->poll_votes.end())
+                    for (const auto& [voter, vote] : votes->second)
+                        if (std::find(vote.second.begin(), vote.second.end(), static_cast<int>(i)) != vote.second.end()) ++count;
+                bool mine = false;
+                if (auto own = room->my_votes.find(m.event_id); own != room->my_votes.end())
+                    mine = std::find(own->second.begin(), own->second.end(), static_cast<int>(i)) != own->second.end();
+                lines.push_back(hbox({text(indent + "        " + std::to_string(i + 1) + ") "), text(m.poll_options[i]) | (mine ? bold : nothing),
+                                      text("  " + std::to_string(count) + (mine ? "  (your vote)" : "")) | color(Color::Cyan)}));
             }
             std::string readers;
             for (const auto& [who, upto] : room->read_upto)

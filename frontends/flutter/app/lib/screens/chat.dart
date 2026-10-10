@@ -8,6 +8,7 @@ import '../app_state.dart';
 import 'common.dart';
 import 'group.dart';
 import 'linked_text.dart';
+import 'presence.dart';
 import 'profile.dart';
 import 'search.dart';
 import 'swipe_to_reply.dart';
@@ -287,6 +288,137 @@ class _ChatScreenState extends State<ChatScreen> {
                 ProfileScreen(state: widget.state, userId: member.userId, username: member.username)));
   }
 
+  // A poll: the question, and each option as a bar that fills with its share
+  // of the votes. Tap one to vote; tap it again to take the vote back.
+  Widget _pollView(Message m, Color foreground) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final counts = _store.pollCounts(_room, m.id);
+    final voters = _store.pollVoters(_room, m.id);
+    final mine = _store.myPollChoices(_room, m.id);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.poll_outlined, size: 16, color: foreground.withValues(alpha: 0.7)),
+        const SizedBox(width: 6),
+        Text(m.pollMultiple ? 'Poll · choose any' : 'Poll',
+            style: theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.7))),
+      ]),
+      const SizedBox(height: 4),
+      Text(m.body, style: theme.textTheme.titleMedium?.copyWith(color: foreground)),
+      const SizedBox(height: 8),
+      for (final (i, option) in m.pollOptions.indexed)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => attempt(context, () => _store.votePoll(m, i)),
+            child: Stack(children: [
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: voters == 0 ? 0 : ((counts[i] ?? 0) / voters).clamp(0.0, 1.0),
+                      heightFactor: 1,
+                      child: ColoredBox(color: scheme.primary.withValues(alpha: 0.22)),
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                constraints: const BoxConstraints(minWidth: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: mine.contains(i) ? scheme.primary : foreground.withValues(alpha: 0.25),
+                      width: mine.contains(i) ? 2 : 1),
+                ),
+                child: Row(children: [
+                  Icon(mine.contains(i) ? Icons.check_circle : Icons.circle_outlined,
+                      size: 18, color: mine.contains(i) ? scheme.primary : foreground.withValues(alpha: 0.6)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(option, style: theme.textTheme.bodyLarge?.copyWith(color: foreground))),
+                  Text('${counts[i] ?? 0}', style: theme.textTheme.labelLarge?.copyWith(color: foreground)),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      Text(voters == 1 ? '1 person voted' : '$voters people voted',
+          style: theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.7))),
+    ]);
+  }
+
+  // Asks for a question and its options, then posts the poll.
+  Future<void> _createPoll() async {
+    final question = TextEditingController();
+    final options = [TextEditingController(), TextEditingController()];
+    var multiple = false;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: const Text('New poll'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                  controller: question,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(labelText: 'Question')),
+              for (final (i, o) in options.indexed)
+                TextField(
+                  controller: o,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: 'Option ${i + 1}',
+                    suffixIcon: options.length > 2
+                        ? IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => setDialog(() => options.removeAt(i)))
+                        : null,
+                  ),
+                ),
+              if (options.length < 8)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                      onPressed: () => setDialog(() => options.add(TextEditingController())),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add an option')),
+                ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Allow several choices'),
+                value: multiple,
+                onChanged: (v) => setDialog(() => multiple = v),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Post poll')),
+          ],
+        ),
+      ),
+    );
+    if (go != true || !mounted) return;
+    final choices = [
+      for (final o in options)
+        if (o.text.trim().isNotEmpty) o.text.trim()
+    ];
+    if (question.text.trim().isEmpty || choices.length < 2) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('A poll needs a question and at least two options.')));
+      return;
+    }
+    await attempt(context,
+        () => _store.createPoll(_room, question.text.trim(), choices, multiple: multiple, thread: _thread));
+  }
+
   final _keys = <String, GlobalKey>{};
   String? _highlight;
 
@@ -527,10 +659,33 @@ class _ChatScreenState extends State<ChatScreen> {
       if (m.mine && m.status == 'pending') 'sending',
       if (m.mine && m.status == 'failed') 'not sent',
     ].join(' · ');
+    // Other people's messages carry their picture; yours sit on the right without one.
+    if (!m.mine) {
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, top: 6),
+          child: GestureDetector(
+            onTap: () => _showProfile(m),
+            child: PresenceAvatar(name: m.sender, radius: 16, picture: _store.picture(m.senderId)),
+          ),
+        ),
+        Flexible(child: _bubbleColumn(m, all, gone, note, quoted, reactions, readers, foreground)),
+      ]);
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: _bubbleColumn(m, all, gone, note, quoted, reactions, readers, foreground),
+    );
+  }
+
+  Widget _bubbleColumn(Message m, List<Message> all, bool gone, String note, Message? quoted,
+      Map<String, int> reactions, List<String> readers, Color foreground) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Align(
       alignment: m.mine ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.8),
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * (m.mine ? 0.8 : 0.72)),
         child: Column(
           crossAxisAlignment: m.mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
@@ -606,13 +761,16 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                     ),
-                  LinkedText(gone ? m.text : m.body,
-                      channels: _channelLinks,
-                      onChannel: _openChannel,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                          color: foreground.withValues(alpha: gone ? 0.6 : 1),
-                          fontStyle: gone ? FontStyle.italic : null),
-                      linkColor: scheme.primary),
+                  if (m.isPoll && !gone)
+                    _pollView(m, foreground)
+                  else
+                    LinkedText(gone ? m.text : m.body,
+                        channels: _channelLinks,
+                        onChannel: _openChannel,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                            color: foreground.withValues(alpha: gone ? 0.6 : 1),
+                            fontStyle: gone ? FontStyle.italic : null),
+                        linkColor: scheme.primary),
                   const SizedBox(height: 2),
                   Text(note,
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -859,6 +1017,8 @@ class _ChatScreenState extends State<ChatScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
             child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              IconButton(
+                  tooltip: 'Start a poll', icon: const Icon(Icons.poll_outlined), onPressed: _createPoll),
               Expanded(
                 child: TextField(
                   controller: _input,

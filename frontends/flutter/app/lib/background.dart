@@ -26,8 +26,12 @@ void backgroundEntry() {
     {Set<String> muted = const {}, bool showText = true, String me = '', Set<String> nsfw = const {}}) {
   if (event['event'] != 'event_received') return null;
   final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-  if (data['type'] != 'm.text' || data['mine'] == true || data['shared_history'] == true) return null;
-  final body = (data['content'] as Map?)?['body'];
+  final isPoll = data['type'] == 'm.poll';
+  if ((data['type'] != 'm.text' && !isPoll) || data['mine'] == true || data['shared_history'] == true) {
+    return null;
+  }
+  final body =
+      isPoll ? 'Poll: ${(data['content'] as Map?)?['question'] ?? ''}' : (data['content'] as Map?)?['body'];
   if (body is! String || body.isEmpty) return null;
   final roomId = '${data['room_id']}';
   // A mention gets through even from a muted chat.
