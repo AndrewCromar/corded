@@ -666,7 +666,8 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             // stay as they were, and an empty string clears one.
             json profile = own_profile();
             static const std::map<std::string, size_t> limits = {
-                {"display_name", 40}, {"full_name", 80}, {"birthday", 10}, {"bio", 500}};
+                {"display_name", 40}, {"full_name", 80}, {"birthday", 10}, {"bio", 500},
+                {"email", 120},       {"phone", 40}};
             for (const auto& [field, limit] : limits) {
                 if (!cmd.contains(field)) continue;
                 std::string value = cmd.at(field).get<std::string>();

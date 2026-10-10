@@ -2317,7 +2317,8 @@ TEST_CASE("a new device is sent the profiles it was not there for, its own perso
         return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
     });
     // Both say who they are, and have talked, long before the laptop exists.
-    REQUIRE(pc.cmd({{"cmd", "set_profile"}, {"display_name", "Alice A."}, {"bio", "runs this place"}})["ok"] == true);
+    REQUIRE(pc.cmd({{"cmd", "set_profile"}, {"display_name", "Alice A."}, {"bio", "runs this place"},
+                         {"email", "alice@example.org"}, {"phone", "+1 555 0100"}})["ok"] == true);
     REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", "Bobby"}})["ok"] == true);
     REQUIRE(pc.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hello"}})["ok"] == true);
     REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hi"}})["ok"] == true);
@@ -2339,6 +2340,8 @@ TEST_CASE("a new device is sent the profiles it was not there for, its own perso
     json mine = laptop.cmd({{"cmd", "get_profile"}})["data"]["profile"];
     REQUIRE(mine.value("display_name", "") == "Alice A.");
     REQUIRE(mine.value("bio", "") == "runs this place");
+    REQUIRE(mine.value("email", "") == "alice@example.org");
+    REQUIRE(mine.value("phone", "") == "+1 555 0100");
 
     // Someone who is not around when a device is added: their profile still
     // reaches it, handed over by the person's own other device.

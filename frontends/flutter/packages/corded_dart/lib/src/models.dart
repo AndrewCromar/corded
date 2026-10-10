@@ -229,10 +229,15 @@ class Profile {
         fullName = j['full_name'] as String? ?? '',
         birthday = j['birthday'] as String? ?? '',
         bio = j['bio'] as String? ?? '',
+        email = j['email'] as String? ?? '',
+        phone = j['phone'] as String? ?? '',
         picture = j['picture'] as String? ?? '',
         bot = j['bot'] == true,
         links = ((j['links'] as List?) ?? const []).map((e) => '$e').toList();
   final String displayName, fullName, birthday, bio;
+
+  /// Ways to reach the person outside Corded, if they chose to give them.
+  final String email, phone;
 
   /// Whether this is a program, not a person. Self-declared.
   final bool bot;
@@ -246,6 +251,8 @@ class Profile {
       fullName.isEmpty &&
       birthday.isEmpty &&
       bio.isEmpty &&
+      email.isEmpty &&
+      phone.isEmpty &&
       links.isEmpty &&
       picture.isEmpty;
 }

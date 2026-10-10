@@ -546,6 +546,8 @@ private:
             if (p.value("bot", false)) line("kind", "a bot (a program, not a person)");
             line("full name", p.value("full_name", ""));
             line("birthday", p.value("birthday", ""));
+            line("email", p.value("email", ""));
+            line("phone", p.value("phone", ""));
             line("about", p.value("bio", ""));
             for (const auto& link : p.value("links", json::array())) {
                 // Kept as "label|address".
@@ -1270,12 +1272,13 @@ private:
                 }
             } else if (cmd == "/profile") {
                 // /profile            yours        /profile <user>      theirs
-                // /profile fullname|birthday|bio|link <text>   change yours ("" clears)
+                // /profile fullname|birthday|bio|email|phone|link <text>   change yours ("" clears)
                 // /profile bot on|off                          say whether this account is a program
                 auto sp = arg.find(' ');
                 std::string field = arg.substr(0, sp), value = sp == std::string::npos ? "" : arg.substr(sp + 1);
                 static const std::map<std::string, std::string> fields = {
-                    {"fullname", "full_name"}, {"birthday", "birthday"}, {"bio", "bio"}, {"name", "display_name"}};
+                    {"fullname", "full_name"}, {"birthday", "birthday"}, {"bio", "bio"}, {"name", "display_name"},
+                    {"email", "email"}, {"phone", "phone"}};
                 if (arg.empty()) command({{"cmd", "get_profile"}});
                 else if (fields.count(field)) command({{"cmd", "set_profile"}, {fields.at(field), value}});
                 else if (field == "bot" && (value == "on" || value == "off"))
@@ -1518,7 +1521,7 @@ private:
                               text("/file <path> | caption   send a file         /save <n> [folder]   keep a file you were sent"),
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
-                              text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
+                              text("/profile [user]    view a profile     /profile fullname|birthday|bio|email|phone|link <text>  edit yours"),
                               text("/profile bot on|off   mark this account as a program, not a person"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),

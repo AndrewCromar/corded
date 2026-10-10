@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
 import 'chat.dart';
@@ -128,6 +129,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 8),
               if (p.fullName.isNotEmpty) row(Icons.person_outline, 'Name', Text(p.fullName)),
               if (p.birthday.isNotEmpty) row(Icons.cake_outlined, 'Birthday', Text(p.birthday)),
+              // Tappable: they open the phone's mail app or dialler.
+              if (p.email.isNotEmpty)
+                row(Icons.mail_outline, 'Email',
+                    _contact(context, p.email, Uri(scheme: 'mailto', path: p.email))),
+              if (p.phone.isNotEmpty)
+                row(Icons.phone_outlined, 'Phone',
+                    _contact(context, p.phone, Uri(scheme: 'tel', path: p.phone.replaceAll(' ', '')))),
               if (p.bio.isNotEmpty)
                 row(Icons.notes, 'About', LinkedText(p.bio, linkColor: theme.colorScheme.primary)),
               for (final link in p.links)
@@ -175,6 +183,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _fullName = TextEditingController();
   final _birthday = TextEditingController();
   final _bio = TextEditingController();
+  final _email = TextEditingController();
+  final _phone = TextEditingController();
   // Each link: what it is called, and where it leads.
   final _links = <(TextEditingController, TextEditingController)>[];
   bool _loaded = false;
@@ -217,6 +227,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _fullName.text = p.fullName;
         _birthday.text = p.birthday;
         _bio.text = p.bio;
+        _email.text = p.email;
+        _phone.text = p.phone;
         for (final link in p.links) {
           final parts = splitProfileLink(link);
           _links.add((TextEditingController(text: parts.label), TextEditingController(text: parts.url)));
@@ -248,6 +260,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               'full_name': _fullName.text.trim(),
               'birthday': birthday,
               'bio': _bio.text.trim(),
+              'email': _email.text.trim(),
+              'phone': _phone.text.trim(),
               'bot': _bot,
               if (_pictureChanged) 'picture': _picture,
               'links': [
@@ -321,6 +335,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               field(_fullName, 'Full name', max: 80),
               field(_birthday, 'Birthday', helper: '2004-05-17, or 05-17 without the year'),
               field(_bio, 'About you', lines: 3, max: 500),
+              field(_email, 'Email', helper: 'Only if you want people here to have it', max: 120),
+              field(_phone, 'Phone number', max: 40),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('This account is a bot'),
@@ -392,4 +408,24 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 String joinProfileLink(String label, String url) {
   final clean = label.replaceAll('|', ' ').trim();
   return clean.isEmpty ? url : '$clean|$url';
+}
+
+// An email address or phone number: shown as a link that opens the device's
+// mail app or dialler, and can be selected to copy.
+Widget _contact(BuildContext context, String shown, Uri opens) {
+  final colour = Theme.of(context).colorScheme.primary;
+  return InkWell(
+    onTap: () async {
+      final messenger = ScaffoldMessenger.of(context);
+      var opened = false;
+      try {
+        opened = await launchUrl(opens);
+      } catch (_) {
+        // Reported below.
+      }
+      if (!opened) messenger.showSnackBar(SnackBar(content: Text('Nothing on this device opens $shown.')));
+    },
+    child: Text(shown,
+        style: TextStyle(color: colour, decoration: TextDecoration.underline, decorationColor: colour)),
+  );
 }
