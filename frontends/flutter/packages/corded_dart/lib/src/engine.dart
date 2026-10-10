@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
@@ -137,6 +138,7 @@ class CordedEngine {
     _port = null;
     _stopped = null;
     _stop.value = 0;
+    _forgetReader();
   }
 
   /// Takes every event the core has waiting, without blocking. For an isolate
@@ -207,6 +209,7 @@ class CordedEngine {
   // interface may be called from any thread.
   Future<void> startPump() async {
     if (_stopped != null || _closed) return;
+    await _retireEarlierReader();
     final stopped = _stopped = Completer<void>();
     final port = ReceivePort();
     _port = port;
@@ -241,6 +244,50 @@ class CordedEngine {
         }
       }
       if (!_events.isClosed) _events.add(event);
+    }
+  }
+
+  // One reader at a time. On Android the screen can be thrown away and built
+  // again inside the same process: the core lives on, and so can the reader
+  // the old screen started, which would go on taking events meant for the new
+  // one. So the running reader's stop switch is kept where a later screen can
+  // find it: in the process's environment, which outlives any one screen.
+  static final _libc = DynamicLibrary.process();
+  static final _getenv = _libc
+      .lookupFunction<Pointer<Utf8> Function(Pointer<Utf8>), Pointer<Utf8> Function(Pointer<Utf8>)>('getenv');
+  static final _setenv = _libc.lookupFunction<Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
+      int Function(Pointer<Utf8>, Pointer<Utf8>, int)>('setenv');
+  static final _unsetenv =
+      _libc.lookupFunction<Int32 Function(Pointer<Utf8>), int Function(Pointer<Utf8>)>('unsetenv');
+  String get _readerKey => 'CORDED_READER_${_engine.address}';
+
+  Future<void> _retireEarlierReader() async {
+    if (Platform.isWindows) return; // screens are not rebuilt there
+    final key = _readerKey.toNativeUtf8();
+    final mine = '${_stop.address}'.toNativeUtf8();
+    try {
+      final earlier = _getenv(key);
+      final address = earlier == nullptr ? null : int.tryParse(earlier.toDartString());
+      if (address != null && address != _stop.address) {
+        Pointer<Int32>.fromAddress(address).value = 1;
+        // It looks at its switch at least ten times a second.
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+      _setenv(key, mine, 1);
+    } finally {
+      calloc.free(key);
+      calloc.free(mine);
+    }
+  }
+
+  void _forgetReader() {
+    if (Platform.isWindows) return;
+    final key = _readerKey.toNativeUtf8();
+    try {
+      final current = _getenv(key);
+      if (current != nullptr && current.toDartString() == '${_stop.address}') _unsetenv(key);
+    } finally {
+      calloc.free(key);
     }
   }
 

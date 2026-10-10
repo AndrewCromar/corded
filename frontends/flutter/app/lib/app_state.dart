@@ -319,7 +319,11 @@ class AppState extends ChangeNotifier {
         Background.tell({'engine': engine.address});
         Background.tell('on_screen');
         Future<void>.delayed(const Duration(seconds: 1), () => _shareRoomTitles(force: true));
-        final status = await engine.command({'cmd': 'status'});
+      }
+      // The core can outlive the screen (the service kept it, or Android only
+      // threw the screen away): if its vault is still open, carry on from there.
+      if (store.vaultState == 'locked') {
+        final status = await engine.command({'cmd': 'status'}).timeout(const Duration(seconds: 5));
         if (status['vault'] == 'unlocked') {
           store.username = '${status['username'] ?? ''}';
           store.vaultState = 'unlocked';
