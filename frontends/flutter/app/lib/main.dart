@@ -237,10 +237,13 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
           _wide = isDesktop && box.maxWidth >= 840;
           if (!_wide) return HomeScreen(state: state);
           return Row(children: [
-            SizedBox(width: 340, child: HomeScreen(state: state)),
+            // Each half shows its own short notices; shared, one notice would
+            // appear twice, once at the bottom of each.
+            SizedBox(width: 340, child: ScaffoldMessenger(child: HomeScreen(state: state))),
             const VerticalDivider(width: 1),
             Expanded(
-              child: Navigator(
+              child: ScaffoldMessenger(
+                  child: Navigator(
                 key: _pane,
                 onGenerateRoute: (_) => MaterialPageRoute(
                   builder: (_) => ListenableBuilder(
@@ -253,7 +256,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
                     },
                   ),
                 ),
-              ),
+              )),
             ),
           ]);
         });
