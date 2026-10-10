@@ -198,13 +198,16 @@ class _TasksViewState extends State<TasksView> {
                 ? const Center(child: Text('Nothing to do yet. Add the first task below.'))
                 : ListView(children: [
                     for (final t in open) _row(t),
+                    // Finished tasks fold away, so the page shows what is left to do.
                     if (done.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                        child: Text('Done',
+                      ExpansionTile(
+                        key: PageStorageKey('done-${widget.room.id}'),
+                        title: Text('Done (${done.length})',
                             style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
+                        shape: const Border(),
+                        collapsedShape: const Border(),
+                        children: [for (final t in done) _row(t)],
                       ),
-                    for (final t in done) _row(t),
                   ]),
           ),
           if (!widget.room.archived)

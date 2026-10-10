@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS room_events (
     PRIMARY KEY (room_id, seq, recipient_device)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
+CREATE TABLE IF NOT EXISTS scheduled_events (
+    room_id BLOB NOT NULL, event_id BLOB NOT NULL, sender_user BLOB NOT NULL, sender_device BLOB NOT NULL,
+    send_at INTEGER NOT NULL, frame BLOB NOT NULL,
+    PRIMARY KEY (room_id, event_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS pending_acks (
+    device_id BLOB NOT NULL, room_id BLOB NOT NULL, event_id BLOB NOT NULL,
+    seq INTEGER NOT NULL, server_ts INTEGER NOT NULL,
+    PRIMARY KEY (device_id, room_id, event_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS event_payloads (
     room_id BLOB NOT NULL, seq INTEGER NOT NULL, shared BLOB NOT NULL,
     PRIMARY KEY (room_id, seq)
@@ -778,6 +788,70 @@ CREATE TABLE IF NOT EXISTS blobs (
             ins.bind(1, ev.room_id).bind(2, out.seq).bind(3, ev.shared).exec();
         }
         tx.commit();
+        return out;
+    }
+
+    // ---- scheduled messages: encrypted events kept aside until their time ----
+    struct ScheduledRow {
+        Bytes room_id, event_id, sender_user, sender_device, frame;
+        uint64_t send_at = 0;
+    };
+    // False if an event with that id is already waiting.
+    bool schedule_event(ByteView room_id, ByteView event_id, ByteView sender_user, ByteView sender_device,
+                        uint64_t send_at, ByteView frame) {
+        auto st = db_.prepare("INSERT OR IGNORE INTO scheduled_events (room_id, event_id, sender_user, "
+                              "sender_device, send_at, frame) VALUES (?,?,?,?,?,?)");
+        st.bind(1, room_id).bind(2, event_id).bind(3, sender_user).bind(4, sender_device).bind(5, send_at)
+            .bind(6, frame).exec();
+        return db_.changes() > 0;
+    }
+    uint32_t scheduled_count(ByteView sender_user) {
+        auto st = db_.prepare("SELECT COUNT(*) FROM scheduled_events WHERE sender_user = ?");
+        st.bind(1, sender_user);
+        return st.step() ? static_cast<uint32_t>(st.i64(0)) : 0;
+    }
+    std::vector<ScheduledRow> scheduled_due(uint64_t now) {
+        std::vector<ScheduledRow> out;
+        auto st = db_.prepare("SELECT room_id, event_id, sender_user, sender_device, frame, send_at "
+                              "FROM scheduled_events WHERE send_at <= ? ORDER BY send_at LIMIT 100");
+        st.bind(1, now);
+        while (st.step())
+            out.push_back(ScheduledRow{st.blob(0), st.blob(1), st.blob(2), st.blob(3), st.blob(4), st.u64(5)});
+        return out;
+    }
+    // True if it was waiting and the asker is who scheduled it.
+    bool cancel_scheduled(ByteView room_id, ByteView event_id, ByteView sender_user) {
+        auto st = db_.prepare("DELETE FROM scheduled_events WHERE room_id = ? AND event_id = ? AND sender_user = ?");
+        st.bind(1, room_id).bind(2, event_id).bind(3, sender_user).exec();
+        return db_.changes() > 0;
+    }
+    void forget_scheduled(ByteView room_id, ByteView event_id) {
+        auto st = db_.prepare("DELETE FROM scheduled_events WHERE room_id = ? AND event_id = ?");
+        st.bind(1, room_id).bind(2, event_id).exec();
+    }
+    // The sender was not connected when its scheduled event went out: it is
+    // told where the event landed the next time it signs in.
+    void add_pending_ack(ByteView device_id, ByteView room_id, ByteView event_id, uint64_t seq, uint64_t server_ts) {
+        auto st = db_.prepare("INSERT OR REPLACE INTO pending_acks (device_id, room_id, event_id, seq, server_ts) "
+                              "VALUES (?,?,?,?,?)");
+        st.bind(1, device_id).bind(2, room_id).bind(3, event_id).bind(4, seq).bind(5, server_ts).exec();
+    }
+    std::vector<wire::SendOkT> take_pending_acks(ByteView device_id) {
+        std::vector<wire::SendOkT> out;
+        {
+            auto st = db_.prepare("SELECT room_id, event_id, seq, server_ts FROM pending_acks WHERE device_id = ?");
+            st.bind(1, device_id);
+            while (st.step()) {
+                wire::SendOkT ok;
+                ok.room_id = st.blob(0);
+                ok.event_id = st.blob(1);
+                ok.seq = st.u64(2);
+                ok.server_ts = st.u64(3);
+                out.push_back(std::move(ok));
+            }
+        }
+        auto del = db_.prepare("DELETE FROM pending_acks WHERE device_id = ?");
+        del.bind(1, device_id).exec();
         return out;
     }
 

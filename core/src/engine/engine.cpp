@@ -417,6 +417,8 @@ Session::json Session::event_json(const EventRow& e) {
     // How many messages hang off this one as a thread.
     j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
+    if (e.status == "scheduled")
+        j["scheduled_for"] = std::strtoull(vault_.meta("sched:" + b64(e.event_id)).value_or("0").c_str(), nullptr, 10);
     // A task is done or not according to the newest tick anyone gave it.
     if (e.type == "m.task") {
         json task = {{"done", false}};
@@ -936,6 +938,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (cmd.contains("reply_to"))
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
             if (cmd.contains("expires_in")) ev["expires_in"] = cmd.at("expires_in");
+            if (cmd.contains("send_at")) ev["send_at"] = cmd.at("send_at");
             share_profile(need_b64(cmd, "room_id", 16), false);
             // A thread message points at the message that started the thread.
             // A message has one relation, so a reply made inside a thread
@@ -1090,6 +1093,32 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                                  {"type", "m.task.done"},
                                  {"content", {{"done", cmd.value("done", true)}}},
                                  {"relation", {{"kind", "task"}, {"target", cmd.at("event_id")}}}});
+        } else if (name == "cancel_scheduled") {
+            // Takes back a message that is still waiting on the server.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            Bytes event_id = need_b64(cmd, "event_id", 16);
+            auto event = vault_.event(room_id, event_id);
+            if (!event || event->status != "scheduled") {
+                fail(req, "not_found", "that message is not waiting to be sent");
+                return;
+            }
+            wire::CancelScheduledT q;
+            q.room_id = room_id;
+            q.event_id = event_id;
+            request(std::move(q), [this, req, room_id, event_id](wire::FrameT& r) {
+                auto* e = r.body.AsError();
+                // Gone from the server already and never confirmed here: it
+                // had not left this device yet, so it is simply dropped.
+                if (e && e->code != err::NotFound) {
+                    fail(req, e->code == kDisconnected ? "offline" : "refused", e->message);
+                    return;
+                }
+                vault_.redact_event(room_id, event_id);
+                vault_.set_meta("sched:" + b64(event_id), "");
+                if (auto now = vault_.event(room_id, event_id))
+                    emit({{"event", "event_updated"}, {"room_id", b64(room_id)}, {"data", event_json(*now)}});
+                ok(req);
+            });
         } else if (name == "send_file") {
             cmd_send_file(req, cmd);
         } else if (name == "download_file") {
@@ -1692,6 +1721,13 @@ void Session::cmd_send_event(uint64_t req, const json& cmd) {
     e.fallback_text = cmd.value("fallback_text", std::string{});
     e.state_key = cmd.value("state_key", std::string{});
     e.status = "pending";
+    // For later: the server keeps the encrypted event aside until this time.
+    uint64_t send_at = cmd.value("send_at", uint64_t{0});
+    if (send_at > now_ms() + 2000) {
+        e.status = "scheduled";
+        e.origin_ts = send_at;  // the time people will see beside it
+        vault_.set_meta("sched:" + b64(e.event_id), std::to_string(send_at));
+    }
     if (cmd.contains("relation")) {
         const json& rel = cmd.at("relation");
         e.rel_kind = rel.at("kind").get<std::string>();
@@ -2116,6 +2152,29 @@ void Session::on_frame(wire::FrameT& f) {
                           {"user_id", b64(m.user_id)},
                           {"username", m.username},
                           {"display_name", m.display()}});
+            break;
+        }
+        case wire::FrameBody_SendOk: {
+            // Not an answer to anything just asked: a message this device
+            // scheduled has now been delivered, and this is where it landed.
+            const auto* sent = f.body.AsSendOk();
+            auto event = vault_.event(sent->room_id, sent->event_id);
+            if (!event || event->status != "scheduled") break;
+            {
+                db::Transaction tx(vault_.db());
+                vault_.confirm_event(sent->room_id, sent->event_id, sent->seq, sent->server_ts);
+                vault_.advance_cursor(sent->room_id, sent->seq);
+                vault_.set_meta("sched:" + b64(sent->event_id), "");
+                tx.commit();
+            }
+            emit({{"event", "event_send_status"},
+                  {"room_id", b64(sent->room_id)},
+                  {"event_id", b64(sent->event_id)},
+                  {"status", "sent"},
+                  {"event_seq", sent->seq},
+                  {"server_ts", sent->server_ts}});
+            if (auto now = vault_.event(sent->room_id, sent->event_id))
+                emit({{"event", "event_updated"}, {"room_id", b64(sent->room_id)}, {"data", event_json(*now)}});
             break;
         }
         case wire::FrameBody_Notice:
@@ -2778,6 +2837,12 @@ void Session::pump_outbox() {
     OutboxRow row = *next;
     auto room = vault_.room(row.room_id);
     auto event = vault_.event(row.room_id, row.event_id);
+    // Taken back before it left (a scheduled message cancelled while offline, say).
+    if (event->status == "redacted" && event->type != "m.redaction") {
+        vault_.outbox_remove(row.local_id);
+        pump_outbox();
+        return;
+    }
 
     // Who gets a copy: every other member, or the one member an envelope is
     // for. Each person may have several devices, and this person's own other
@@ -2913,6 +2978,8 @@ void Session::pump_outbox() {
     send.room_id = row.room_id;
     send.event_id = row.event_id;
     send.expires_at = event->expires_at;  // lets the server drop its copy on time
+    if (event->status == "scheduled")
+        send.send_at = std::strtoull(vault_.meta("sched:" + b64(row.event_id)).value_or("0").c_str(), nullptr, 10);
     try {
         // Persist each advanced ratchet before its ciphertext leaves the
         // process, so a crash can never reuse a message key.
@@ -2971,6 +3038,17 @@ void Session::pump_outbox() {
                   {"status", "sent"},
                   {"event_seq", okf->seq},
                   {"server_ts", okf->server_ts}});
+            pump_outbox();
+            return;
+        }
+        if (auto* waiting = f.body.AsScheduled()) {
+            // The server holds it; it tells this device when it has gone out.
+            vault_.outbox_remove(row.local_id);
+            emit({{"event", "event_send_status"},
+                  {"room_id", b64(row.room_id)},
+                  {"event_id", b64(row.event_id)},
+                  {"status", "scheduled"},
+                  {"scheduled_for", waiting->send_at}});
             pump_outbox();
             return;
         }

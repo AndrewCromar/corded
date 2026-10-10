@@ -74,7 +74,10 @@ class Message {
   final bool mine;
   final int timestamp;
   String body = '';
-  String status = 'ok'; // ok, pending, failed, undecryptable, redacted
+  String status = 'ok'; // ok, pending, scheduled, failed, undecryptable, redacted
+
+  /// For a message waiting on the server to be sent later: when it will go.
+  int scheduledFor = 0;
   bool edited = false;
   String? replyTo;
   String? threadRoot;
@@ -117,6 +120,7 @@ class Message {
     status = j['status'] as String? ?? status;
     edited = j['edited'] == true;
     seq = (j['seq'] as num?)?.toInt() ?? seq;
+    scheduledFor = (j['scheduled_for'] as num?)?.toInt() ?? scheduledFor;
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;

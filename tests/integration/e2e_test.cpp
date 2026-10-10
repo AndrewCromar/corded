@@ -2471,3 +2471,77 @@ TEST_CASE("a message to several devices is uploaded and stored once, and everyon
     REQUIRE(dave.unlock()["ok"] == true);
     dave.wait_message("read it all, promise");
 }
+
+TEST_CASE("a scheduled message is held by the server and delivered at its time, sender gone or not") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    auto now = [] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch()).count());
+    };
+    auto status_of = [&](Client& c, const std::string& id, const std::string& status) {
+        return [&, id, status](const json& e) {
+            return e["event"] == "event_send_status" && e["event_id"] == id && e["status"] == status;
+        };
+    };
+
+    // Too far ahead is refused; a sensible time is accepted and waits.
+    uint64_t at = now() + 6000;
+    json far = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "next year"},
+                          {"send_at", now() + uint64_t{40} * 24 * 3600 * 1000}});
+    REQUIRE(far["ok"] == true);  // queued locally; the server is what refuses it
+    alice.wait("the refusal", status_of(alice, far["data"]["event_id"], "failed"));
+
+    std::string later = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "see you at six"}, {"send_at", at}})["data"]["event_id"];
+    json waiting = alice.wait("held by the server", status_of(alice, later, "scheduled"));
+    REQUIRE(waiting["scheduled_for"] == at);
+    std::string gone = alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "never mind"}, {"send_at", at}})["data"]["event_id"];
+    alice.wait("the second one held", status_of(alice, gone, "scheduled"));
+
+    // Bob has nothing yet. What Alice says now arrives before the scheduled one.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "said right away"}})["ok"] == true);
+    bob.wait_message("said right away");
+    for (const auto& e : bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 50}})["data"]["events"])
+        REQUIRE(e["content"].value("body", "") != "see you at six");
+
+    // One is taken back; then Alice closes her client altogether.
+    REQUIRE(alice.cmd({{"cmd", "cancel_scheduled"}, {"room_id", general}, {"event_id", gone}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "cancel_scheduled"}, {"room_id", general}, {"event_id", gone}})["ok"] == false);
+    alice.close();
+
+    json got = bob.wait("the scheduled message, on time", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["content"].value("body", "") == "see you at six";
+    }, 20000);
+    REQUIRE(now() >= at);                       // not early
+    REQUIRE(got["data"]["sender_username"] == "alice");
+    REQUIRE(got["data"]["origin_ts"] == at);    // shown with the time it was meant for
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    for (const auto& e : bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 50}})["data"]["events"])
+        REQUIRE(e["content"].value("body", "") != "never mind");
+
+    // Back again, Alice's own copy is told where it landed and is an ordinary message now.
+    alice.open();
+    REQUIRE(alice.unlock()["ok"] == true);
+    alice.wait("word that it was delivered", status_of(alice, later, "sent"), 20000);
+    for (const auto& e : alice.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 50}})["data"]["events"])
+        if (e["event_id"] == later) {
+            REQUIRE(e["status"] == "ok");
+            REQUIRE(e["seq"].is_number());
+        }
+}

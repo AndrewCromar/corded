@@ -1173,6 +1173,38 @@ private:
                 notice_ = "sending " + path + " ...";
             } else if (cmd == "/file") {
                 notice_ = "/file <path> | caption     send a file; save one you were sent with /save <message number>";
+            } else if (room && cmd == "/later") {
+                // /later 18:30 text            today, or tomorrow if that time has passed
+                // /later 2026-10-11 09:00 text
+                std::tm when{};
+                std::time_t t = std::time(nullptr);
+                std::tm today = *std::localtime(&t);
+                int y = 0, mo = 0, d = 0, h = 0, mi = 0, used = 0;
+                std::string text;
+                if (std::sscanf(arg.c_str(), "%d-%d-%d %d:%d %n", &y, &mo, &d, &h, &mi, &used) >= 5 && used > 0) {
+                    when.tm_year = y - 1900; when.tm_mon = mo - 1; when.tm_mday = d;
+                    text = arg.substr(static_cast<size_t>(used));
+                } else if (std::sscanf(arg.c_str(), "%d:%d %n", &h, &mi, &used) >= 2 && used > 0) {
+                    when = today;
+                    text = arg.substr(static_cast<size_t>(used));
+                }
+                when.tm_hour = h; when.tm_min = mi; when.tm_sec = 0; when.tm_isdst = -1;
+                std::time_t at = text.empty() ? 0 : std::mktime(&when);
+                if (at != 0 && y == 0 && at <= t) at += 24 * 3600;  // that time today has passed: tomorrow
+                if (text.empty() || at <= t) {
+                    notice_ = "/later 18:30 <text>   or   /later 2026-10-11 09:00 <text>   (take one back: /unschedule <number>)";
+                } else {
+                    command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", text},
+                             {"send_at", static_cast<uint64_t>(at) * 1000}});
+                    char shown[32];
+                    std::strftime(shown, sizeof shown, "%Y-%m-%d %H:%M", std::localtime(&at));
+                    notice_ = std::string("the server will send it at ") + shown + ", even if you close this";
+                }
+            } else if (room && cmd == "/unschedule") {
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                if (!target || target->status != "scheduled") notice_ = "give the number of a message that is still scheduled";
+                else command({{"cmd", "cancel_scheduled"}, {"room_id", room->id}, {"event_id", target->event_id}});
             } else if (room && cmd == "/save") {
                 // /save <number> [folder]; without a folder it goes beside your vault.
                 std::string rest = arg;
@@ -1482,6 +1514,7 @@ private:
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
                               text("/poll Question | option | option     start a poll      /vote <n> <option number>"),
                               text("/channel tasks <name>   make a task list; type to add a task; /done <n>  /undone <n>"),
+                              text("/later 18:30 <text>   have the server send it then, even with this closed    /unschedule <n>"),
                               text("/file <path> | caption   send a file         /save <n> [folder]   keep a file you were sent"),
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
@@ -1624,7 +1657,9 @@ private:
                 lines.push_back(text(indent + "        > " + quoted) | dim);
             }
             std::string mark;
-            if (m.mine) mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)" : "";
+            if (m.mine)
+                mark = m.status == "pending" ? " ..." : m.status == "failed" ? " (failed)"
+                       : m.status == "scheduled" ? " (scheduled, not sent yet)" : "";
             if (m.edited) mark += " (edited)";
             if (m.disappearing) mark += " (disappears)";
             if (m.from_history) mark += " (earlier, shared)";

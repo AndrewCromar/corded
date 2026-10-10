@@ -504,6 +504,7 @@ public:
                 case wire::FrameBody_SetSetting: on_set_setting(*c, rid, *f.body.AsSetSetting()); break;
                 case wire::FrameBody_Restart: on_restart(*c, rid); break;
                 case wire::FrameBody_UpdateServer: on_update(*c, rid); break;
+                case wire::FrameBody_CancelScheduled: on_cancel_scheduled(*c, rid, *f.body.AsCancelScheduled()); break;
                 case wire::FrameBody_SetChannelFeatured:
                     on_set_channel_featured(*c, rid, *f.body.AsSetChannelFeatured());
                     break;
@@ -1478,29 +1479,22 @@ private:
         c.reply(rid, room_list(c.user_id));
     }
 
-    void on_send_room_event(Conn& c, uint32_t rid, const wire::SendRoomEventT& ev) {
-        if (ev.room_id.size() != 16 || ev.event_id.size() != 16) {
-            c.fail(rid, err::Malformed, "bad event");
-            return;
-        }
-        if (!storage_.is_member(ev.room_id, c.user_id)) {
-            c.fail(rid, err::Forbidden, "not a member of that room");
-            return;
-        }
+    // Why this person may not send this event to this room now, or nothing.
+    std::pair<uint16_t, std::string> may_send(const wire::SendRoomEventT& ev, const Bytes& user) {
+        if (ev.room_id.size() != 16 || ev.event_id.size() != 16) return {err::Malformed, "bad event"};
+        if (!storage_.is_member(ev.room_id, user)) return {err::Forbidden, "not a member of that room"};
         bool channel = storage_.kind(ev.room_id) == kChannel;
-        if (channel && storage_.is_archived(ev.room_id)) {
-            c.fail(rid, err::Forbidden, "this channel is archived; it can be read but not written in");
-            return;
-        }
-        if (channel && !(storage_.permissions(c.user_id, ev.room_id) & perm::SendMessages)) {
-            c.fail(rid, err::Forbidden, "you cannot post in this channel");
-            return;
-        }
+        if (channel && storage_.is_archived(ev.room_id))
+            return {err::Forbidden, "this channel is archived; it can be read but not written in"};
+        if (channel && !(storage_.permissions(user, ev.room_id) & perm::SendMessages))
+            return {err::Forbidden, "you cannot post in this channel"};
         // A channel may have nobody else in it yet; other rooms always do.
-        if (ev.recipients.empty() && !channel) {
-            c.fail(rid, err::Malformed, "bad event");
-            return;
-        }
+        if (ev.recipients.empty() && !channel) return {err::Malformed, "bad event"};
+        return {0, ""};
+    }
+
+    // Gives the event its place in the room and hands each device its copy.
+    StoredEvent deliver(const wire::SendRoomEventT& ev, const Bytes& sender_user, const Bytes& sender_device) {
         // Copies addressed to someone who is not (or no longer) in the room are
         // dropped: a sender may not have heard yet that a member left.
         wire::SendRoomEventT accepted;
@@ -1513,21 +1507,52 @@ private:
             if (!dev || !storage_.is_member(ev.room_id, dev->user_id) || r->ciphertext.empty()) continue;
             accepted.recipients.push_back(std::make_unique<wire::RecipientT>(*r));
         }
-        StoredEvent stored = storage_.store_event(accepted, c.user_id, c.device_id);
+        StoredEvent stored = storage_.store_event(accepted, sender_user, sender_device);
         if (!stored.existed) {
             for (const auto& r : accepted.recipients) {
                 wire::RoomEventT out;
                 out.room_id = ev.room_id;
                 out.seq = stored.seq;
                 out.event_id = ev.event_id;
-                out.sender_user = c.user_id;
-                out.sender_device = c.device_id;
+                out.sender_user = sender_user;
+                out.sender_device = sender_device;
                 out.server_ts = stored.server_ts;
                 out.ciphertext = r->ciphertext;
                 out.shared = ev.shared;
                 push(r->device_id, out);
             }
         }
+        return stored;
+    }
+
+    void on_send_room_event(Conn& c, uint32_t rid, const wire::SendRoomEventT& ev) {
+        if (auto [code, why] = may_send(ev, c.user_id); code != 0) {
+            c.fail(rid, code, why);
+            return;
+        }
+        // For later: kept aside, encrypted as it came, until its time.
+        if (ev.send_at > now_ms() + 2000) {
+            constexpr uint64_t kFurthest = uint64_t{30} * 24 * 3600 * 1000;
+            if (ev.send_at > now_ms() + kFurthest) {
+                c.fail(rid, err::Malformed, "a message can be scheduled up to 30 days ahead");
+                return;
+            }
+            if (storage_.scheduled_count(c.user_id) >= 50) {
+                c.fail(rid, err::Forbidden, "you already have 50 messages waiting to be sent");
+                return;
+            }
+            flatbuffers::FlatBufferBuilder fbb(1024);
+            fbb.Finish(wire::SendRoomEvent::Pack(fbb, &ev));
+            storage_.schedule_event(ev.room_id, ev.event_id, c.user_id, c.device_id, ev.send_at,
+                                    ByteView(fbb.GetBufferPointer(), fbb.GetSize()));
+            wire::ScheduledT waiting;
+            waiting.room_id = ev.room_id;
+            waiting.event_id = ev.event_id;
+            waiting.send_at = ev.send_at;
+            c.reply(rid, std::move(waiting));
+            return;
+        }
+        StoredEvent stored = deliver(ev, c.user_id, c.device_id);
         wire::SendOkT ok;
         ok.room_id = ev.room_id;
         ok.event_id = ev.event_id;
@@ -1535,6 +1560,56 @@ private:
         ok.server_ts = stored.server_ts;
         c.reply(rid, std::move(ok));
     }
+
+    void on_cancel_scheduled(Conn& c, uint32_t rid, const wire::CancelScheduledT& q) {
+        if (!storage_.cancel_scheduled(q.room_id, q.event_id, c.user_id)) {
+            c.fail(rid, err::NotFound, "that message is not waiting any more; it may already have been sent");
+            return;
+        }
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Sends what has come due. The sender may be gone, may have left the room
+    // or lost the right to post since; then the event is simply dropped.
+    void deliver_scheduled() {
+        for (const auto& row : storage_.scheduled_due(now_ms())) {
+            storage_.forget_scheduled(row.room_id, row.event_id);
+            flatbuffers::Verifier verifier(row.frame.data(), row.frame.size());
+            if (!verifier.VerifyBuffer<wire::SendRoomEvent>()) continue;
+            wire::SendRoomEventT ev;
+            flatbuffers::GetRoot<wire::SendRoomEvent>(row.frame.data())->UnPackTo(&ev);
+            if (may_send(ev, row.sender_user).first != 0) continue;
+            StoredEvent stored = deliver(ev, row.sender_user, row.sender_device);
+            wire::SendOkT ok;
+            ok.room_id = ev.room_id;
+            ok.event_id = ev.event_id;
+            ok.seq = stored.seq;
+            ok.server_ts = stored.server_ts;
+            auto it = online_.find(row.sender_device);
+            auto conn = it == online_.end() ? nullptr : it->second.lock();
+            if (conn) conn->reply(0, std::move(ok));
+            else storage_.add_pending_ack(row.sender_device, ev.room_id, ev.event_id, stored.seq, stored.server_ts);
+        }
+    }
+
+public:
+    // Every few seconds: is a scheduled message due?
+    asio::awaitable<void> schedule_loop() {
+        asio::steady_timer timer(io_);
+        for (;;) {
+            timer.expires_after(std::chrono::seconds(3));
+            asio::error_code ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) co_return;
+            try {
+                deliver_scheduled();
+            } catch (const std::exception& e) {
+                spdlog::warn("scheduled delivery failed: {}", e.what());
+            }
+        }
+    }
+
+private:
 
     void on_sync(Conn& c, uint32_t rid, const wire::SyncT& q) {
         std::map<Bytes, uint64_t> cursors;
@@ -1548,6 +1623,8 @@ private:
                 ++count;
             }
         }
+        // Where this device's scheduled messages landed while it was away.
+        for (auto& ack : storage_.take_pending_acks(c.device_id)) c.reply(0, std::move(ack));
         spdlog::debug("{} synced {} events", c.username, count);
         c.reply(rid, wire::SyncCompleteT{});
     }
@@ -1643,6 +1720,7 @@ static bool run_server(const corded::server::Options& opt) {
     asio::co_spawn(io, server.accept_loop(), asio::detached);
     asio::co_spawn(io, server.sweep_loop(), asio::detached);
     asio::co_spawn(io, server.maintenance_loop(), asio::detached);
+    asio::co_spawn(io, server.schedule_loop(), asio::detached);
     io.run();
     return server.restart_requested();
 }

@@ -186,13 +186,6 @@ else()
   set_target_properties(corded PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
 endif()
 
-if(CORDED_CORE_ONLY)
-  install(TARGETS corded RUNTIME DESTINATION . LIBRARY DESTINATION .)
-  install(FILES include/corded/corded.h LICENSE NOTICE DESTINATION .)
-  return()
-endif()
-
-# ---- server ---------------------------------------------------------------
 # Which release this is, and the public key that updates are checked against
 # (see server/src/update.hpp and the verify_release command in the core).
 execute_process(COMMAND git describe --tags --match v* --always
@@ -203,9 +196,17 @@ if(NOT CORDED_BUILD_VERSION)
 endif()
 file(STRINGS "${CMAKE_SOURCE_DIR}/packaging/release-signing.pub" CORDED_RELEASE_KEY_LINES REGEX "^[A-Za-z0-9+/=]+$")
 list(JOIN CORDED_RELEASE_KEY_LINES "" CORDED_RELEASE_KEY)
-add_executable(cordedd server/src/main.cpp)
 target_compile_definitions(corded_core PRIVATE CORDED_RELEASE_KEY="${CORDED_RELEASE_KEY}")
 target_compile_definitions(corded PRIVATE CORDED_BUILD_VERSION="${CORDED_BUILD_VERSION}")
+
+if(CORDED_CORE_ONLY)
+  install(TARGETS corded RUNTIME DESTINATION . LIBRARY DESTINATION .)
+  install(FILES include/corded/corded.h LICENSE NOTICE DESTINATION .)
+  return()
+endif()
+
+# ---- server ---------------------------------------------------------------
+add_executable(cordedd server/src/main.cpp)
 target_compile_definitions(cordedd PRIVATE ASIO_STANDALONE
   CORDED_BUILD_VERSION="${CORDED_BUILD_VERSION}" CORDED_RELEASE_KEY="${CORDED_RELEASE_KEY}")
 target_link_libraries(cordedd PRIVATE

@@ -197,12 +197,6 @@ class HomeScreen extends StatelessWidget {
               onPressed: () =>
                   Navigator.push(context, MaterialPageRoute(builder: (_) => MembersScreen(state: state))),
             ),
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () =>
-                Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(state: state))),
-          ),
         ],
       ),
       drawer: Drawer(
@@ -228,6 +222,15 @@ class HomeScreen extends StatelessWidget {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (_) => AddServerScreen(state: state)));
+              },
+            ),
+            // Opened seldom, so it lives here and not above the chats.
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(state: state)));
               },
             ),
           ]),

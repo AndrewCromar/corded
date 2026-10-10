@@ -562,7 +562,33 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadingOlder = false;
   }
 
-  Future<void> _send() async {
+  // Asks for a day and a time, then hands the message to the server to send
+  // then, whether or not this device is on.
+  Future<void> _sendLater() async {
+    if (_input.text.trim().isEmpty || _editing != null) return;
+    final now = DateTime.now();
+    final day = await showDatePicker(
+        context: context,
+        initialDate: now,
+        firstDate: now,
+        lastDate: now.add(const Duration(days: 30)),
+        helpText: 'Send on');
+    if (day == null || !mounted) return;
+    final time = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay.fromDateTime(now.add(const Duration(hours: 1))),
+        helpText: 'Send at');
+    if (time == null || !mounted) return;
+    final at = DateTime(day.year, day.month, day.day, time.hour, time.minute);
+    if (!at.isAfter(now.add(const Duration(seconds: 30)))) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Pick a time that is still to come.')));
+      return;
+    }
+    await _send(sendAt: at.millisecondsSinceEpoch);
+  }
+
+  Future<void> _send({int? sendAt}) async {
     final text = _input.text.trim();
     if (text.isEmpty) return;
     final editing = _editing, replyingTo = _replyingTo;
@@ -597,6 +623,7 @@ class _ChatScreenState extends State<ChatScreen> {
           'cmd': 'send_event',
           'room_id': _room,
           'type': 'm.text',
+          if (sendAt != null) 'send_at': sendAt,
           'content': {
             'body': text,
             if (_thread != null && replyingTo != null) 'reply_to': replyingTo.id,
@@ -1010,6 +1037,19 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ]),
+          if (m.mine && m.status == 'scheduled')
+            ListTile(
+              leading: const Icon(Icons.cancel_schedule_send_outlined),
+              title: const Text('Do not send this'),
+              subtitle: const Text('It is waiting on the server; this takes it back'),
+              onTap: () {
+                Navigator.pop(sheet);
+                attempt(
+                    context,
+                    () => widget.state.engine
+                        .command({'cmd': 'cancel_scheduled', 'room_id': _room, 'event_id': m.id}));
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.reply),
             title: const Text('Reply'),
@@ -1125,6 +1165,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _time(m.timestamp),
       if (m.edited) 'edited',
       if (m.mine && m.status == 'pending') 'sending',
+      if (m.mine && m.status == 'scheduled') 'scheduled, not sent yet',
       if (m.mine && m.status == 'failed') 'not sent',
     ].join(' · ');
     // Other people's messages carry their picture; yours sit on the right without one.
@@ -1570,10 +1611,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                 ),
-                IconButton.filled(
-                    onPressed: _send,
-                    tooltip: 'Send',
-                    icon: Icon(_editing != null ? Icons.check : Icons.send)),
+                // Hold it (or right-click) to send the message later instead.
+                GestureDetector(
+                  onLongPress: _sendLater,
+                  onSecondaryTap: _sendLater,
+                  child: IconButton.filled(
+                      onPressed: () => _send(),
+                      tooltip: 'Send (hold to send later)',
+                      icon: Icon(_editing != null ? Icons.check : Icons.send)),
+                ),
               ]),
             ),
         ]),

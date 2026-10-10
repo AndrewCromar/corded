@@ -152,7 +152,15 @@ table RoomList { rooms: [RoomInfo]; }
 table SendRoomEvent {
   room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; expires_at: uint64;
   shared: [ubyte];
+  // Not zero: the server keeps the event aside and delivers it at this time
+  // (milliseconds since 1970), whether or not the sender is connected then.
+  send_at: uint64;
 }
+// The answer to a SendRoomEvent with send_at: it is waiting. When it is
+// delivered, the sender's device is sent the usual SendOk.
+table Scheduled { room_id: [ubyte]; event_id: [ubyte]; send_at: uint64; }
+// The sender takes back an event that is still waiting.
+table CancelScheduled { room_id: [ubyte]; event_id: [ubyte]; }
 table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
 table RoomEvent {
   room_id: [ubyte]; seq: uint64; event_id: [ubyte];
@@ -180,7 +188,8 @@ union FrameBody {
   GetOverrides, Overrides, SetChannelNsfw, RemoveDevice,
   SetChannelArchived,
   PutBlob, GetBlob, Blob, DeleteBlob,
-  UpdateServer, SetChannelFeatured
+  UpdateServer, SetChannelFeatured,
+  Scheduled, CancelScheduled
 }
 
 table Frame { request_id: uint32; body: FrameBody; }
