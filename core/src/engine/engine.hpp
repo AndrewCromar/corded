@@ -132,6 +132,7 @@ private:
     void accept_history(const EventRow& share);
     void accept_receipt(const EventRow& receipt);
     json receipts_json(ByteView room_id);
+    json pins(ByteView room_id);
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
     void fail_outbox(const OutboxRow& row, const std::string& message);

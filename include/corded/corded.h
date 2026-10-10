@@ -71,6 +71,8 @@
  *    "thread":"<id of the message that started the thread, optional>",
  *    "expires_in":<seconds until this one message disappears, optional>}
  *   {"cmd":"set_disappearing","room_id":"...","seconds":3600}   (0 turns it off)
+ *   {"cmd":"pin_event","room_id":"...","event_id":"...","pinned":true}   pin or unpin for everyone;
+ *       in a channel this needs manage_messages. Every room carries "pinned": the pinned ids.
  *   {"cmd":"typing","room_id":"..."}                 say "I am typing"; never stored
  *   {"cmd":"mark_read","room_id":"...","event_id":"..."}   read up to this message
  *   {"cmd":"fetch_receipts","room_id":"..."}         who has read up to where

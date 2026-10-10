@@ -44,7 +44,7 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
-           type == "m.history.share" || type == "m.receipt";
+           type == "m.history.share" || type == "m.receipt" || type == "m.room.pin";
 }
 
 }  // namespace
@@ -295,6 +295,7 @@ Session::json Session::room_json(const RoomRow& room) {
             {"kind", kinds[room.kind >= 0 && room.kind <= 2 ? room.kind : 2]},
             {"is_group", room.kind == 2},
             {"disappear_after", room.ttl_s},
+            {"pinned", pins(room.room_id)},
             {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
             {"members", std::move(members)}};
 }
@@ -804,6 +805,23 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                                  {"type", "m.room.retention"},
                                  {"state_key", ""},
                                  {"content", {{"ttl_seconds", cmd.at("seconds")}}}});
+        } else if (name == "pin_event") {
+            // Pins or unpins a message for everyone in the chat. Travels as
+            // an encrypted event, so the server does not know what is pinned.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            auto room = vault_.room(room_id);
+            if (!room) {
+                fail(req, "not_found", "unknown room");
+                return;
+            }
+            if (room->kind == 0 && !can_moderate(*room, to_bytes(vault_.identity().user.pk))) {
+                fail(req, "forbidden", "you do not have permission to pin messages in this channel");
+                return;
+            }
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.room.pin"},
+                                 {"state_key", cmd.at("event_id")},
+                                 {"content", {{"event_id", cmd.at("event_id")}, {"pinned", cmd.value("pinned", true)}}}});
         } else if (name == "edit_event") {
             cmd_send_event(req, {{"room_id", cmd.at("room_id")},
                                  {"type", "m.edit"},
@@ -1258,7 +1276,31 @@ void Session::apply_relation(const EventRow& e) {
 }
 
 // Room state carried by events: the room's name, and how long messages last.
+// The messages pinned in a room, oldest pin first.
+Session::json Session::pins(ByteView room_id) {
+    json list = json::parse(vault_.meta("pins:" + b64(room_id)).value_or("[]"), nullptr, false);
+    return list.is_array() ? list : json::array();
+}
+
 void Session::apply_state(const EventRow& e) {
+    if (e.type == "m.room.pin") {
+        auto room = vault_.room(e.room_id);
+        if (!room) return;
+        // In a channel, pinning is for those who may manage messages; in a
+        // direct message or group, anyone in it may.
+        if (room->kind == 0 && !can_moderate(*room, e.sender_user)) return;
+        json content = json::parse(e.content, nullptr, false);
+        if (!content.is_object() || !content.value("event_id", json()).is_string()) return;
+        std::string target = content["event_id"].get<std::string>();
+        bool pinned = content.value("pinned", true);
+        json list = pins(e.room_id), kept = json::array();
+        for (const auto& id : list)
+            if (id != target) kept.push_back(id);
+        if (pinned && kept.size() < 50) kept.push_back(target);
+        vault_.set_meta("pins:" + b64(e.room_id), kept.dump());
+        emit({{"event", "room_updated"}, {"room", room_json(*room)}});
+        return;
+    }
     if (e.type == "m.room.retention") {
         auto room = vault_.room(e.room_id);
         if (!room) return;

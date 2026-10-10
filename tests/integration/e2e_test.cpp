@@ -1678,6 +1678,66 @@ TEST_CASE("presence shows who is online or away or not to be disturbed") {
     alice.wait("bob gone", bob_is("offline"));
 }
 
+TEST_CASE("pinned messages") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "the rules"}})["ok"] == true);
+    std::string rules = bob.have_message("the rules")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "bob's note"}})["ok"] == true);
+    std::string note = alice.have_message("bob's note")["data"]["event_id"];
+    auto pinned_at = [&](Client& c, const std::string& room) {
+        json rooms = c.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"])
+            if (r["room_id"] == room) return r["pinned"];
+        return json::array();
+    };
+    auto pins_are = [&](const std::string& room, json want) {
+        return [&, room, want](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["room_id"] == room && e["room"]["pinned"] == want;
+        };
+    };
+    // In a channel an ordinary member may not pin; the owner may.
+    REQUIRE(bob.cmd({{"cmd", "pin_event"}, {"room_id", general}, {"event_id", rules}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "pin_event"}, {"room_id", general}, {"event_id", rules}})["ok"] == true);
+    bob.wait("the pin", pins_are(general, json::array({rules})));
+    REQUIRE(alice.cmd({{"cmd", "pin_event"}, {"room_id", general}, {"event_id", note}})["ok"] == true);
+    bob.wait("two pins", pins_are(general, json::array({rules, note})));
+    REQUIRE(pinned_at(alice, general) == json::array({rules, note}));
+    // Pinning again moves a message to the end; unpinning removes just that one.
+    REQUIRE(alice.cmd({{"cmd", "pin_event"}, {"room_id", general}, {"event_id", rules}})["ok"] == true);
+    bob.wait("order: rules moved last", pins_are(general, json::array({note, rules})));
+    REQUIRE(alice.cmd({{"cmd", "pin_event"}, {"room_id", general}, {"event_id", note}, {"pinned", false}})["ok"] == true);
+    bob.wait("one pin left", pins_are(general, json::array({rules})));
+    // In a direct message either person may pin.
+    std::string direct = bob.cmd({{"cmd", "start_chat"}, {"username", "alice"}})["data"]["room"]["room_id"];
+    alice.have("the direct chat", [&](const json& e) { return e["event"] == "room_updated" && e["room"]["room_id"] == direct; });
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "remember this"}})["ok"] == true);
+    std::string remember = bob.have_message("remember this")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "pin_event"}, {"room_id", direct}, {"event_id", remember}})["ok"] == true);
+    alice.wait("the pin in the direct chat", pins_are(direct, json::array({remember})));
+    // A pin is not a message.
+    json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", direct}, {"limit", 50}});
+    int texts = 0;
+    for (const auto& e : tl["data"]["events"]) texts += e["type"] == "m.text";
+    REQUIRE(texts == 1);
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();
