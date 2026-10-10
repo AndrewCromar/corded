@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'devices.dart';
 import 'profile.dart';
 import 'scan.dart';
 import 'server.dart';
@@ -316,6 +317,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: Text(widget.state.reactionBar.join('  ')),
           onTap: _reactionBar,
         ),
+        if (server != null)
+          ListTile(
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('Your devices'),
+            subtitle: const Text('See what is signed in as you, and sign a device out'),
+            onTap: () => Navigator.push(
+                context, MaterialPageRoute(builder: (_) => DevicesScreen(state: widget.state))),
+          ),
         ListTile(
           leading: const Icon(Icons.key_outlined),
           title: const Text('Recovery key'),

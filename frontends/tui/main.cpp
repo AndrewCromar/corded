@@ -119,6 +119,20 @@ std::string clock_time(uint64_t ms) {
     return buf;
 }
 
+std::string clock_date(uint64_t ms) {
+    if (ms == 0) return "at an unknown time";
+    std::time_t t = static_cast<std::time_t>(ms / 1000);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[20];
+    std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", &tm);
+    return buf;
+}
+
 // "30s", "5m", "2h", "1d" or a bare number of seconds. Returns 0 if not understood.
 double parse_duration(const std::string& s) {
     if (s.empty()) return 0;
@@ -469,6 +483,22 @@ private:
                                 color(Color::Red),
                         }) |
                         border;
+            show_info_ = true;
+            return;
+        }
+        if (ok && ev["data"].contains("devices")) {
+            devices_.clear();
+            Elements rows = {text("Devices signed in as you") | bold};
+            int n = 1;
+            for (const auto& d : ev["data"]["devices"]) {
+                devices_.push_back(d);
+                std::string id = d.value("device_id", "");
+                rows.push_back(hbox({text(std::to_string(n++) + "  ") | dim,
+                                     text(d.value("this_device", false) ? "this device" : "device " + id.substr(0, 8)) | bold,
+                                     text("   added " + clock_date(d.value("added_at", uint64_t{0}))) | dim}));
+            }
+            rows.push_back(text("/device remove <number> signs one out for good") | dim);
+            info_box_ = vbox(std::move(rows)) | border;
             show_info_ = true;
             return;
         }
@@ -1032,6 +1062,18 @@ private:
                 command({{"cmd", "set_nickname"}, {"nickname", ""}});
                 notice_ = arg.empty() ? "display name cleared" : "you now appear as " + arg;
                 if (members_selected()) command({{"cmd", "member_list"}});
+            } else if (cmd == "/devices") {
+                command({{"cmd", "list_devices"}});
+            } else if (cmd == "/device" && arg.rfind("remove ", 0) == 0) {
+                // By its number in /devices.
+                int n = std::atoi(arg.substr(7).c_str());
+                if (n < 1 || n > static_cast<int>(devices_.size())) notice_ = "run /devices first, then /device remove <number>";
+                else if (devices_[static_cast<size_t>(n - 1)].value("this_device", false))
+                    notice_ = "that is this device; to sign it out, delete its vault folder";
+                else {
+                    command({{"cmd", "remove_device"}, {"device_id", devices_[static_cast<size_t>(n - 1)].value("device_id", "")}});
+                    notice_ = "signed that device out";
+                }
             } else if (cmd == "/profile") {
                 // /profile            yours        /profile <user>      theirs
                 // /profile fullname|birthday|bio|link <text>   change yours ("" clears)
@@ -1250,6 +1292,7 @@ private:
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
+                              text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
                               text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
@@ -1563,6 +1606,7 @@ private:
     std::vector<std::string> titles_;
     int selected_ = 0;
     bool show_help_ = false, show_verify_ = false, show_info_ = false, is_owner_ = false;
+    std::vector<json> devices_;  // as last listed by /devices
     std::string notify_mode_ = "off";  // off, bell, or on (bell and a desktop notification)
     std::string server_name_;
     std::set<std::string> permissions_;
