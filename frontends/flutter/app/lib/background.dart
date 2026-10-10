@@ -21,7 +21,7 @@ void backgroundEntry() {
 
 /// What a notification says for one event, or null if it deserves none.
 /// Only messages written by someone else are announced.
-({String roomId, String title, String body})? notificationFor(
+({String roomId, String title, String body, String payload})? notificationFor(
     Map<String, dynamic> event, Map<String, String> roomTitles) {
   if (event['event'] != 'event_received') return null;
   final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -32,7 +32,13 @@ void backgroundEntry() {
   final sender = '${data['sender_name'] ?? 'Someone'}';
   final title = roomTitles[roomId] ?? sender;
   // In a direct chat the title is already the sender's name.
-  return (roomId: roomId, title: title, body: title == sender ? body : '$sender: $body');
+  // Where a tap should lead: the chat, and the thread if it was said in one.
+  final relation = (data['relation'] as Map?) ?? const {};
+  final payload = jsonEncode({
+    'room_id': roomId,
+    if (relation['kind'] == 'thread') 'thread': relation['target'],
+  });
+  return (roomId: roomId, title: title, body: title == sender ? body : '$sender: $body', payload: payload);
 }
 
 class _EventReader extends TaskHandler {
@@ -82,6 +88,7 @@ class _EventReader extends TaskHandler {
               importance: Importance.high,
               priority: Priority.high),
         ),
+        payload: n.payload,
       );
     }
   }
@@ -206,4 +213,30 @@ class Background {
   }
 
   static void onEvent(void Function(Object) callback) => FlutterForegroundTask.addTaskDataCallback(callback);
+
+  /// Calls [onTap] with where a tapped notification leads ({room_id, thread}),
+  /// including the one that started the app, if a notification did.
+  static Future<void> listenForTaps(void Function(Map<String, dynamic>) onTap) async {
+    if (!_supported) return;
+    void handle(String? payload) {
+      if (payload == null || payload.isEmpty) return;
+      try {
+        onTap((jsonDecode(payload) as Map).cast<String, dynamic>());
+      } catch (_) {
+        // Not one of ours.
+      }
+    }
+
+    try {
+      final plugin = FlutterLocalNotificationsPlugin();
+      await plugin.initialize(
+        const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+        onDidReceiveNotificationResponse: (response) => handle(response.payload),
+      );
+      final launch = await plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) handle(launch!.notificationResponse?.payload);
+    } catch (_) {
+      // Taps then only bring the app forward.
+    }
+  }
 }

@@ -1,3 +1,4 @@
+import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -56,6 +57,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
       'nickname': name,
       if (widget.state.server != null) 'server_id': widget.state.server!.id,
     });
+  }
+
+  Future<void> _setFingerprint(bool on) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!on) {
+      await widget.state.disableFingerprint();
+      if (mounted) setState(() {});
+      return;
+    }
+    final controller = TextEditingController();
+    final passphrase = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Unlock with fingerprint'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text("Type your passphrase once more. It is then kept in this phone's secure hardware and "
+              'released only by your fingerprint. The passphrase itself keeps working.'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            autofocus: true,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Passphrase'),
+            onSubmitted: (v) => Navigator.pop(context, v),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Turn on')),
+        ],
+      ),
+    );
+    if (passphrase == null || passphrase.isEmpty) return;
+    try {
+      await widget.state.enableFingerprint(passphrase);
+      messenger.showSnackBar(const SnackBar(content: Text('Fingerprint unlock is on.')));
+    } on CordedError {
+      messenger.showSnackBar(const SnackBar(content: Text('That is not your passphrase.')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The fingerprint check did not finish, so nothing changed.')));
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _reactionBar() async {
@@ -156,6 +199,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: _settings['share_history'] != false,
           onChanged: (v) => _set({'cmd': 'set_history_sharing', 'enabled': v}),
         ),
+        if (widget.state.fingerprintAvailable)
+          SwitchListTile(
+            secondary: const Icon(Icons.fingerprint),
+            title: const Text('Unlock with fingerprint'),
+            subtitle: const Text('Open Corded with your fingerprint instead of typing the passphrase'),
+            value: widget.state.fingerprintUnlock,
+            onChanged: _setFingerprint,
+          ),
         SwitchListTile(
           secondary: const Icon(Icons.notifications_active_outlined),
           title: const Text('Stay connected in the background'),

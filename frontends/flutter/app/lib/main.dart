@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'screens/add_server.dart';
+import 'screens/chat.dart';
 import 'screens/home.dart';
 import 'screens/unlock.dart';
 import 'screens/welcome.dart';
@@ -23,10 +24,23 @@ class CordedApp extends StatefulWidget {
 class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   AppState get state => widget.state;
 
+  final _navigator = GlobalKey<NavigatorState>();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // A tapped notification leads to its chat, and into its thread if it has one.
+    state.onOpenChat = (roomId, threadRoot) {
+      final navigator = _navigator.currentState;
+      if (navigator == null) return;
+      navigator.popUntil((route) => route.isFirst);
+      navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
+      if (threadRoot != null) {
+        navigator.push(
+            MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId, threadRoot: threadRoot)));
+      }
+    };
   }
 
   @override
@@ -48,6 +62,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
         );
     return MaterialApp(
       title: 'Corded',
+      navigatorKey: _navigator,
       theme: theme(Brightness.light),
       darkTheme: theme(Brightness.dark),
       home: ListenableBuilder(listenable: state, builder: (context, _) => _root()),

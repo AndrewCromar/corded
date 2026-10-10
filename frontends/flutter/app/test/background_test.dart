@@ -20,6 +20,13 @@ void main() {
     expect(n.body, 'bob: hello');
   });
 
+  test('a tap leads to the chat, and to the thread if the message was in one', () {
+    expect(notificationFor(message('hello'), {})!.payload, '{"room_id":"r1"}');
+    final threaded = message('hello');
+    (threaded['data'] as Map)['relation'] = {'kind': 'thread', 'target': 'root1'};
+    expect(notificationFor(threaded, {})!.payload, '{"room_id":"r1","thread":"root1"}');
+  });
+
   test('in a direct chat the title is the sender and the body is just the text', () {
     final n = notificationFor(message('hello'), {'r1': 'bob'})!;
     expect(n.title, 'bob');

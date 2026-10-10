@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'background.dart';
+import 'fingerprint.dart';
 
 /// What the whole app shares: the running core and the lists built from it.
 /// The app keeps nothing of its own; the core's vault is the only store.
@@ -44,6 +45,47 @@ class AppState extends ChangeNotifier {
   CordedEngine get engine => _engine!;
   CordedStore get store => _store!;
   bool get ready => _store != null;
+
+  /// Whether the vault can be opened with a fingerprint instead of typing.
+  bool fingerprintUnlock = false;
+  bool fingerprintAvailable = false;
+
+  /// Turns fingerprint unlock on, after checking the passphrase is right.
+  /// Throws [CordedError] if it is not.
+  Future<void> enableFingerprint(String passphrase) async {
+    await engine.unlock(passphrase); // the vault is open, so this only checks it
+    await Fingerprint.save(passphrase);
+    fingerprintUnlock = true;
+    (await SharedPreferences.getInstance()).setBool('fingerprint_unlock', true);
+    notifyListeners();
+  }
+
+  Future<void> disableFingerprint() async {
+    await Fingerprint.clear();
+    fingerprintUnlock = false;
+    (await SharedPreferences.getInstance()).setBool('fingerprint_unlock', false);
+    notifyListeners();
+  }
+
+  /// Opens the vault with a fingerprint. Returns a sentence to show if it
+  /// did not work, or null if it did or the person backed out.
+  Future<String?> unlockWithFingerprint() async {
+    final String? passphrase;
+    try {
+      passphrase = await Fingerprint.read();
+    } catch (e) {
+      return 'The fingerprint check did not work. Type your passphrase instead.';
+    }
+    if (passphrase == null) return null;
+    try {
+      await engine.unlock(passphrase);
+      return null;
+    } on CordedError {
+      // The stored passphrase no longer opens the vault; stop offering it.
+      await disableFingerprint();
+      return 'Fingerprint unlock was turned off because the stored passphrase no longer works.';
+    }
+  }
 
   /// Whether the app keeps its connections while it is not on screen.
   bool backgroundMode = false;
@@ -86,6 +128,27 @@ class AppState extends ChangeNotifier {
     Background.tell({'rooms': titles});
   }
 
+  /// Where a tapped notification wants to go, until the app can go there
+  /// (the vault may still be locked, or the chats not listed yet).
+  Map<String, dynamic>? _pendingOpen;
+  void Function(String roomId, String? threadRoot)? onOpenChat;
+
+  void openFromNotification(Map<String, dynamic> target) {
+    _pendingOpen = target;
+    _tryPendingOpen();
+  }
+
+  void _tryPendingOpen() {
+    final target = _pendingOpen;
+    if (target == null || !ready || store.vaultState != 'unlocked' || onOpenChat == null) return;
+    final room = store.rooms[target['room_id']];
+    if (room == null) return;
+    _pendingOpen = null;
+    _selectedServer = room.serverId;
+    notifyListeners();
+    onOpenChat!(room.id, target['thread'] as String?);
+  }
+
   /// Tells the background task whether someone is looking at the app.
   void setOnScreen(bool onScreen) => Background.tell(onScreen ? 'on_screen' : 'off_screen');
 
@@ -112,7 +175,9 @@ class AppState extends ChangeNotifier {
       _sub = store.changes.listen((_) {
         _shareRoomTitles();
         notifyListeners();
+        _tryPendingOpen();
       });
+      Background.listenForTaps(openFromNotification);
       _engine = engine;
       _store = store;
       Background.onEvent((data) {
@@ -131,6 +196,8 @@ class AppState extends ChangeNotifier {
         }
       }
       _wantBackground = prefs.getBool('background_mode') ?? false;
+      fingerprintAvailable = await Fingerprint.available();
+      fingerprintUnlock = fingerprintAvailable && (prefs.getBool('fingerprint_unlock') ?? false);
       // Chosen earlier, but the service is gone (the phone restarted, say):
       // bring it back once the vault is open.
       store.changes.listen((_) {
