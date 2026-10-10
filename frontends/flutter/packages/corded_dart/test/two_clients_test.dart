@@ -95,9 +95,9 @@ void main() {
       'cmd': 'edit_role',
       'role': 'helper',
       'name': 'helper',
-      'permissions': ['kick_members', 'manage_messages'],
+      'permissions': ['kick_members', 'manage_nicknames'],
     });
-    await eventually(() => helper().permissions.contains('manage_messages') ? true : null, 'the edited role');
+    await eventually(() => helper().permissions.contains('manage_nicknames') ? true : null, 'the edited role');
     expect(helper().name, 'helper');
     await alice.command({'cmd': 'grant_role', 'username': 'bob', 'role': 'helper', 'grant': true});
     await eventually(() => bobServer.can('kick_members') ? true : null, 'bob may kick now');
