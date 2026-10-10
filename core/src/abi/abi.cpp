@@ -5,6 +5,9 @@
 #include "engine/engine.hpp"
 
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <string>
 
 struct corded_engine {
     corded::Engine engine;
@@ -23,6 +26,13 @@ corded_status guarded(F&& f) noexcept {
         return CORDED_ERR_INTERNAL;
     }
 }
+
+// One engine per vault in a process. On a phone the screen can be torn down
+// and rebuilt while the process, and the engine with its connections, lives
+// on; the rebuilt screen must get the same engine back, not open the vault a
+// second time.
+std::mutex g_engines_mutex;
+std::map<std::string, corded_engine*> g_engines;
 
 }  // namespace
 
@@ -49,16 +59,31 @@ corded_status corded_engine_create(const corded_config* config, corded_engine** 
         if (!config || !out || config->struct_size < sizeof(corded_config) || !config->vault_dir ||
             !*config->vault_dir)
             return CORDED_ERR_INVALID_ARGUMENT;
+        std::lock_guard lock(g_engines_mutex);
+        auto existing = g_engines.find(config->vault_dir);
+        if (existing != g_engines.end()) {
+            *out = existing->second;
+            return CORDED_OK;
+        }
         corded::EngineConfig c;
         c.vault_dir = config->vault_dir;
         c.fast_kdf = config->fast_kdf != 0;
         *out = new corded_engine(std::move(c));
+        g_engines[config->vault_dir] = *out;
         return CORDED_OK;
     });
 }
 
 void corded_engine_destroy(corded_engine* engine) {
     try {
+        {
+            std::lock_guard lock(g_engines_mutex);
+            for (auto it = g_engines.begin(); it != g_engines.end(); ++it)
+                if (it->second == engine) {
+                    g_engines.erase(it);
+                    break;
+                }
+        }
         delete engine;
     } catch (...) {
     }

@@ -1,0 +1,205 @@
+// Staying connected while the app is not on screen.
+//
+// Android stops an app's network use soon after it leaves the screen unless
+// it runs a foreground service, which shows a permanent notification. With
+// the service on, the core keeps its connections, and a small task that lives
+// with the service reads the core's events: it shows a notification for each
+// new message while nobody is looking, and passes every event on to the
+// screen whenever there is one.
+import 'dart:convert';
+
+import 'package:corded_dart/corded_dart.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+const _engineKey = 'engine_address';
+
+@pragma('vm:entry-point')
+void backgroundEntry() {
+  FlutterForegroundTask.setTaskHandler(_EventReader());
+}
+
+/// What a notification says for one event, or null if it deserves none.
+/// Only messages written by someone else are announced.
+({String roomId, String title, String body})? notificationFor(
+    Map<String, dynamic> event, Map<String, String> roomTitles) {
+  if (event['event'] != 'event_received') return null;
+  final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
+  if (data['type'] != 'm.text' || data['mine'] == true || data['shared_history'] == true) return null;
+  final body = (data['content'] as Map?)?['body'];
+  if (body is! String || body.isEmpty) return null;
+  final roomId = '${data['room_id']}';
+  final sender = '${data['sender_name'] ?? 'Someone'}';
+  final title = roomTitles[roomId] ?? sender;
+  // In a direct chat the title is already the sender's name.
+  return (roomId: roomId, title: title, body: title == sender ? body : '$sender: $body');
+}
+
+class _EventReader extends TaskHandler {
+  int _engine = 0;
+  bool _onScreen = true;
+  final _roomTitles = <String, String>{};
+  final _notifications = FlutterLocalNotificationsPlugin();
+  bool _ready = false;
+
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _engine = await FlutterForegroundTask.getData<int>(key: _engineKey) ?? 0;
+    try {
+      await _notifications.initialize(
+          const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+      _ready = true;
+    } catch (_) {
+      // Without it the connection is still kept; only the notices are missing.
+    }
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    if (_engine == 0) return;
+    for (final json in CordedEngine.drain(_engine)) {
+      FlutterForegroundTask.sendDataToMain(json);
+      final Map<String, dynamic> event;
+      try {
+        event = jsonDecode(json) as Map<String, dynamic>;
+      } catch (_) {
+        continue;
+      }
+      if (event['event'] == 'room_updated') {
+        final room = (event['room'] as Map?) ?? const {};
+        _roomTitles['${room['room_id']}'] = '${room['title']}';
+      }
+      if (_onScreen || !_ready) continue;
+      final n = notificationFor(event, _roomTitles);
+      if (n == null) continue;
+      _notifications.show(
+        n.roomId.hashCode & 0x7fffffff,
+        n.title,
+        n.body,
+        const NotificationDetails(
+          android: AndroidNotificationDetails('messages', 'Messages',
+              channelDescription: 'New messages while Corded is not on screen',
+              importance: Importance.high,
+              priority: Priority.high),
+        ),
+      );
+    }
+  }
+
+  @override
+  void onReceiveData(Object data) {
+    // The screen says whether someone is looking at it.
+    if (data == 'on_screen') {
+      _onScreen = true;
+      if (_ready) _notifications.cancelAll();
+    }
+    if (data == 'off_screen') _onScreen = false;
+    if (data is Map && data['engine'] is int) _engine = data['engine'] as int;
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+}
+
+/// Starting and stopping the service, from the screen's side.
+class Background {
+  static bool get supported => _supported;
+  static bool _supported = false;
+
+  static void init() {
+    try {
+      FlutterForegroundTask.initCommunicationPort();
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'connection',
+          channelName: 'Connection',
+          channelDescription: 'Shown while Corded stays connected in the background',
+          channelImportance: NotificationChannelImportance.LOW,
+          priority: NotificationPriority.LOW,
+          onlyAlertOnce: true,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(showNotification: false, playSound: false),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          eventAction: ForegroundTaskEventAction.repeat(400),
+          autoRunOnBoot: false,
+          autoRunOnMyPackageReplaced: false,
+          allowWakeLock: true,
+          allowWifiLock: true,
+        ),
+      );
+      _supported = true;
+    } catch (_) {
+      _supported = false; // not a phone
+    }
+  }
+
+  static Future<bool> get running async {
+    if (!_supported) return false;
+    try {
+      return await FlutterForegroundTask.isRunningService;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Asks for what Android requires, then starts the service reading events
+  /// from the core at [engineAddress]. Returns a sentence saying why not, or
+  /// null when it is running.
+  static Future<String?> start(int engineAddress) async {
+    if (!_supported) return 'This device cannot keep the app connected in the background.';
+    if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
+      await FlutterForegroundTask.requestNotificationPermission();
+    }
+    if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
+      return 'Corded needs permission to show notifications to stay connected in the background.';
+    }
+    await FlutterForegroundTask.saveData(key: _engineKey, value: engineAddress);
+    final ServiceRequestResult result;
+    if (await FlutterForegroundTask.isRunningService) {
+      result = await FlutterForegroundTask.restartService();
+    } else {
+      result = await FlutterForegroundTask.startService(
+        serviceId: 7443,
+        serviceTypes: [ForegroundServiceTypes.remoteMessaging],
+        notificationTitle: 'Corded is connected',
+        notificationText: 'Messages arrive while the app is in the background',
+        callback: backgroundEntry,
+      );
+    }
+    if (result is ServiceRequestFailure) return 'Android would not start the background connection: ${result.error}';
+    return null;
+  }
+
+  static Future<void> stop() async {
+    if (!_supported) return;
+    try {
+      await FlutterForegroundTask.stopService();
+    } catch (_) {
+      // Already gone.
+    }
+  }
+
+  /// Without this, Android may still pause the connection when the phone has
+  /// been still for a long time.
+  static Future<void> askToRunUnrestricted() async {
+    if (!_supported) return;
+    try {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    } catch (_) {
+      // Optional.
+    }
+  }
+
+  static void tell(Object message) {
+    if (!_supported) return;
+    try {
+      FlutterForegroundTask.sendDataToTask(message);
+    } catch (_) {
+      // No task to tell.
+    }
+  }
+
+  static void onEvent(void Function(Object) callback) => FlutterForegroundTask.addTaskDataCallback(callback);
+}

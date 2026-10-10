@@ -7,6 +7,8 @@ import 'package:characters/characters.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'background.dart';
+
 /// What the whole app shares: the running core and the lists built from it.
 /// The app keeps nothing of its own; the core's vault is the only store.
 class AppState extends ChangeNotifier {
@@ -15,6 +17,7 @@ class AppState extends ChangeNotifier {
   StreamSubscription<void>? _sub;
   String? startError;
   int? _selectedServer;
+  bool _wantBackground = false;
 
   /// The quick reactions offered on a message; the first is what a double-tap
   /// sends. How the app looks is the one thing kept outside the vault.
@@ -42,7 +45,37 @@ class AppState extends ChangeNotifier {
   CordedStore get store => _store!;
   bool get ready => _store != null;
 
+  /// Whether the app keeps its connections while it is not on screen.
+  bool backgroundMode = false;
+
+  /// Turns the background connection on or off. Returns a sentence saying
+  /// why it could not be turned on, or null.
+  Future<String?> setBackgroundMode(bool on) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (on) {
+      // From here the service's task reads the core's events, not this screen.
+      await engine.stopPump();
+      final problem = await Background.start(engine.address);
+      if (problem != null) {
+        await engine.startPump();
+        return problem;
+      }
+      await Background.askToRunUnrestricted();
+    } else {
+      await Background.stop();
+      await engine.startPump();
+    }
+    backgroundMode = on;
+    await prefs.setBool('background_mode', on);
+    notifyListeners();
+    return null;
+  }
+
+  /// Tells the background task whether someone is looking at the app.
+  void setOnScreen(bool onScreen) => Background.tell(onScreen ? 'on_screen' : 'off_screen');
+
   Future<void> start() async {
+    Background.init();
     try {
       final saved = (await SharedPreferences.getInstance()).getStringList('reaction_bar');
       if (saved != null && saved.isNotEmpty) reactionBar = saved;
@@ -53,13 +86,40 @@ class AppState extends ChangeNotifier {
       final base = await getApplicationSupportDirectory();
       final dir = Directory('${base.path}/vault');
       await dir.create(recursive: true);
-      final engine = await CordedEngine.open(dir.path);
+      final prefs = await SharedPreferences.getInstance();
+      // If the background service outlived the screen, the core is still
+      // running and the service is reading its events; join it as it is.
+      final serviceRunning = await Background.running;
+      final engine = await CordedEngine.open(dir.path, pump: !serviceRunning);
       final store = CordedStore(engine);
       // The first vault_state event may already have gone by.
       store.vaultState = engine.vaultExists() ? 'locked' : 'missing';
       _sub = store.changes.listen((_) => notifyListeners());
       _engine = engine;
       _store = store;
+      Background.onEvent((data) {
+        if (data is String) engine.deliver(data);
+      });
+      backgroundMode = serviceRunning;
+      if (serviceRunning) {
+        Background.tell({'engine': engine.address});
+        Background.tell('on_screen');
+        final status = await engine.command({'cmd': 'status'});
+        if (status['vault'] == 'unlocked') {
+          store.username = '${status['username'] ?? ''}';
+          store.vaultState = 'unlocked';
+          await store.refresh();
+        }
+      }
+      _wantBackground = prefs.getBool('background_mode') ?? false;
+      // Chosen earlier, but the service is gone (the phone restarted, say):
+      // bring it back once the vault is open.
+      store.changes.listen((_) {
+        if (_wantBackground && !backgroundMode && store.vaultState == 'unlocked') {
+          _wantBackground = false;
+          setBackgroundMode(true);
+        }
+      });
     } catch (e) {
       startError = '$e';
     }

@@ -154,6 +154,40 @@ void main() {
       expect(seqs, [...seqs]..sort());
     }
 
+    // The screen goes away but the process lives on: something else reads the
+    // events, and a rebuilt screen gets the same core back, still connected.
+    await bob.stopPump();
+    expect(bob.pumping, isFalse);
+    await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'while the screen was gone'});
+    final drained = <String>[];
+    await eventually(() {
+      drained.addAll(CordedEngine.drain(bob.address, libraryPath: lib));
+      return drained.any((e) => e.contains('while the screen was gone')) ? true : null;
+    }, 'the event read from outside');
+    final rebuilt = await CordedEngine.open('${tmp.path}/bob', fastKdf: true, libraryPath: lib, pump: false);
+    expect(rebuilt.address, bob.address);
+    final rebuiltStore = CordedStore(rebuilt);
+    final replies = rebuilt.command({'cmd': 'status'});
+    Map<String, dynamic>? status;
+    replies.then((s) => status = s);
+    await eventually(() {
+      for (final e in CordedEngine.drain(rebuilt.address, libraryPath: lib)) {
+        rebuilt.deliver(e);
+      }
+      return status;
+    }, 'the status answer');
+    expect(status!['vault'], 'unlocked');
+    expect(status!['username'], 'bob');
+    await rebuiltStore.dispose();
+    await bob.startPump();
+    // A rebuilt screen starts from an empty store and reads the vault.
+    final freshStore = CordedStore(bob);
+    await freshStore.refresh();
+    await freshStore.open(room.id);
+    expect(freshStore.messages(room.id).any((m) => m.body == 'while the screen was gone'), isTrue);
+    await freshStore.dispose();
+    await bobStore.open(room.id);
+
     // A fresh start reads everything back from the vault.
     await bobStore.dispose();
     await bob.close();
@@ -168,7 +202,7 @@ void main() {
     await again.unlock('a long passphrase');
     await eventually(() => againStore.rooms[room.id], 'rooms after restart');
     await againStore.open(room.id);
-    expect(againStore.messages(room.id).length, 6);
+    expect(againStore.messages(room.id).length, 7);
     await againStore.openThread(room.id, last.id);
     expect(againStore.thread(room.id, last.id).length, 1);
     expect(againStore.username, 'bob');

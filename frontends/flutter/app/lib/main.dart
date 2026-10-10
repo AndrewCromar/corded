@@ -12,9 +12,33 @@ void main() {
   runApp(CordedApp(state: state));
 }
 
-class CordedApp extends StatelessWidget {
+class CordedApp extends StatefulWidget {
   const CordedApp({super.key, required this.state});
   final AppState state;
+
+  @override
+  State<CordedApp> createState() => _CordedAppState();
+}
+
+class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
+  AppState get state => widget.state;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Notifications are for when nobody is looking at the app.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) =>
+      state.setOnScreen(lifecycle == AppLifecycleState.resumed);
 
   @override
   Widget build(BuildContext context) {

@@ -263,6 +263,17 @@ class _ChatScreenState extends State<ChatScreen> {
             GestureDetector(
               onLongPress: gone ? null : () => _showActions(m),
               onDoubleTap: gone ? null : () => _react(m, widget.state.reactionBar.first),
+              // A flick to the right starts a reply.
+              onHorizontalDragEnd: gone || _thread != null
+                  ? null
+                  : (d) {
+                      if ((d.primaryVelocity ?? 0) > 250) {
+                        setState(() {
+                          _replyingTo = m;
+                          _editing = null;
+                        });
+                      }
+                    },
               onSecondaryTap: gone ? null : () => _showActions(m),
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),

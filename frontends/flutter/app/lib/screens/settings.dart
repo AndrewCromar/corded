@@ -156,6 +156,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: _settings['share_history'] != false,
           onChanged: (v) => _set({'cmd': 'set_history_sharing', 'enabled': v}),
         ),
+        SwitchListTile(
+          secondary: const Icon(Icons.notifications_active_outlined),
+          title: const Text('Stay connected in the background'),
+          subtitle: const Text('Get a notification for each new message while the app is not on screen. '
+              'Android shows a permanent notification while this is on, and it uses some battery.'),
+          isThreeLine: true,
+          value: widget.state.backgroundMode,
+          onChanged: (on) async {
+            final messenger = ScaffoldMessenger.of(context);
+            final problem = await widget.state.setBackgroundMode(on);
+            if (problem != null) messenger.showSnackBar(SnackBar(content: Text(problem)));
+            if (mounted) setState(() {});
+          },
+        ),
         ListTile(
           leading: const Icon(Icons.add_reaction_outlined),
           title: const Text('Quick reactions'),

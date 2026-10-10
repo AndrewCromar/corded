@@ -29,12 +29,18 @@ class CordedEngine {
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final _pending = <int, Completer<Map<String, dynamic>>>{};
   final Pointer<Int32> _stop = calloc<Int32>();
-  final _stopped = Completer<void>();
+  Completer<void>? _stopped;
   ReceivePort? _port;
   bool _closed = false;
 
   /// Starts a core whose vault lives in [vaultDir] (created on first use).
-  static Future<CordedEngine> open(String vaultDir, {bool fastKdf = false, String? libraryPath}) async {
+  ///
+  /// A process has one core per vault: opening a vault that is already open
+  /// in this process hands back the running core, still connected. With
+  /// [pump] false nothing reads the core's events here; something else must
+  /// (see [drain]) and pass them to [deliver].
+  static Future<CordedEngine> open(String vaultDir,
+      {bool fastKdf = false, String? libraryPath, bool pump = true}) async {
     final bindings = Bindings(openCordedLibrary(libraryPath));
     final config = calloc<CordedConfig>();
     final dir = vaultDir.toNativeUtf8();
@@ -49,7 +55,7 @@ class CordedEngine {
         throw CordedError('engine', bindings.statusMessage(status).toDartString());
       }
       final engine = CordedEngine._(bindings, out.value, libraryPath);
-      await engine._startPump();
+      if (pump) await engine.startPump();
       return engine;
     } finally {
       calloc.free(config);
@@ -115,13 +121,51 @@ class CordedEngine {
     }
   }
 
+  /// Where the core lives in memory, for handing it to another isolate.
+  int get address => _engine.address;
+
+  /// Whether this object is reading the core's events itself.
+  bool get pumping => _stopped != null;
+
+  /// Stops reading events here, so that something else can (see [drain]).
+  Future<void> stopPump() async {
+    final stopped = _stopped;
+    if (stopped == null) return;
+    _stop.value = 1;
+    await stopped.future;
+    _port?.close();
+    _port = null;
+    _stopped = null;
+    _stop.value = 0;
+  }
+
+  /// Takes every event the core has waiting, without blocking. For an isolate
+  /// that reads events on behalf of a screen that may not exist: it calls this
+  /// on a timer and passes each event on to [deliver] where there is one.
+  static List<String> drain(int address, {String? libraryPath, int max = 500}) {
+    final bindings = Bindings(openCordedLibrary(libraryPath));
+    final engine = Pointer<Void>.fromAddress(address);
+    final out = calloc<Pointer<Utf8>>();
+    final events = <String>[];
+    try {
+      while (events.length < max && bindings.nextEvent(engine, 0, out, nullptr) == cordedOk) {
+        events.add(out.value.toDartString());
+        bindings.eventFree(out.value);
+      }
+    } finally {
+      calloc.free(out);
+    }
+    return events;
+  }
+
+  /// Handles one event that was read elsewhere, as if it had been read here.
+  void deliver(String json) => _handle(json);
+
   /// Stops the core. No events arrive after this completes.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    _stop.value = 1;
-    await _stopped.future;
-    _port?.close();
+    await stopPump();
     _bindings.engineDestroy(_engine);
     calloc.free(_stop);
     for (final c in _pending.values) {
@@ -161,17 +205,26 @@ class CordedEngine {
 
   // Waiting for an event blocks, so it happens on a thread of its own. The C
   // interface may be called from any thread.
-  Future<void> _startPump() async {
+  Future<void> startPump() async {
+    if (_stopped != null || _closed) return;
+    final stopped = _stopped = Completer<void>();
     final port = ReceivePort();
     _port = port;
     port.listen((message) {
       if (message == null) {
-        if (!_stopped.isCompleted) _stopped.complete();
+        if (!stopped.isCompleted) stopped.complete();
         return;
       }
+      _handle(message as String);
+    });
+    await Isolate.spawn(_pump, [port.sendPort, _engine.address, _stop.address, _libraryPath]);
+  }
+
+  void _handle(String message) {
+    {
       final Map<String, dynamic> event;
       try {
-        event = jsonDecode(message as String) as Map<String, dynamic>;
+        event = jsonDecode(message) as Map<String, dynamic>;
       } catch (_) {
         return;
       }
@@ -187,8 +240,7 @@ class CordedEngine {
         }
       }
       if (!_events.isClosed) _events.add(event);
-    });
-    await Isolate.spawn(_pump, [port.sendPort, _engine.address, _stop.address, _libraryPath]);
+    }
   }
 
   static void _pump(List<Object?> args) {

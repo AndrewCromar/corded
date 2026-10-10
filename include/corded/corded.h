@@ -110,7 +110,7 @@ extern "C" {
 #endif
 
 #define CORDED_ABI_VERSION_MAJOR 0
-#define CORDED_ABI_VERSION_MINOR 2
+#define CORDED_ABI_VERSION_MINOR 3
 
 typedef struct corded_engine corded_engine;
 typedef int32_t corded_status;
@@ -131,6 +131,10 @@ CORDED_API uint32_t corded_abi_version(void); /* (major << 16) | minor */
 CORDED_API const char* corded_version_string(void);
 CORDED_API const char* corded_status_message(corded_status status);
 
+/* A process has one engine per vault directory: creating one for a directory
+ * that already has a live engine returns that same engine. A frontend whose
+ * screen was rebuilt while the process lived on gets its engine back this way;
+ * {"cmd":"status"} then tells it where things stand. */
 CORDED_API corded_status corded_engine_create(const corded_config* config, corded_engine** out);
 /* After this returns no further events are produced. */
 CORDED_API void corded_engine_destroy(corded_engine* engine);
