@@ -82,6 +82,15 @@ jobs:
           build\windows\bin\cordedd.exe --help
           build\windows\bin\corded-tui.exe --help
 
+      # The one-line installer from the README, against the latest published release.
+      - name: Check the PowerShell installer
+        shell: pwsh
+        run: |
+          & ([scriptblock]::Create((Get-Content -Raw packaging\install.ps1))) -NoRun
+          $exe = Get-ChildItem -Path "$env:LOCALAPPDATA\Corded" -Filter corded-tui.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "the installer did not produce corded-tui.exe" }
+          & $exe.FullName --help
+
       - name: Package
         shell: pwsh
         run: |

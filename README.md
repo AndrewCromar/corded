@@ -33,7 +33,40 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 | Prototype | Working on Linux: server, core library, terminal client. One-to-one and group chats, end-to-end encrypted |
 | Everything else in the plan | Not started |
 
-## Try the prototype
+## Get it without building
+
+Each release has ready-made programs for Windows, Linux and Raspberry Pi on the
+[releases page](https://github.com/AndrewCromar/corded/releases). These one-liners
+download the newest one for you. They put files in your user folder only, need no
+administrator rights, and can be run again later to update.
+
+**Windows** (PowerShell). This downloads the newest release and starts the terminal
+client; what follows the last parenthesis is passed to the client:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/AndrewCromar/corded/main/packaging/install.ps1))) --server HOST:7443 --name yourname
+```
+
+Downloading this way also avoids the "Windows protected your PC" prompt that appears
+for programs downloaded through a browser. Files go to `%LOCALAPPDATA%\Corded`, and your
+vault is kept there too unless you pass `--vault`.
+
+**Linux and Raspberry Pi:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/AndrewCromar/corded/main/packaging/install.sh | sh
+```
+
+It unpacks to `~/.local/share/corded/current` and prints the commands to start a client
+or a server from there.
+
+Both run a script straight from this repository, so only use them if you trust it. You
+can read them first: [install.ps1](packaging/install.ps1), [install.sh](packaging/install.sh).
+
+The Windows build is new and has had little real use; the commands and behaviour are the
+same as described below, with `.\corded-tui.exe` in place of `./build/dev/bin/corded-tui`.
+
+## Build it yourself
 
 You need Linux, a C++20 compiler (GCC 12+ or Clang 17+), CMake 3.25+, make, git, curl,
 zip, unzip, tar, pkg-config, perl and Python 3. On Ubuntu or Debian:
@@ -237,7 +270,9 @@ It does not, yet:
   but a contact whose key later changes is not yet flagged; their messages just fail to
   decrypt.
 - Remove a lost device, or see a list of your devices.
-- Run anywhere but Linux.
+- A graphical client. There is a terminal client for Linux, Raspberry Pi and Windows; the
+  Flutter GUI is not started.
+- macOS, iOS or Android builds.
 
 ## Where to look
 
