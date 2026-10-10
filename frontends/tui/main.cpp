@@ -1110,8 +1110,16 @@ private:
                                                  {"host", colon == std::string::npos ? rest : rest.substr(0, colon)},
                                                  {"port", colon == std::string::npos ? 7443 : std::atoi(rest.substr(colon + 1).c_str())}});
                     }
+                } else if (sub == "moved" && !rest.empty() && current_server_ != 0) {
+                    // The server shown went to another machine: same server, new address.
+                    auto colon = rest.rfind(':');
+                    command({{"cmd", "move_server"},
+                             {"server_id", current_server_},
+                             {"host", colon == std::string::npos ? rest : rest.substr(0, colon)},
+                             {"port", colon == std::string::npos ? 7443 : std::atoi(rest.substr(colon + 1).c_str())}});
+                    notice_ = "connecting to this server at " + rest;
                 } else {
-                    notice_ = "/servers | /server switch <name or number> | /server join <invite link or host:port>";
+                    notice_ = "/servers | /server switch <name or number> | /server join <invite link or host:port> | /server moved <host:port>";
                 }
             } else if (cmd == "/chat" && !arg.empty()) {
                 chat_request_ = command({{"cmd", "start_chat"}, {"username", arg}});

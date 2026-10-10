@@ -507,6 +507,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         if (server != null)
           ListTile(
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Server address'),
+            subtitle: Text('${server.address}. Change it here if the server moved'),
+            onTap: () async {
+              final typed = TextEditingController(text: server.address);
+              final address = await showDialog<String>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Where is this server now?'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const Text('If the server moved to another machine, give its new address. Your chats '
+                        'stay as they are. The app only connects if it is the same server.'),
+                    const SizedBox(height: 12),
+                    TextField(
+                        controller: typed,
+                        autofocus: true,
+                        decoration: const InputDecoration(hintText: 'host:port'),
+                        onSubmitted: (v) => Navigator.pop(context, v)),
+                  ]),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(context, typed.text), child: const Text('Use this')),
+                  ],
+                ),
+              );
+              final given = (address ?? '').trim();
+              if (given.isEmpty || given == server.address || !context.mounted) return;
+              final colon = given.lastIndexOf(':');
+              await attempt(
+                  context,
+                  () => widget.state.engine.command({
+                        'cmd': 'move_server',
+                        'server_id': server.id,
+                        'host': colon < 0 ? given : given.substring(0, colon),
+                        'port': colon < 0 ? 7443 : (int.tryParse(given.substring(colon + 1)) ?? 7443),
+                      }));
+            },
+          ),
+        if (server != null)
+          ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('Leave this server'),
             subtitle: const Text('Removes it and its chats from this device. Your account there stays.'),

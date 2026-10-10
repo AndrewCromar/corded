@@ -57,6 +57,9 @@ public:
     void share_profile_everywhere();               // send our profile to every chat on this server
     json describe_event(const EventRow& e) { return event_json(e); }
     void disconnect(const std::string& reason);
+    // The server went to another address: connect there from now on. Its
+    // saved identity stays, so only the same server is accepted.
+    void move_to(std::string host, std::string port);
     void run_command(uint64_t req, const std::string& name, const json& cmd);
     void emit_rooms();
     json rooms_json();

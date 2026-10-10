@@ -171,6 +171,7 @@ Talking:
 | `/servers` | Lists the servers you are in |
 | `/server switch <name or number>` | Shows another server's channels |
 | `/server join <invite link or host:port>` | Joins another server without leaving this one |
+| `/server moved <host:port>` | The server you are looking at moved to another address: connect to it there, keeping your chats |
 | `/once 30s <text>` | Sends one message that disappears after the given time (`30s`, `5m`, `2h`, `1d`) |
 | `/disappear 1h` | Makes every new message in the open chat disappear after that long; `/disappear off` stops it |
 | `/group bob carol : Weekend plans` | Starts a private group chat; the part after the colon is an optional name |
@@ -249,6 +250,34 @@ To run the tests:
 ```sh
 ctest --preset dev
 ```
+
+### Moving a server, or keeping a copy of it
+
+Everything a server keeps (accounts, rooms, the stored messages and files, its settings and
+its own identity) can be written into one file, while the server keeps running:
+
+```
+cordedd --export corded-backup.cordedx --data ./server-data
+```
+
+It asks for a passphrase and seals the file with it. `--passphrase-file FILE` reads the
+passphrase from a file instead (for a nightly job), and `--no-passphrase` leaves the file
+unsealed; it then holds the server's private key in the clear and must be kept as safe as
+the server itself. Messages and files inside are as unreadable as they are on the server:
+it never had their keys.
+
+To bring it up on another machine, copy the file there and unpack it into an empty folder:
+
+```
+cordedd --import corded-backup.cordedx --data ./server-data
+cordedd --data ./server-data
+```
+
+That is the same server to every client: the same identity, accounts and history. Stop the
+old one first; two copies of one server answering the same people will confuse them. If the
+address changed, each member tells their client once: **Settings, Server address** in the
+app, or `/server moved <host:port>` in the terminal client. Their chats and keys stay, and
+the client only connects if what answers at the new address is the same server.
 
 ## What the prototype does and does not do
 

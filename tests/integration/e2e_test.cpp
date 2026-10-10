@@ -2777,3 +2777,51 @@ TEST_CASE("the owner sees what takes space, clears old files, and sees who is ba
     REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}, {"banned", false}})["ok"] == true);
     REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["banned"].empty());
 }
+
+TEST_CASE("a server packed into a file and unpacked elsewhere is the same server, and a member follows it to its new address") {
+    TempDir tmp;
+    int port = test_port();
+    const std::string first = (tmp.path / "server").string(), second = (tmp.path / "moved").string();
+    const std::string file = (tmp.path / "server.cordedx").string();
+    auto server = std::make_unique<Server>(port, first, "--owner", "alice");
+    Client alice((tmp.path / "alice").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    REQUIRE(alice.create("alice")["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}})["ok"] == true);
+    alice.have("live", live);
+    std::string general = alice.have("#general", [](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+    })["room"]["room_id"];
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "plans"}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "before the move"}})["ok"] == true);
+
+    // Packed while it runs, sealed with a passphrase; a wrong one opens nothing.
+    auto run = [&](const std::string& passphrase, const std::string& args) {
+        std::string command = "CORDED_TRANSFER_PASSPHRASE='" + passphrase + "' '" + CORDEDD_PATH + "' " + args + " >/dev/null 2>&1";
+        return WEXITSTATUS(std::system(command.c_str()));
+    };
+    REQUIRE(run("a long passphrase", "--export '" + file + "' --data '" + first + "'") == 0);
+    REQUIRE(run("not it", "--import '" + file + "' --data '" + second + "'") != 0);
+    REQUIRE(!fs::exists(fs::path(second) / "cordedd.db"));
+    REQUIRE(run("a long passphrase", "--import '" + file + "' --data '" + second + "'") == 0);
+    // A folder that already holds a server is left alone.
+    REQUIRE(run("a long passphrase", "--import '" + file + "' --data '" + second + "'") != 0);
+
+    // The old one stops; the copy comes up somewhere else.
+    server.reset();
+    int moved_port = test_port();
+    Server moved(moved_port, second);
+    alice.seen.clear();
+    REQUIRE(alice.cmd({{"cmd", "move_server"}, {"server_id", 1}, {"host", "127.0.0.1"}, {"port", moved_port}})["ok"] == true);
+    alice.wait("live at the new address", live, 20000);
+    // Same account, same channels, and it works.
+    json info = alice.cmd({{"cmd", "server_info"}});
+    REQUIRE(info["data"]["is_owner"] == true);
+    REQUIRE(info["data"]["address"] == "127.0.0.1:" + std::to_string(moved_port));
+    bool has_plans = false;
+    json rooms = alice.cmd({{"cmd", "list_rooms"}});
+    for (const auto& r : rooms["data"]["rooms"]) has_plans = has_plans || r["title"] == "#plans";
+    REQUIRE(has_plans);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "after the move"}})["ok"] == true);
+    alice.wait("sent", [](const json& e) { return e["event"] == "event_send_status" && e["status"] == "sent"; });
+}

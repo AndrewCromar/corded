@@ -290,6 +290,17 @@ void Session::disconnect(const std::string& reason) {
     drop_connection(reason);
 }
 
+void Session::move_to(std::string host, std::string port) {
+    drop_connection("the server's address was changed");
+    host_ = std::move(host);
+    port_ = std::move(port);
+    json j = server_json();
+    j["event"] = "server_info";
+    emit(std::move(j));
+    want_connection_ = true;
+    start_connect();
+}
+
 // Applies what a connect command or invite link says, then (re)connects.
 void Session::connect(uint64_t req, const json& cmd) {
     // An explicit fingerprint (from an invite) must match. "reset_pin" accepts
@@ -823,6 +834,35 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                 if (entry.value("id", int64_t{0}) != id) kept.push_back(entry);
             save_servers(kept);
             emit({{"event", "server_removed"}, {"server_id", id}});
+            ok(req);
+            return;
+        }
+        if (name == "move_server") {
+            // A server that moved to another machine: this device keeps its
+            // chats and keys and connects at the new address. What answers
+            // there must show the identity saved for this server.
+            int64_t id = cmd.at("server_id").get<int64_t>();
+            std::string host = cmd.at("host").get<std::string>();
+            std::string port = cmd.at("port").is_string() ? cmd.at("port").get<std::string>()
+                                                          : std::to_string(cmd.at("port").get<int>());
+            auto it = sessions_.find(id);
+            if (it == sessions_.end() || host.empty() || port.empty()) {
+                fail(req, "not_found", "unknown server, or no address given");
+                return;
+            }
+            for (auto& [other, s] : sessions_)
+                if (other != id && s->host() == host && s->port() == port) {
+                    fail(req, "name_taken", "another of your servers is already at that address");
+                    return;
+                }
+            json list = load_servers();
+            for (auto& entry : list)
+                if (entry.value("id", int64_t{0}) == id) {
+                    entry["host"] = host;
+                    entry["port"] = port;
+                }
+            save_servers(list);
+            it->second->move_to(host, port);
             ok(req);
             return;
         }
