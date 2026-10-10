@@ -1878,6 +1878,67 @@ TEST_CASE("profiles are shared with the people you talk to and not the server") 
     REQUIRE(name_of_bob(carol) == "Bob the Builder");
 }
 
+TEST_CASE("messages can be searched on the device") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    std::string direct = alice.cmd({{"cmd", "start_chat"}, {"username", "bob"}})["data"]["room"]["room_id"];
+    bob.have("the direct chat", [&](const json& e) { return e["event"] == "room_updated" && e["room"]["room_id"] == direct; });
+    for (const char* body : {"Pizza on Friday?", "the body field is not the word", "100% sure about pizza_night"})
+        REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", body}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "secret pizza plan"}})["ok"] == true);
+    bob.have_message("secret pizza plan");
+    bob.have_message("100% sure about pizza_night");
+    auto found = [&](Client& c, json cmd) {
+        std::vector<std::string> out;
+        json r = c.cmd(cmd);
+        REQUIRE(r["ok"] == true);
+        for (const auto& e : r["data"]["results"]) out.push_back(e["content"]["body"]);
+        return out;
+    };
+    // Any case, any chat, newest first.
+    auto all = found(bob, {{"cmd", "search"}, {"text", "PIZZA"}});
+    REQUIRE(all.size() == 3);
+    REQUIRE(all[0] == "secret pizza plan");
+    // One chat only.
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "pizza"}, {"room_id", general}}).size() == 2);
+    // The words of the message, not the format around them; and signs that mean something to the database.
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "body"}}) == std::vector<std::string>{"the body field is not the word"});
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "100%"}}).size() == 1);
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "pizza_night"}}).size() == 1);
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "zzz"}}).empty());
+    REQUIRE(bob.cmd({{"cmd", "search"}, {"text", "p"}})["ok"] == false);
+    // A deleted message is not found; an edited one is found by its new words.
+    json tl = alice.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 50}});
+    std::string first, second;
+    for (const auto& e : tl["data"]["events"]) {
+        if (e["content"].value("body", "") == "Pizza on Friday?") first = e["event_id"];
+        if (e["content"].value("body", "") == "the body field is not the word") second = e["event_id"];
+    }
+    REQUIRE(alice.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", first}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "edit_event"}, {"room_id", general}, {"event_id", second}, {"body", "now about burgers"}})["ok"] == true);
+    bob.wait("the edit", [&](const json& e) {
+        return e["event"] == "event_updated" && e["data"]["content"].value("body", "") == "now about burgers";
+    });
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "burgers"}}).size() == 1);
+    REQUIRE(found(bob, {{"cmd", "search"}, {"text", "friday"}}).empty());
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();

@@ -22,6 +22,8 @@
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}
+ *   {"cmd":"search","text":"pizza","room_id":"<optional>","limit":50}   text messages on this
+ *       device containing the words, newest first. Nothing is sent anywhere.
  *   {"cmd":"set_profile","display_name":"Drew","full_name":"...","birthday":"2004-05-17",
  *    "bio":"...","links":["https://..."],"picture":"<base64 of a small JPEG or PNG>"}
  *       what you say about yourself; fields left out stay,

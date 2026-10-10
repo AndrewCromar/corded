@@ -538,6 +538,23 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             ok(req, {{"rooms", std::move(rooms)}});
             return;
         }
+        if (name == "search") {
+            // Looks through the messages on this device. Nothing leaves it:
+            // no server can search what it cannot read.
+            std::string text = cmd.at("text").get<std::string>();
+            if (text.size() < 2 || text.size() > 200) {
+                fail(req, "invalid_argument", "search for at least two characters");
+                return;
+            }
+            Bytes room_id = cmd.contains("room_id") ? need_b64(cmd, "room_id", 16) : Bytes{};
+            json results = json::array();
+            for (const auto& e : vault_.search(text, room_id, cmd.value("limit", 50u))) {
+                Session* owner = session_for_room(e.room_id);
+                if (owner) results.push_back(owner->describe_event(e));
+            }
+            ok(req, {{"text", text}, {"results", std::move(results)}});
+            return;
+        }
         if (name == "set_profile") {
             // Changes what this person says about themselves; fields left out
             // stay as they were, and an empty string clears one.

@@ -588,6 +588,39 @@ std::vector<EventRow> Vault::timeline(ByteView room_id, uint32_t limit, uint64_t
     return out;
 }
 
+std::vector<EventRow> Vault::search(const std::string& text, ByteView room_id, uint32_t limit) {
+    // LIKE narrows the candidates inside the encrypted database; the message
+    // text itself is then checked, since LIKE also matches the JSON around it.
+    std::string pattern = "%";
+    for (char ch : text) {
+        if (ch == '%' || ch == '_' || ch == '\\') pattern += '\\';
+        pattern += ch;
+    }
+    pattern += "%";
+    std::string sql = std::string("SELECT ") + kEventColumns +
+                      " FROM events WHERE type = 'm.text' AND status = 'ok' AND seq IS NOT NULL "
+                      "AND (?2 = 0 OR room_id = ?3) "
+                      "AND (content LIKE ?1 ESCAPE '\\' OR edited_content LIKE ?1 ESCAPE '\\') "
+                      "ORDER BY origin_ts DESC LIMIT 2000";
+    auto st = db_.prepare(sql.c_str());
+    st.bind(1, pattern).bind(2, static_cast<int64_t>(room_id.empty() ? 0 : 1));
+    if (room_id.empty()) st.bind_null(3);
+    else st.bind(3, room_id);
+    auto lower = [](std::string s) {
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    const std::string wanted = lower(text);
+    std::vector<EventRow> out;
+    while (out.size() < limit && st.step()) {
+        EventRow e = read_event(st);
+        json content = json::parse(e.edited_content.empty() ? e.content : e.edited_content, nullptr, false);
+        if (!content.is_object() || !content.value("body", json()).is_string()) continue;
+        if (lower(content["body"].get<std::string>()).find(wanted) != std::string::npos) out.push_back(std::move(e));
+    }
+    return out;
+}
+
 std::vector<EventRow> Vault::related(ByteView room_id, ByteView target, const std::string& kind) {
     std::string sql = std::string("SELECT ") + kEventColumns +
                       " FROM events WHERE room_id = ?1 AND event_id IN (SELECT event_id FROM relations "

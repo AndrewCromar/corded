@@ -54,6 +54,7 @@ public:
     void resume();                                 // reconnect after unlock
     void send_presence();                          // tell the server how present this device is
     void share_profile_everywhere();               // send our profile to every chat on this server
+    json describe_event(const EventRow& e) { return event_json(e); }
     void disconnect(const std::string& reason);
     void run_command(uint64_t req, const std::string& name, const json& cmd);
     void emit_rooms();
