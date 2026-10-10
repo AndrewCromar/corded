@@ -146,7 +146,8 @@ Talking:
 | `/share-history on` or `off` | Whether your client shares earlier messages with newcomers who ask |
 | `/recovery-key` | Shows the key for setting up another device as you |
 | `/nick <name>` | Sets your display name on this server (`/nick` alone clears it). Your username stays your fixed handle |
-| `/members`, `/roles` | Lists the server's members and roles. The last row of the chat list, `-- members --`, opens the same list as a page with the commands for managing people |
+| `/members`, `/roles` | `/members` opens the Members page (also the `-- members --` row of the chat list) with the commands for managing people; `/roles` lists the roles |
+| `/receipts on\|off` | Whether others see what you have read. While you type, others in the chat see "<you> is typing..."; under the last message someone has read, you see "read by <them>" |
 | `/help` | Shows the command list |
 | `/exit` or `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
@@ -166,7 +167,7 @@ the matching permission:
 | `/role delete <name>` | Deletes a role |
 | `/delete 12` or `/remove` | With `manage_messages`: deletes someone else's message, by number or the latest |
 | `/invite [uses]` | Makes an invite link |
-| `/settings`, `/set <name> <value>` | Shows or changes the server's settings (needs `manage_server`; scope is owner only) |
+| `/settings`, `/set <name> <value>` | `/settings` opens the Settings page (also the `-- settings --` row): your own settings, and the server's settings and status if you have `manage_server`. `/set` changes a server setting (scope is owner only) |
 | `/status` | Version, uptime, members, storage used |
 | `/reboot` | Restarts the server program; everyone reconnects by themselves |
 | `/setnick <user> <name>` | Changes someone else's display name (needs `manage_nicknames`) |
@@ -284,6 +285,7 @@ It does not, yet:
 - [Decisions](master_plan/02-decisions.md): choices made and gaps found in the blueprint
 - [Feature roadmap](master_plan/03-feature-roadmap.md): threads, replies, reactions and the rest
 - [Community model](master_plan/04-community-model.md): one server is one community; the change plan
+- [The graphical client, Android first](master_plan/06-gui-and-android.md): how the GUI will be built and in what order
 - [Operations and platforms](master_plan/05-operations-and-platforms.md): remote administration, several devices, Windows and mobile, a browser client
 - [Stage plans](master_plan/stages/): the detailed plan for each stage
 

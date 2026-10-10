@@ -116,16 +116,26 @@ do beyond storing the event, and where the groundwork is laid.
 - **Core.** Nothing. Fetching is a frontend policy and off by default, because fetching a
   URL reveals the sender's IP address to that site.
 
-### Typing indicators (F5)
-- **Events.** Ephemeral `m.typing`, encrypted with the room's group session.
-- **Server.** Route ephemeral frames to connected members and drop them (step 2.9).
-- **Core.** A per-room timer map; no vault writes.
+### Typing indicators (F5, built)
+- **As built.** A short-lived `Ephemeral` frame naming the room; the server passes it to
+  the room's connected members and stores nothing. The core sends at most one every three
+  seconds per room and reports `typing` events to the frontend.
+- **What the server learns.** That a person is typing in a room, at that moment. It
+  already knows who sends to which room, so this adds timing, not relationships. The
+  original plan was to encrypt typing notices with the room's group session; that comes
+  with sender keys (C8), when a notice no longer costs one encryption per recipient.
+- **Core.** No vault writes.
 
-### Read receipts (F5)
-- **Events.** `m.receipt` with relation `reference` to the last read event. Private by
-  default (sent only to the user's own devices); shared if the user opts in.
-- **Server.** Nothing beyond routing.
-- **Core.** A read marker per room, unread counts, and per-event "read by" when shared.
+### Read receipts (F5, built)
+- **Events.** `m.receipt` with relation `reference` to the last read message, sent to the
+  room as an encrypted event, so the server cannot tell who has read what. Receipts are
+  kept by the server for a week at most and never appear in a timeline.
+- **Sharing.** On by default, with a per-client switch (`set_read_receipts`). With it off,
+  the client still remembers its own place but tells nobody. This differs from the first
+  plan (private by default); the owner asked for the data to be there for GUIs to show.
+- **Core.** One read marker per person per room in the vault; `receipt` events and
+  `fetch_receipts` for frontends. Unread counts derived from the person's own marker are
+  the next step (see [06-gui-and-android.md](06-gui-and-android.md), section 2).
 
 ### Presence (F5)
 - **Events.** Ephemeral `m.presence`, sent only to rooms the user chooses.
@@ -239,9 +249,11 @@ test:
 | Moderator deletion | `m.redaction` honoured from members whose role grants `manage_messages` | none |
 | Disappearing messages | `expires_at` on an event; `m.room.retention` state event for a whole chat | an expiry time on the send frame, so the server can drop its copy (as this document planned) |
 | Custom event types | passed through to frontends marked as unknown | none |
+| Typing indicators | short-lived frame, relayed and never stored | a new frame the server relays |
+| Read receipts | `m.receipt` with `reference` relation, encrypted like any message | none |
 
-Not yet built: mentions, attachments, link previews, typing indicators, read receipts,
-presence, pins, polls, multi-device.
+Not yet built: mentions, attachments, link previews, presence, pins, polls. Several
+devices per person are built (see 05).
 
 ## 5. Design obligations this places on the core stages
 

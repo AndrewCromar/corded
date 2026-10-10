@@ -159,8 +159,10 @@ portable C++ with a plain C interface, and that is exactly what it was designed 
 So everything except iOS can be shipped without paying anyone. iOS for other people needs
 the yearly Apple fee; that is Apple's rule, not a technical limit.
 
-Order of work (step C14): a Windows build of the core and terminal client first, since
-the owner's laptop runs Windows; then the GUI on desktop; then Android; then macOS and iOS.
+Order of work (step C14): a Windows build of the core and terminal client first (done);
+then the GUI, with Android ahead of the desktop at the owner's request; then Windows
+desktop, macOS and iOS. The GUI has its own plan:
+[06-gui-and-android.md](06-gui-and-android.md).
 
 ## 4. A browser client (D-39)
 
