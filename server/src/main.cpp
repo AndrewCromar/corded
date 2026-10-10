@@ -1382,7 +1382,24 @@ static bool run_server(const corded::server::Options& opt) {
     return server.restart_requested();
 }
 
+// Where this program was started from, noted before anything can replace it.
+static std::string g_program_path;
+
 int main(int argc, char** argv) {
+#ifndef _WIN32
+    {
+        char buf[4096];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+        if (n > 0) {
+            g_program_path.assign(buf, static_cast<size_t>(n));
+            // After an update the link reads "... (deleted)"; the path itself is what we want.
+            const std::string gone = " (deleted)";
+            if (g_program_path.size() > gone.size() &&
+                g_program_path.compare(g_program_path.size() - gone.size(), gone.size(), gone) == 0)
+                g_program_path.resize(g_program_path.size() - gone.size());
+        }
+    }
+#endif
     corded::server::Options opt;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -1457,6 +1474,9 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
         _execv(argv[0], argv);
 #else
+        // The program's path as it was at start, so that a newer build put in
+        // its place is what comes up. Falls back to the running copy.
+        if (!g_program_path.empty()) execv(g_program_path.c_str(), argv);
         execv("/proc/self/exe", argv);
 #endif
         spdlog::critical("could not restart: {}", std::strerror(errno));
