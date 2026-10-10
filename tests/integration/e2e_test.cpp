@@ -2217,3 +2217,67 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
     });
     REQUIRE(std::filesystem::is_empty(blobs));
 }
+
+TEST_CASE("a task-list channel: anyone who can write adds tasks and ticks them") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+    }
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "chores"}, {"type", "whiteboard"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "create_channel"}, {"name", "chores"}, {"type", "tasks"}})["ok"] == true);
+    auto is_chores = [](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["title"] == "#chores" && e["room"]["members"].size() == 2;
+    };
+    std::string chores = alice.have("the task list", is_chores)["room"]["room_id"];
+    REQUIRE(bob.have("the task list", is_chores)["room"]["channel_type"] == "tasks");
+
+    std::string task = alice.cmd({{"cmd", "add_task"}, {"room_id", chores}, {"body", "water the plants"}})["data"]["event_id"];
+    json seen = bob.have("the task", [&](const json& e) {
+        return e["event"] == "event_received" && e["data"]["event_id"] == task;
+    })["data"];
+    REQUIRE(seen["type"] == "m.task");
+    REQUIRE(seen["content"]["body"] == "water the plants");
+    REQUIRE(seen["task"]["done"] == false);
+
+    // Bob ticks a task Alice added; both see it done, and who did it.
+    REQUIRE(bob.cmd({{"cmd", "set_task_done"}, {"room_id", chores}, {"event_id", task}})["ok"] == true);
+    auto done_is = [&](bool done) {
+        return [&, done](const json& e) {
+            return e["event"] == "event_updated" && e["data"]["event_id"] == task && e["data"]["task"]["done"] == done &&
+                   e["data"]["task"].contains("by_name");
+        };
+    };
+    REQUIRE(alice.wait("the tick", done_is(true))["data"]["task"]["by_name"] == "bob");
+    bob.have("his own tick", done_is(true));
+    // A tick is not a message: it leaves nothing unread.
+    for (const auto& r : alice.cmd({{"cmd", "list_rooms"}})["data"]["rooms"])
+        if (r["room_id"] == chores) REQUIRE(r["unread"] == 0);
+
+    // Alice takes the tick back, and rewords her task; the newest tick decides.
+    REQUIRE(alice.cmd({{"cmd", "set_task_done"}, {"room_id", chores}, {"event_id", task}, {"done", false}})["ok"] == true);
+    bob.wait("the tick taken back", done_is(false));
+    REQUIRE(alice.cmd({{"cmd", "edit_event"}, {"room_id", chores}, {"event_id", task}, {"body", "water the ferns"}})["ok"] == true);
+    bob.wait("the new wording", [&](const json& e) {
+        return e["event"] == "event_updated" && e["data"]["event_id"] == task &&
+               e["data"]["content"].value("body", "") == "water the ferns";
+    });
+    json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", chores}, {"limit", 50}});
+    bool found = false;
+    for (const auto& e : tl["data"]["events"])
+        if (e["event_id"] == task) {
+            found = true;
+            REQUIRE(e["task"]["done"] == false);
+            REQUIRE(e["content"]["body"] == "water the ferns");
+        }
+    REQUIRE(found);
+    // Only a task can be ticked.
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", chores}, {"body", "hello"}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "set_task_done"}, {"room_id", chores}, {"event_id", "AAAAAAAAAAAAAAAAAAAAAA=="}})["ok"] == false);
+}

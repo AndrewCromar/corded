@@ -692,7 +692,7 @@ Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
     auto st = db_.prepare(
         "SELECT event_id FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
-        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote') "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
         "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq LIMIT 1");
     st.bind(1, room_id).bind(2, user_id);
@@ -702,7 +702,7 @@ Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
 std::optional<uint64_t> Vault::last_from_others(ByteView room_id, ByteView user_id) {
     auto st = db_.prepare(
         "SELECT seq FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
-        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote') "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
         "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq DESC LIMIT 1");
     st.bind(1, room_id).bind(2, user_id);
@@ -716,7 +716,7 @@ uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
     auto st = db_.prepare(
         "SELECT COUNT(*) FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
-        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote') "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
         "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0)");
     st.bind(1, room_id).bind(2, user_id);

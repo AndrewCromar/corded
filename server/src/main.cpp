@@ -954,7 +954,11 @@ private:
             c.fail(rid, err::NameTaken, "a channel with that name already exists");
             return;
         }
-        Bytes room_id = storage_.create_channel(q.name);
+        if (!q.channel_type.empty() && q.channel_type != "tasks") {
+            c.fail(rid, err::Malformed, "this server does not know that kind of channel");
+            return;
+        }
+        Bytes room_id = storage_.create_channel(q.name, q.channel_type);
         broadcast_state();
         c.reply(rid, storage_.room_info(room_id));
     }

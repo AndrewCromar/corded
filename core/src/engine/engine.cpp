@@ -47,7 +47,8 @@ bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
            type == "m.history.share" || type == "m.receipt" || type == "m.room.pin" || type == "m.profile" ||
-           type == "m.poll" || type == "m.poll.vote" || type == "m.file";
+           type == "m.poll" || type == "m.poll.vote" || type == "m.file" || type == "m.task" ||
+           type == "m.task.done";
 }
 
 // The largest file this client will send or fetch. It is held in memory whole
@@ -329,6 +330,8 @@ Session::json Session::room_json(const RoomRow& room) {
             {"pinned", pins(room.room_id)},
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
             {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
+            // How a channel is laid out: "" for messages, "tasks" for a task list.
+            {"channel_type", vault_.meta("channel_type:" + b64(room.room_id)).value_or("")},
             {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
             {"first_unread", b64(vault_.first_unread(room.room_id, to_bytes(vault_.identity().user.pk)))},
             {"members", std::move(members)}};
@@ -380,6 +383,20 @@ Session::json Session::event_json(const EventRow& e) {
     // How many messages hang off this one as a thread.
     j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
+    // A task is done or not according to the newest tick anyone gave it.
+    if (e.type == "m.task") {
+        json task = {{"done", false}};
+        for (const auto& tick : vault_.related(e.room_id, e.event_id, "task")) {
+            if (tick.type != "m.task.done" || tick.status == "redacted" || tick.status == "undecryptable") continue;
+            json c = json::parse(tick.content, nullptr, false);
+            if (!c.is_object()) continue;
+            task = {{"done", c.value("done", false)}, {"by", b64(tick.sender_user)}, {"at", tick.origin_ts}};
+            if (auto room = vault_.room(e.room_id))
+                for (const auto& m : room->members)
+                    if (m.user_id == tick.sender_user) task["by_name"] = m.display();
+        }
+        j["task"] = std::move(task);
+    }
     if (!e.rel_kind.empty()) {
         j["relation"] = {{"kind", e.rel_kind}, {"target", b64(e.rel_target)}};
         if (!e.rel_key.empty()) j["relation"]["key"] = e.rel_key;
@@ -1000,6 +1017,25 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                                  {"relation", {{"kind", "redact"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "send_event") {
             cmd_send_event(req, cmd);
+        } else if (name == "add_task") {
+            // A row in a task list. Ticking it is a separate event, so anyone
+            // who may write in the channel can tick a task someone else added.
+            std::string body = cmd.at("body").get<std::string>();
+            share_profile(need_b64(cmd, "room_id", 16), false);
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.task"},
+                                 {"content", {{"body", body}}},
+                                 {"fallback_text", "added a task: " + body}});
+        } else if (name == "set_task_done") {
+            auto task = vault_.event(need_b64(cmd, "room_id", 16), need_b64(cmd, "event_id", 16));
+            if (!task || task->type != "m.task" || task->status == "redacted") {
+                fail(req, "not_found", "there is no such task");
+                return;
+            }
+            cmd_send_event(req, {{"room_id", cmd.at("room_id")},
+                                 {"type", "m.task.done"},
+                                 {"content", {{"done", cmd.value("done", true)}}},
+                                 {"relation", {{"kind", "task"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "send_file") {
             cmd_send_file(req, cmd);
         } else if (name == "download_file") {
@@ -1185,6 +1221,7 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
     } else if (name == "create_channel") {
         wire::CreateChannelT q;
         q.name = cmd.at("name").get<std::string>();
+        q.channel_type = cmd.value("type", std::string{});
         simple_request(req, std::move(q));
     } else if (name == "rename_channel") {
         wire::UpdateChannelT q;
@@ -1498,6 +1535,12 @@ void Session::apply_relation(const EventRow& e) {
             emit({{"event", "event_updated"}, {"room_id", b64(e.room_id)}, {"data", event_json(*root)}});
         return;
     }
+    if (e.rel_kind == "task") {
+        // Someone ticked a task, or took the tick back.
+        if (auto task = vault_.event(e.room_id, e.rel_target))
+            emit({{"event", "event_updated"}, {"room_id", b64(e.room_id)}, {"data", event_json(*task)}});
+        return;
+    }
     if (e.rel_kind != "replace" && e.rel_kind != "redact") return;
     auto target = vault_.event(e.room_id, e.rel_target);
     if (!target) return;
@@ -1507,7 +1550,7 @@ void Session::apply_relation(const EventRow& e) {
     }
     if (target->status == "redacted" || target->status == "undecryptable") return;
     if (e.rel_kind == "replace") {
-        if (e.type != "m.edit" || target->type != "m.text") return;
+        if (e.type != "m.edit" || (target->type != "m.text" && target->type != "m.task")) return;
         vault_.set_edited_content(e.room_id, e.rel_target, e.content);
     } else {
         if (e.type != "m.redaction") return;
@@ -2428,6 +2471,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
         vault_.set_meta("archived:" + b64(info.room_id), info.archived ? "1" : "0");
+        vault_.set_meta("channel_type:" + b64(info.room_id), info.channel_type);
         tx.commit();
     }
     // New to this room: ask whether anyone will share what was said before.

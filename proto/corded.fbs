@@ -58,6 +58,7 @@ table RoomInfo {
   kind: ubyte; name: string;
   nsfw: bool;   // channels only: clients warn before showing it
   archived: bool;   // channels only: kept to read, closed to writing
+  channel_type: string;   // channels only: empty for messages, "tasks" for a task list
 }
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
@@ -98,7 +99,7 @@ table NewRole { name: string; permissions: uint64; }
 table EditRole { role_id: uint32; name: string; permissions: uint64; }
 table RemoveRole { role_id: uint32; }
 table GrantRole { user_id: [ubyte]; role_id: uint32; assign: bool; }
-table CreateChannel { name: string; }
+table CreateChannel { name: string; channel_type: string; }
 table UpdateChannel { room_id: [ubyte]; name: string; }
 table DeleteChannel { room_id: [ubyte]; }
 // Per-channel exception for one role: bits in `allow` are granted there, bits in

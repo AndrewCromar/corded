@@ -126,6 +126,11 @@ CREATE TABLE IF NOT EXISTS blobs (
             db_.exec("ALTER TABLE rooms ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
         }
         try {
+            db_.exec("SELECT channel_type FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN channel_type TEXT NOT NULL DEFAULT ''");
+        }
+        try {
             db_.exec("SELECT nsfw FROM rooms LIMIT 0");
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE rooms ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0");
@@ -544,11 +549,12 @@ CREATE TABLE IF NOT EXISTS blobs (
         while (st.step()) out.push_back(st.blob(0));
         return out;
     }
-    Bytes create_channel(const std::string& name) {
+    // The type says how clients lay the channel out: messages, or a task list.
+    Bytes create_channel(const std::string& name, const std::string& type = "") {
         Bytes room_id = random_bytes(16);
-        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct, kind, name) "
-                              "VALUES (?, ?, 0, 0, ?)");
-        st.bind(1, room_id).bind(2, now_ms()).bind(3, name).exec();
+        auto st = db_.prepare("INSERT INTO rooms (room_id, created_at, is_direct, kind, name, channel_type) "
+                              "VALUES (?, ?, 0, 0, ?, ?)");
+        st.bind(1, room_id).bind(2, now_ms()).bind(3, name).bind(4, type).exec();
         return room_id;
     }
     void set_channel_archived(ByteView room_id, bool archived) {
@@ -620,7 +626,8 @@ CREATE TABLE IF NOT EXISTS blobs (
         wire::RoomInfoT info;
         info.room_id = to_bytes(room_id);
         {
-            auto st = db_.prepare("SELECT created_at, kind, name, nsfw, archived FROM rooms WHERE room_id = ?");
+            auto st = db_.prepare(
+                "SELECT created_at, kind, name, nsfw, archived, channel_type FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
@@ -629,6 +636,7 @@ CREATE TABLE IF NOT EXISTS blobs (
                 info.name = st.text(2);
                 info.nsfw = st.i64(3) != 0;
                 info.archived = st.i64(4) != 0;
+                info.channel_type = st.text(5);
             }
         }
         if (info.kind == kChannel) {
