@@ -457,6 +457,17 @@ TEST_CASE("a second user cannot take an existing username") {
         return e["event"] == "connection_state" && e["state"] == "disconnected" && e.contains("detail");
     });
     REQUIRE(state["detail"].get<std::string>().find("taken") != std::string::npos);
+
+    // Picking another name tries again by itself and gets in.
+    REQUIRE(second.cmd({{"cmd", "set_username"}, {"username", "Not Valid!"}})["ok"] == false);
+    REQUIRE(second.cmd({{"cmd", "set_username"}, {"username", "dave2"}})["ok"] == true);
+    second.wait_live();
+    REQUIRE(second.cmd({{"cmd", "status"}})["data"]["username"] == "dave2");
+    json members = first.cmd({{"cmd", "member_list"}})["data"]["members"];
+    REQUIRE(members.size() == 2);
+    // Once a server knows you by a name, it stays.
+    REQUIRE(second.cmd({{"cmd", "set_username"}, {"username", "dave3"}})["ok"] == false);
+    REQUIRE(first.cmd({{"cmd", "set_username"}, {"username", "david"}})["ok"] == false);
 }
 
 TEST_CASE("a client refuses a server whose identity has changed") {

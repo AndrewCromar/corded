@@ -82,6 +82,7 @@ public:
     db::Database& db() { return db_; }
     const crypto::Identity& identity() const { return identity_; }
     const std::string& username() const { return username_; }
+    void set_username(const std::string& username);
 
     std::optional<std::string> meta(const std::string& key);
     void set_meta(const std::string& key, const std::string& value);

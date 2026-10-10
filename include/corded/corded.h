@@ -18,6 +18,7 @@
  * Commands (JSON objects passed to corded_command, "cmd" names the command):
  *   {"cmd":"status"}
  *   {"cmd":"list_servers"}
+ *   {"cmd":"set_username","username":"newname"}   only before any server has accepted you
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}

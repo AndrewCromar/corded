@@ -178,6 +178,12 @@ private:
         if (kind == "vault_state") {
             if (ev.value("state", "") == "unlocked") {
                 username_ = ev.value("username", "");
+                // --name on an existing vault: ask to use it. The core refuses if a
+                // server already knows this vault by its old name.
+                if (!name_.empty() && name_ != username_ && !rename_tried_) {
+                    rename_tried_ = true;
+                    command({{"cmd", "set_username"}, {"username", name_}});
+                }
                 phase_ = 1;
                 input_->TakeFocus();
                 if (!join_link_.empty()) command({{"cmd", "connect"}, {"link", join_link_}});
@@ -190,8 +196,12 @@ private:
             if (ev.contains("server")) st.address = ev.value("server", "");
             if (ev.contains("fingerprint")) st.fingerprint = ev.value("fingerprint", "");
             if (current_server_ == 0) current_server_ = sid;
-            if (ev.contains("detail"))
+            if (ev.contains("detail")) {
                 notice_ = (sid == current_server_ ? "" : server_label(sid) + ": ") + ev.value("detail", "");
+                // Say it in the client's own terms.
+                auto hint = notice_.find("(set_username)");
+                if (hint != std::string::npos) notice_.replace(hint, 14, "with /username <name>");
+            }
             else if (sid == current_server_ && st.connection == "live") notice_.clear();
             apply_current();
         } else if (kind == "room_updated") {
@@ -758,6 +768,8 @@ private:
                 json c = {{"cmd", "create_invite"}};
                 if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
                 command(c);
+            } else if (cmd == "/username" && !arg.empty()) {
+                command({{"cmd", "set_username"}, {"username", arg}});
             } else if (cmd == "/recovery-key") {
                 command({{"cmd", "get_recovery_key"}});
             } else if (cmd == "/settings") {
@@ -928,6 +940,7 @@ private:
                               text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
+                              text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
@@ -1080,6 +1093,7 @@ private:
     }
 
     std::string join_link_, recovery_key_;
+    bool rename_tried_ = false;
     std::string vault_dir_, server_, name_, fingerprint_, invite_;
     std::string server_fp_, pin_notice_;
     corded_engine* engine_ = nullptr;

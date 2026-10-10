@@ -465,6 +465,30 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             ok(req);
             return;
         }
+        if (name == "set_username") {
+            // The name is only a claim until a server accepts it, so it can be
+            // changed freely before then, for example when the first choice
+            // turned out to be taken.
+            std::string wanted = cmd.at("username").get<std::string>();
+            for (auto& [id, s] : sessions_)
+                if (s->registered()) {
+                    fail(req, "refused", "you already have an account on a server as " + vault_.username() +
+                                             "; changing the name there is not supported yet");
+                    return;
+                }
+            bool valid = !wanted.empty() && wanted.size() <= 32;
+            for (char ch : wanted)
+                valid = valid && ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-');
+            if (!valid) {
+                fail(req, "invalid_argument", "names use a-z, 0-9, _ and -, up to 32 characters");
+                return;
+            }
+            vault_.set_username(wanted);
+            emit_vault_state();
+            for (auto& [id, s] : sessions_) s->resume();  // try again under the new name
+            ok(req, {{"username", wanted}});
+            return;
+        }
         if (name == "list_servers") {
             json servers = json::array();
             for (auto& [id, s] : sessions_) {
@@ -1383,7 +1407,8 @@ void Session::send_register() {
         auto* e = f.body.AsError();
         if (!e || e->code == kDisconnected) return;
         want_connection_ = false;
-        drop_connection("registration failed: " + e->message);
+        drop_connection("registration failed: " + e->message +
+                        (e->code == err::NameTaken ? "; choose another name (set_username) and it will try again" : ""));
     });
 }
 

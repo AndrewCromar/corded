@@ -287,6 +287,12 @@ void Vault::load_identity() {
     identity_.cert = st.blob(7);
 }
 
+void Vault::set_username(const std::string& username) {
+    auto st = db_.prepare("UPDATE identity SET username = ? WHERE id = 1");
+    st.bind(1, username).exec();
+    username_ = username;
+}
+
 std::optional<std::string> Vault::meta(const std::string& key) {
     auto st = db_.prepare("SELECT value FROM meta WHERE key = ?");
     st.bind(1, key);

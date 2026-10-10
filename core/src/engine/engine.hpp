@@ -48,6 +48,7 @@ public:
     Conn conn() const { return conn_; }
     const char* conn_name() const;
     bool is_admin() const { return is_admin_ && conn_ != Conn::Disconnected; }
+    bool registered() { return meta("registered") == "1"; }
 
     void connect(uint64_t req, const json& cmd);  // applies invite, pin and starts
     void resume();                                 // reconnect after unlock
