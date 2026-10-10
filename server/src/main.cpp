@@ -43,6 +43,8 @@ struct SettingSpec {
 };
 inline constexpr SettingSpec kSettings[] = {
     {"name", "corded", false, false, "what this community is called"},
+    {"description", "", false, false, "a short line about this community, shown under its name"},
+    {"icon", "", false, false, "a small picture for this community (set from the app)"},
     {"scope", "machine", true, true,
      "who can reach the server: machine (this computer only), network (the local network), internet (anyone)"},
     {"registration", "open", false, false, "who may create an account: open, invite, closed"},
@@ -291,6 +293,15 @@ public:
             return false;
         };
         if (key == "name") return (value.empty() || value.size() > 64) ? "a name is 1 to 64 characters" : "";
+        if (key == "description") return value.size() > 200 ? "a description is at most 200 characters" : "";
+        if (key == "icon") {
+            // A small picture as base64, shrunk by the client that sets it.
+            if (value.size() > 40 * 1024) return "the picture is too large; shrink it to about 128 pixels";
+            if (value.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") !=
+                std::string::npos)
+                return "the picture must be base64";
+            return "";
+        }
         if (key == "scope") return one_of({"machine", "network", "internet"}) ? "" : "use machine, network or internet";
         if (key == "registration") return one_of({"open", "invite", "closed"}) ? "" : "use open, invite or closed";
         if (key == "history_sharing" || key == "housekeeping") return one_of({"on", "off"}) ? "" : "use on or off";
@@ -522,6 +533,8 @@ private:
         info.owner = storage_.owner();
         info.my_permissions = storage_.permissions(for_user);
         info.history_sharing = options_.history_sharing;
+        info.description = setting("description");
+        info.icon = setting("icon");
         for (auto& r : storage_.roles()) info.roles.push_back(std::make_unique<wire::RoleT>(std::move(r)));
         return info;
     }
@@ -1069,7 +1082,8 @@ private:
         for (const auto& s : kSettings) {
             auto e = std::make_unique<wire::SettingT>();
             e->key = s.key;
-            e->value = setting(s.key);
+            // The picture goes out with the server's info, not in the settings list.
+            e->value = std::string(s.key) == "icon" ? (setting("icon").empty() ? "" : "(set)") : setting(s.key);
             e->owner_only = s.owner_only;
             e->needs_restart = s.needs_restart;
             e->description = s.description;

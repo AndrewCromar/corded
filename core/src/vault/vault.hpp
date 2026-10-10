@@ -156,6 +156,10 @@ public:
     // one was newer than what was stored.
     bool set_profile(ByteView user_id, uint64_t version, const std::string& json_text);
     std::optional<std::string> profile(ByteView user_id);
+    // Moves a person's marker back to just before the event at `before_seq`.
+    void rewind_receipt(ByteView room_id, ByteView user_id, uint64_t before_seq);
+    // The first message from someone else after this person's marker; empty if none.
+    Bytes first_unread(ByteView room_id, ByteView user_id);
     // Messages from others that arrived after this person's read marker.
     uint32_t unread(ByteView room_id, ByteView user_id);
     std::vector<OutboxRow> outbox();

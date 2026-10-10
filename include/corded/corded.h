@@ -97,6 +97,8 @@
  *       in a channel this needs manage_messages. Every room carries "pinned": the pinned ids.
  *   {"cmd":"typing","room_id":"..."}                 say "I am typing"; never stored
  *   {"cmd":"mark_read","room_id":"...","event_id":"..."}   read up to this message
+ *   {"cmd":"mark_unread","room_id":"...","event_id":"..."}   unread from this message on, for you
+ *       only. Every room carries "first_unread": where your unread messages start ("" if none).
  *   {"cmd":"fetch_receipts","room_id":"..."}         who has read up to where
  *   {"cmd":"set_read_receipts","enabled":false}      stop telling others what you read
  *   {"cmd":"client_settings"}

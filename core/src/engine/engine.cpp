@@ -300,6 +300,7 @@ Session::json Session::room_json(const RoomRow& room) {
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
             {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
             {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
+            {"first_unread", b64(vault_.first_unread(room.room_id, to_bytes(vault_.identity().user.pk)))},
             {"members", std::move(members)}};
 }
 
@@ -316,6 +317,8 @@ Session::json Session::server_json() {
     return {{"server_id", id_},
             {"address", host_ + ":" + port_},
             {"name", server_name_},
+            {"description", server_description_},
+            {"icon", server_icon_},
             {"is_owner", owner},
             {"history_sharing", history_sharing_},
             {"my_permissions", perm::to_names(my_permissions_)},
@@ -870,6 +873,19 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (moved)
                 if (auto room = vault_.room(room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
             ok(req, {{"sent", moved}});
+        } else if (name == "mark_unread") {
+            // "Unread from this message on": this person's own place moves
+            // back. Nobody else is told; what they saw as read stays read.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            Bytes event_id = need_b64(cmd, "event_id", 16);
+            auto target = vault_.event(room_id, event_id);
+            if (!target || !target->seq) {
+                fail(req, "not_found", "unknown message");
+                return;
+            }
+            vault_.rewind_receipt(room_id, to_bytes(vault_.identity().user.pk), *target->seq);
+            if (auto room = vault_.room(room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
+            ok(req);
         } else if (name == "fetch_receipts") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
             ok(req, {{"room_id", b64(room_id)}, {"receipts", receipts_json(room_id)}});
@@ -1845,6 +1861,8 @@ void Session::on_auth_ok(const wire::AuthOkT& auth) {
 
 void Session::on_server_info(const wire::ServerInfoT& info) {
     server_name_ = info.name;
+    server_description_ = info.description;
+    server_icon_ = info.icon;
     server_owner_ = info.owner;
     my_permissions_ = info.my_permissions;
     history_sharing_ = info.history_sharing;

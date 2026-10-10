@@ -851,6 +851,17 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
         REQUIRE(alice.cmd({{"cmd", "set_channel_nsfw"}, {"room_id", staff_room}, {"nsfw", false}})["ok"] == true);
         bob.wait("unmarked", nsfw_is(false));
     }
+    // A description and an icon for the server reach everyone.
+    {
+        REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "description"}, {"value", "where the tests hang out"}})["ok"] == true);
+        bob.wait("the description", [](const json& e) {
+            return e["event"] == "server_info" && e.value("description", "") == "where the tests hang out";
+        });
+        REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "icon"}, {"value", std::string(2000, 'A')}})["ok"] == true);
+        bob.wait("the icon", [](const json& e) { return e["event"] == "server_info" && e.value("icon", "").size() == 2000; });
+        REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "icon"}, {"value", "not base64!"}})["ok"] == false);
+        REQUIRE(carol.cmd({{"cmd", "set_setting"}, {"key", "description"}, {"value", "nope"}})["ok"] == false);
+    }
     // An archived channel can still be read, and nobody can write in it, the owner included.
     {
         auto archived_is = [&](bool want) {
@@ -1645,6 +1656,21 @@ TEST_CASE("unread counts and loading older messages a page at a time") {
     // The marker never moves backwards.
     REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[1]}})["data"]["sent"] == false);
     REQUIRE(unread(bob) == 2);
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[6]}})["ok"] == true);
+    REQUIRE(unread(bob) == 0);
+
+    // Marking unread from the third message: five are unread again, starting there; nobody else is told.
+    REQUIRE(bob.cmd({{"cmd", "mark_unread"}, {"room_id", general}, {"event_id", ids[2]}})["ok"] == true);
+    {
+        json rooms = bob.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"])
+            if (r["room_id"] == general) {
+                REQUIRE(r["unread"] == 5);
+                REQUIRE(r["first_unread"] == ids[2]);
+            }
+    }
+    REQUIRE(bob.cmd({{"cmd", "mark_unread"}, {"room_id", general}, {"event_id", ids[0]}})["ok"] == true);
+    REQUIRE(unread(bob) == 7);
     REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[6]}})["ok"] == true);
     REQUIRE(unread(bob) == 0);
 

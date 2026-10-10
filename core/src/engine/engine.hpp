@@ -178,7 +178,7 @@ private:
         uint64_t permissions = 0;
         bool is_everyone = false;
     };
-    std::string server_name_;
+    std::string server_name_, server_description_, server_icon_;
     Bytes server_owner_;
     uint64_t my_permissions_ = 0;
     std::vector<RoleInfo> roles_;

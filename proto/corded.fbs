@@ -68,6 +68,8 @@ table LeaveRoom { room_id: [ubyte]; }
 table ServerInfo {
   name: string; owner: [ubyte]; my_permissions: uint64; roles: [Role];
   history_sharing: bool = true;   // whether newcomers may ask members for old messages
+  description: string;            // a short line about the community
+  icon: string;                   // a small picture as base64, or empty
 }
 // A newcomer asks for messages from before they joined. The server holds none
 // it can read, so it passes the request to members who are online; each of

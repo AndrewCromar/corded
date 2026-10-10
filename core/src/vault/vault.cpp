@@ -675,6 +675,29 @@ bool Vault::set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, u
     return db_.changes() > 0;
 }
 
+void Vault::rewind_receipt(ByteView room_id, ByteView user_id, uint64_t before_seq) {
+    auto del = db_.prepare("DELETE FROM receipts WHERE room_id = ? AND user_id = ?");
+    del.bind(1, room_id).bind(2, user_id).exec();
+    auto prev = db_.prepare("SELECT event_id, seq FROM events WHERE room_id = ? AND seq IS NOT NULL AND seq < ? "
+                            "ORDER BY seq DESC LIMIT 1");
+    prev.bind(1, room_id).bind(2, before_seq);
+    if (!prev.step()) return;  // unread from the very first message
+    Bytes event_id = prev.blob(0);
+    uint64_t seq = prev.u64(1);
+    set_receipt(room_id, user_id, event_id, seq);
+}
+
+Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
+    auto st = db_.prepare(
+        "SELECT event_id FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
+        "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote') "
+        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq LIMIT 1");
+    st.bind(1, room_id).bind(2, user_id);
+    return st.step() ? st.blob(0) : Bytes{};
+}
+
 uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
     // Only what a person would call a message counts: not reactions, edits,
     // membership changes or history handed over by someone else.
