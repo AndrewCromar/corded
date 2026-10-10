@@ -383,6 +383,7 @@ public:
                 if (options_.housekeeping && now_ms() - last_tidy > 3600 * 1000) {
                     last_tidy = now_ms();
                     storage_.housekeeping(options_.retention_days);
+                    storage_.prune_empty_rooms();
                 }
                 auto schedule = parse_schedule(options_.restart_schedule);
                 if (!schedule) continue;
@@ -755,12 +756,15 @@ private:
             c.fail(rid, err::Forbidden, "not a member of that room");
             return;
         }
-        if (storage_.kind(q.room_id) != kGroup) {
-            c.fail(rid, err::Forbidden, "only a group can be left this way");
+        if (storage_.kind(q.room_id) == kChannel) {
+            c.fail(rid, err::Forbidden, "a channel cannot be left; its access is set by roles");
             return;
         }
+        // Leaving takes the chat off the leaver's list only. Whoever is left
+        // keeps it, and their copy of what was said, until they leave too.
         storage_.remove_member(q.room_id, c.user_id);
         announce_room(storage_.room_info(q.room_id), c.user_id);
+        storage_.prune_empty_rooms();
         c.reply(rid, wire::OkT{});
     }
 
@@ -1177,6 +1181,7 @@ private:
         if (!outranks(c, rid, q.user_id)) return;
         drop_connection_of(q.user_id, "this account was removed from the server");
         storage_.remove_account(q.user_id);
+        storage_.prune_empty_rooms();
         spdlog::info("{} removed an account", c.username);
         // Everyone should stop sending to the removed account's devices.
         wire::DevicesChangedT changed;

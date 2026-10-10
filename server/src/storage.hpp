@@ -523,6 +523,29 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         auto st = db_.prepare("UPDATE rooms SET name = ? WHERE room_id = ? AND kind = 0");
         st.bind(1, name).bind(2, room_id).exec();
     }
+    // Removes direct chats and groups that have nobody left in them. A chat
+    // with one person left stays: their client would erase its copy of the
+    // conversation if the room vanished, and that is theirs to decide.
+    int prune_empty_rooms() {
+        std::vector<Bytes> gone;
+        {
+            auto st = db_.prepare(
+                "SELECT r.room_id FROM rooms r WHERE r.kind != 0 AND "
+                "(SELECT COUNT(*) FROM memberships m WHERE m.room_id = r.room_id) = 0");
+            while (st.step()) gone.push_back(st.blob(0));
+        }
+        db::Transaction tx(db_);
+        for (const auto& room_id : gone)
+            for (const char* sql : {"DELETE FROM room_events WHERE room_id = ?",
+                                    "DELETE FROM memberships WHERE room_id = ?",
+                                    "DELETE FROM rooms WHERE room_id = ? AND kind != 0"}) {
+                auto st = db_.prepare(sql);
+                st.bind(1, room_id).exec();
+            }
+        tx.commit();
+        return static_cast<int>(gone.size());
+    }
+
     void delete_channel(ByteView room_id) {
         db::Transaction tx(db_);
         for (const char* sql : {"DELETE FROM room_events WHERE room_id = ?",

@@ -137,6 +137,23 @@ class _ChatScreenState extends State<ChatScreen> {
         if (name == null || name.isEmpty || !mounted) return;
         await attempt(
             context, () => engine.command({'cmd': 'set_room_name', 'room_id': _room, 'name': name}));
+      case 'close':
+        final close = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Close this chat?'),
+            content: const Text('It leaves your list and its messages are removed from this device. '
+                'The other person keeps their copy. Messaging them again starts a new chat.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Close chat')),
+            ],
+          ),
+        );
+        if (close != true || !mounted) return;
+        if (await attempt(context, () => engine.command({'cmd': 'leave_room', 'room_id': _room}))) {
+          navigator.pop();
+        }
       case 'leave':
         final leave = await showDialog<bool>(
           context: context,
@@ -672,6 +689,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text(room.disappearAfter > 0
                         ? 'Disappearing messages: ${_spanName(room.disappearAfter)}'
                         : 'Disappearing messages')),
+                if (room.kind == 'direct')
+                  const PopupMenuItem(value: 'close', child: Text('Close this chat')),
                 if (room.kind == 'group') ...const [
                   PopupMenuItem(value: 'add', child: Text('Add people')),
                   PopupMenuItem(value: 'rename', child: Text('Rename group')),

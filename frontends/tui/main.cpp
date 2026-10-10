@@ -1100,10 +1100,12 @@ private:
             } else if (cmd == "/add" && !arg.empty() && room) {
                 command({{"cmd", "add_member"}, {"room_id", room->id}, {"username", arg}});
             } else if (cmd == "/leave" && room) {
-                // Say goodbye first, while we can still send to the room.
-                command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.room.member"},
-                         {"content", {{"action", "left"}}}});
-                command({{"cmd", "leave_room"}, {"room_id", room->id}});
+                // In a group, say goodbye first, while we can still send to it.
+                if (room->kind == "group")
+                    command({{"cmd", "send_event"}, {"room_id", room->id}, {"type", "m.room.member"},
+                             {"content", {{"action", "left"}}}});
+                if (room->kind == "channel") notice_ = "a channel cannot be left; its access is set by roles";
+                else command({{"cmd", "leave_room"}, {"room_id", room->id}});
             } else if (cmd == "/name" && !arg.empty() && room) {
                 command({{"cmd", "set_room_name"}, {"room_id", room->id}, {"name", arg}});
             } else if (cmd == "/disappear" && !arg.empty() && room) {

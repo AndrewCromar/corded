@@ -1743,6 +1743,41 @@ TEST_CASE("pinned messages") {
     std::string remember = bob.have_message("remember this")["data"]["event_id"];
     REQUIRE(bob.cmd({{"cmd", "pin_event"}, {"room_id", direct}, {"event_id", remember}})["ok"] == true);
     alice.wait("the pin in the direct chat", pins_are(direct, json::array({remember})));
+    // Either side may close a direct chat. It goes from their list only;
+    // the other keeps it until they close it too.
+    REQUIRE(bob.cmd({{"cmd", "leave_room"}, {"room_id", direct}})["ok"] == true);
+    bob.have("gone for bob", [&](const json& e) { return e["event"] == "room_removed" && e["room_id"] == direct; });
+    {
+        json rooms = alice.cmd({{"cmd", "list_rooms"}});
+        bool still = false;
+        for (const auto& r : rooms["data"]["rooms"]) still = still || r["room_id"] == direct;
+        REQUIRE(still);
+    }
+    REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", general}})["ok"] == false);  // not a channel
+    REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", direct}})["ok"] == true);
+    alice.have("gone for alice", [&](const json& e) { return e["event"] == "room_removed" && e["room_id"] == direct; });
+}
+
+TEST_CASE("pins are not messages") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+    }
+    std::string direct = bob.cmd({{"cmd", "start_chat"}, {"username", "alice"}})["data"]["room"]["room_id"];
+    alice.have("the direct chat", [&](const json& e) { return e["event"] == "room_updated" && e["room"]["room_id"] == direct; });
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "remember this"}})["ok"] == true);
+    std::string remember = bob.have_message("remember this")["data"]["event_id"];
+    REQUIRE(bob.cmd({{"cmd", "pin_event"}, {"room_id", direct}, {"event_id", remember}})["ok"] == true);
+    alice.wait("the pin", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == direct && e["room"]["pinned"].size() == 1;
+    });
     // A pin is not a message.
     json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", direct}, {"limit", 50}});
     int texts = 0;
