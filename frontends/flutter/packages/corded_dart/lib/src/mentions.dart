@@ -16,6 +16,5 @@ bool mentionsUser(String body, String username) {
 
 /// Where the mentions are in a message: (start, end) of each "@name".
 List<(int, int)> mentionSpans(String body) => [
-      for (final m in _mention.allMatches(body))
-        (m.start + m.group(1)!.length, m.end),
+      for (final m in _mention.allMatches(body)) (m.start + m.group(1)!.length, m.end),
     ];

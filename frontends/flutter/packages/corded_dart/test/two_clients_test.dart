@@ -8,7 +8,8 @@ import 'dart:io';
 import 'package:corded_dart/corded_dart.dart';
 import 'package:test/test.dart';
 
-Future<T> eventually<T>(T? Function() probe, String what, {Duration timeout = const Duration(seconds: 20)}) async {
+Future<T> eventually<T>(T? Function() probe, String what,
+    {Duration timeout = const Duration(seconds: 20)}) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
     final v = probe();
@@ -71,17 +72,18 @@ void main() {
     await expectLater(bob.command({'cmd': 'create_channel', 'name': 'nope'}), throwsA(isA<CordedError>()));
 
     // A profile reaches the people you talk to, and names follow it.
-    await bob.command({'cmd': 'set_profile', 'display_name': 'Bobby', 'bio': 'hello', 'birthday': '2004-05-17'});
-    await eventually(
-        () => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null, "bob's profile name");
+    await bob
+        .command({'cmd': 'set_profile', 'display_name': 'Bobby', 'bio': 'hello', 'birthday': '2004-05-17'});
+    await eventually(() => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null,
+        "bob's profile name");
     final bobUser = general(aliceStore)!.members.firstWhere((m) => m.username == 'bob').userId;
     final seen = await aliceStore.profile(bobUser);
     expect(seen.displayName, 'Bobby');
     expect(seen.bio, 'hello');
     expect((await bobStore.profile()).birthday, '2004-05-17');
     await bob.command({'cmd': 'set_profile', 'display_name': ''});
-    await eventually(
-        () => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null, 'the name cleared');
+    await eventually(() => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null,
+        'the name cleared');
 
     // Each sees the other online; do not disturb and invisible show through.
     final bobId = general(aliceStore)!.members.firstWhere((m) => m.username == 'bob').userId;
@@ -98,7 +100,11 @@ void main() {
     final aliceServer = aliceStore.servers.values.single, bobServer = bobStore.servers.values.single;
     expect(aliceServer.can('kick_members'), isTrue);
     expect(bobServer.can('kick_members'), isFalse);
-    await alice.command({'cmd': 'create_role', 'name': 'helper', 'permissions': ['kick_members']});
+    await alice.command({
+      'cmd': 'create_role',
+      'name': 'helper',
+      'permissions': ['kick_members']
+    });
     await eventually(() => aliceServer.roles.contains('helper') ? true : null, 'the new role');
     // A role's permissions can be changed without touching its name.
     Role helper() => aliceServer.roleDetails.firstWhere((r) => r.name == 'helper');
@@ -110,22 +116,26 @@ void main() {
       'name': 'helper',
       'permissions': ['kick_members', 'manage_nicknames'],
     });
-    await eventually(() => helper().permissions.contains('manage_nicknames') ? true : null, 'the edited role');
+    await eventually(
+        () => helper().permissions.contains('manage_nicknames') ? true : null, 'the edited role');
     expect(helper().name, 'helper');
     await alice.command({'cmd': 'grant_role', 'username': 'bob', 'role': 'helper', 'grant': true});
     await eventually(() => bobServer.can('kick_members') ? true : null, 'bob may kick now');
     final listed = await alice.command({'cmd': 'member_list'});
-    final members = [for (final m in listed['members'] as List) Member.fromJson((m as Map).cast<String, dynamic>())];
+    final members = [
+      for (final m in listed['members'] as List) Member.fromJson((m as Map).cast<String, dynamic>())
+    ];
     expect(members.firstWhere((m) => m.username == 'bob').roles, ['helper']);
     expect(members.firstWhere((m) => m.username == 'alice').isOwner, isTrue);
     await alice.command({'cmd': 'set_nickname', 'username': 'bob', 'nickname': 'Bobby'});
-    await eventually(
-        () => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null, 'the display name');
+    await eventually(() => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null,
+        'the display name');
     await alice.command({'cmd': 'set_nickname', 'username': 'bob', 'nickname': ''});
+    await eventually(() => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null,
+        'the name restored');
     await eventually(
-        () => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null, 'the name restored');
-    await eventually(
-        () => general(bobStore)!.members.any((m) => m.me && m.displayName == 'bob') ? true : null, 'restored for bob');
+        () => general(bobStore)!.members.any((m) => m.me && m.displayName == 'bob') ? true : null,
+        'restored for bob');
 
     for (var i = 1; i <= 5; i++) {
       await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'message $i'});
@@ -166,11 +176,14 @@ void main() {
     await eventually(() => bobStore.reactions(room.id, last.id)['ok'] == 1 ? true : null, "alice's reaction");
     await eventually(() => aliceStore.myReaction(room.id, last.id, 'ok'), 'her own reaction known');
     await aliceStore.toggleReaction(room.id, last.id, 'ok');
-    await eventually(() => bobStore.reactions(room.id, last.id)['ok'] == null ? true : null, 'reaction taken back');
-    await eventually(() => aliceStore.myReaction(room.id, last.id, 'ok') == null ? true : null, 'gone for alice too');
+    await eventually(
+        () => bobStore.reactions(room.id, last.id)['ok'] == null ? true : null, 'reaction taken back');
+    await eventually(
+        () => aliceStore.myReaction(room.id, last.id, 'ok') == null ? true : null, 'gone for alice too');
     expect(bobStore.reactions(room.id, last.id)['+1'], 1);
 
-    await alice.command({'cmd': 'edit_event', 'room_id': room.id, 'event_id': last.id, 'body': 'message 5, edited'});
+    await alice
+        .command({'cmd': 'edit_event', 'room_id': room.id, 'event_id': last.id, 'body': 'message 5, edited'});
     await eventually(
         () => bobStore.messages(room.id).any((m) => m.body == 'message 5, edited' && m.edited) ? true : null,
         'the edit');
@@ -192,20 +205,23 @@ void main() {
       'reply_to': aliceStore.thread(room.id, last.id).single.id,
     });
     final quoting = await eventually(
-        () => bobStore.thread(room.id, last.id).where((m) => m.body == 'quoting inside the thread').firstOrNull,
+        () =>
+            bobStore.thread(room.id, last.id).where((m) => m.body == 'quoting inside the thread').firstOrNull,
         'the quoting reply');
     expect(quoting.threadRoot, last.id);
     expect(quoting.replyTo, bobStore.thread(room.id, last.id).first.id);
 
     // A reply in a thread can start a thread of its own, to any depth.
     final inner = aliceStore.thread(room.id, last.id).first;
-    await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'one level deeper', 'thread': inner.id});
+    await alice
+        .command({'cmd': 'send_text', 'room_id': room.id, 'body': 'one level deeper', 'thread': inner.id});
     await eventually(() => bobStore.thread(room.id, inner.id).length == 1 ? true : null, 'the nested reply');
     expect(bobStore.thread(room.id, last.id).length, 2); // the outer thread is unchanged
     expect(bobStore.messages(room.id).length, before); // and so is the conversation
     expect(bobStore.threadCount(room.id, bobStore.thread(room.id, last.id).first), 1);
     final deepest = bobStore.thread(room.id, inner.id).single;
-    await bob.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'and deeper still', 'thread': deepest.id});
+    await bob
+        .command({'cmd': 'send_text', 'room_id': room.id, 'body': 'and deeper still', 'thread': deepest.id});
     await eventually(() => aliceStore.thread(room.id, deepest.id).length == 1 ? true : null, 'three levels');
 
     // Both sides hold the conversation in the server's order.
@@ -262,11 +278,13 @@ void main() {
     expect(aliceStore.pollCounts(room.id, poll.id)[1], isNull);
     final alicePoll = aliceStore.messages(room.id).firstWhere((m) => m.isPoll);
     await aliceStore.votePoll(alicePoll, 0);
-    await eventually(() => bobStore.pollCounts(room.id, poll.id)[0] == 2 ? true : null, 'two votes for pizza');
+    await eventually(
+        () => bobStore.pollCounts(room.id, poll.id)[0] == 2 ? true : null, 'two votes for pizza');
     expect(bobStore.pollVoters(room.id, poll.id), 2);
     expect(bobStore.myPollChoices(room.id, poll.id), [0]);
     await bobStore.votePoll(poll, 0); // takes it back
-    await eventually(() => aliceStore.pollCounts(room.id, poll.id)[0] == 1 ? true : null, 'the vote taken back');
+    await eventually(
+        () => aliceStore.pollCounts(room.id, poll.id)[0] == 1 ? true : null, 'the vote taken back');
     expect(aliceStore.pollVoters(room.id, poll.id), 1);
     // Votes are not messages and are not unread.
     expect(bobStore.messages(room.id).where((m) => m.type == 'm.poll.vote'), isEmpty);
@@ -282,7 +300,8 @@ void main() {
 
     // Leaving a server takes it and its chats off this device only.
     await alice.command({'cmd': 'forget_server', 'server_id': aliceServer.id});
-    await eventually(() => aliceStore.servers.isEmpty && aliceStore.rooms.isEmpty ? true : null, 'the server gone');
+    await eventually(
+        () => aliceStore.servers.isEmpty && aliceStore.rooms.isEmpty ? true : null, 'the server gone');
     expect((await alice.command({'cmd': 'list_servers'}))['servers'], isEmpty);
     expect(general(bobStore)!.members.length, 2); // her account is still on the server
 
