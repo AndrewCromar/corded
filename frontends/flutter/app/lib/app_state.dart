@@ -357,6 +357,18 @@ class AppState extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setStringList('muted_rooms', mutedRooms.toList());
   }
 
+  /// The groups in the list of chats that are not as they start out: opened
+  /// when they start closed, or closed when they start open.
+  Set<String> _sectionsFlipped = {};
+
+  bool sectionOpen(String id, {required bool byDefault}) =>
+      _sectionsFlipped.contains(id) ? !byDefault : byDefault;
+
+  Future<void> setSectionOpen(String id, bool open, {required bool byDefault}) async {
+    open == byDefault ? _sectionsFlipped.remove(id) : _sectionsFlipped.add(id);
+    (await SharedPreferences.getInstance()).setStringList('sections_flipped', _sectionsFlipped.toList());
+  }
+
   /// Whether a link you send gets a preview card, which this device fetches.
   bool linkPreviews = true;
 
@@ -403,6 +415,7 @@ class AppState extends ChangeNotifier {
       await dir.create(recursive: true);
       _vaultDir = dir;
       final prefs = await SharedPreferences.getInstance();
+      _sectionsFlipped = (prefs.getStringList('sections_flipped') ?? const []).toSet();
       // If the background service outlived the screen, the core is still
       // running and the service is reading its events; join it as it is.
       final serviceRunning = await Background.running;

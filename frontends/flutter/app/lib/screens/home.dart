@@ -173,10 +173,34 @@ class HomeScreen extends StatelessWidget {
           onLongPress: () => actions(r),
         );
     Widget tile(Room r) => GestureDetector(onSecondaryTap: () => actions(r), child: plainTile(r));
-    Widget heading(String text) => Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(text, style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.primary)),
-        );
+    // Each group of chats folds away under its name. Whether it is open is
+    // remembered on this device, per server.
+    Widget group(String key, String title, List<Room> inside,
+        {bool closed = false, bool faded = false, Widget? whenEmpty}) {
+      final id = '${server?.id ?? ''}/$key';
+      final unread = inside.fold<int>(0, (sum, r) => sum + r.unread);
+      return ExpansionTile(
+        key: ValueKey(id),
+        initiallyExpanded: state.sectionOpen(id, byDefault: !closed),
+        onExpansionChanged: (open) => state.setSectionOpen(id, open, byDefault: !closed),
+        title: Row(children: [
+          Flexible(
+            child: Text(title,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.primary)),
+          ),
+          if (unread > 0) ...[const SizedBox(width: 8), Badge(label: Text('$unread'))],
+        ]),
+        dense: true,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        children: [
+          for (final r in inside) faded ? Opacity(opacity: 0.55, child: tile(r)) : tile(r),
+          if (inside.isEmpty && whenEmpty != null) whenEmpty,
+        ],
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -208,7 +232,11 @@ class HomeScreen extends StatelessWidget {
       drawer: Drawer(
         child: SafeArea(
           child: ListView(children: [
-            heading('Servers'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Text('Servers',
+                  style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.primary)),
+            ),
             for (final s in state.store.servers.values)
               ListTile(
                 leading: ServerIcon(s),
@@ -260,33 +288,19 @@ class HomeScreen extends StatelessWidget {
                 onTap: () =>
                     Navigator.push(context, MaterialPageRoute(builder: (_) => CatchUpScreen(state: state))),
               ),
-            if (pinned.isNotEmpty) heading('Pinned'),
-            ...pinned.map(tile),
+            if (pinned.isNotEmpty) group('pinned', 'Pinned', pinned),
             // The server's own sections, in its order; then the channels in none.
             for (final section in server?.sections ?? const <Section>[])
-              if (channels.any((r) => r.section == section.id)) ...[
-                heading(section.name),
-                ...channels.where((r) => r.section == section.id).map(tile),
-              ],
-            if (loose.isNotEmpty) heading('Channels'),
-            ...loose.map(tile),
-            heading('Direct messages'),
-            ...others.map(tile),
-            if (others.isEmpty)
-              const ListTile(dense: true, title: Text('None yet. Use the button below to message someone.')),
+              if (channels.any((r) => r.section == section.id))
+                group(
+                    's:${section.id}', section.name, channels.where((r) => r.section == section.id).toList()),
+            if (loose.isNotEmpty) group('channels', 'Channels', loose),
+            group('direct', 'Direct messages', others,
+                whenEmpty: const ListTile(
+                    dense: true, title: Text('None yet. Use the button below to message someone.'))),
             // Out of sight until asked for.
-            if (nsfw.isNotEmpty)
-              ExpansionTile(
-                key: const PageStorageKey('hidden-channels'),
-                title: Text('Hidden channels',
-                    style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-                shape: const Border(),
-                collapsedShape: const Border(),
-                children: [for (final r in nsfw) tile(r)],
-              ),
-            if (archived.isNotEmpty) heading('Archived'),
-            for (final r in archived) Opacity(opacity: 0.55, child: tile(r)),
+            if (nsfw.isNotEmpty) group('hidden', 'Hidden channels', nsfw, closed: true),
+            if (archived.isNotEmpty) group('archived', 'Archived', archived, closed: true, faded: true),
             const SizedBox(height: 80),
           ]),
         ),
