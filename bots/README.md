@@ -32,7 +32,7 @@ address.
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
 | `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Its character comes from a "soul" text file; see `soul.example.txt`. Answers when mentioned or in a direct chat. | By the test suite with a stand-in model; not yet with a real one |
-| `birthday_bot.py` | Wishes people a happy birthday from the birthday in their profile. | Not yet run for real |
+| `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite; not yet on a real server |
 
 ```sh
 python3 webhook_bot.py 127.0.0.1:7443 '#development' --secret some-long-word
@@ -40,8 +40,29 @@ curl -X POST localhost:8765/say -H 'X-Corded-Secret: some-long-word' -d '{"text"
 
 python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --model llama3.2
 
-python3 birthday_bot.py 127.0.0.1:7443 '#general' --at 09:00
+python3 birthday_bot.py 127.0.0.1:7443 --channel '#general' --at 09:00
 ```
+
+### The birthday bot
+
+When someone joins, the bot asks them once, in a direct chat, for their
+birthday. They answer there (`05-17`, `17 May`, `2004-05-17` to have their age
+shown) or put it in their profile; an answer in the chat wins. On the day, at
+`--at` by the clock of the machine the bot runs on, it wishes them in the
+direct chat and in `--channel` (`#general` if not given).
+
+In the direct chat it also understands `when`, `forget`, `no` (never ask
+again), `private` (no post in the channel) and `public`. In a channel,
+`!birthdays` lists the next few.
+
+People who were on the server before the bot's first run are not asked, so
+that starting it does not send everyone a message at once; `--greet-existing`
+asks them too. Other bots are never asked. Someone born on 29 February is
+wished on the 28th in other years. If the bot was off at the set time it
+wishes when it is next started that day, and nobody is wished twice in a year.
+
+The birthdays people tell it are kept in `store.json` in the bot's folder, on
+the machine it runs on, and are sent nowhere.
 
 ## Write your own
 
@@ -68,10 +89,49 @@ bot.run()
 ```
 
 A message has `body`, `sender` (the username), `sender_name` (what people
-see), `room_id`, `event_id` and `thread`. Besides `say`, `reply` and `react`
-there are `send_file(room, path, caption)`, `profile_of(user_id)`, the `rooms`
-the bot is in, and `request({...})`, which sends any command the core
-understands and returns its answer.
+see), `room_id`, `event_id`, `thread` (the message whose thread it is in),
+`reply_to` (the message it answers), `mentions_me` (it says `@` and the bot's
+name) and `direct` (it was said in a direct chat with the bot).
+
+| | |
+|---|---|
+| `bot.say(room, text, reply_to=, thread=)` | Send text. A room is its id or its title, like `"#general"`. |
+| `bot.reply(message, text)` | Answer where the message was said. |
+| `bot.dm(username, text)` | Open the direct chat with someone and say something there. Returns the room id. |
+| `bot.react(message, emoji)` | |
+| `bot.send_file(room, path, caption, reply_to=, thread=)` | `thread=` puts the file in the thread under that message. |
+| `bot.typing(room)` | Show "typing" for a few seconds while working. |
+| `bot.recall(event_id)` | A recent message by its id: what `reply_to` and `thread` point at. |
+| `bot.members()`, `bot.profile_of(user_id)`, `bot.rooms` | Who and what the bot can see. |
+| `bot.work(fn, *args)` | Run a job after those already waiting, one at a time (one model, one graphics card). Returns how many are ahead. |
+| `bot.store` | A dictionary kept between runs, in `store.json` in the bot's folder. Call `bot.store.save()` after changing it. |
+| `bot.request({...})` | Any command the core understands; returns its answer. |
+
+More things to hang a function on:
+
+```python
+@bot.on_join
+def welcome(member):                 # someone joined the server
+    bot.dm(member["username"], f"Welcome, {member['display_name']}.")
+
+@bot.on_file
+def got(message):                    # someone sent a file
+    print(message.file["name"], message.file["size"], message.body)
+```
+
+`on_join` is called once for each person who joins after the bot's first run,
+also for those who joined while it was off. The people already there on the
+first run are not counted as joining, and other bots never are.
+
+A bot does not hear other bots (two answering each other would never stop);
+`Bot(..., hear_bots=True)` changes that.
+
+## Leave one running
+
+`birthday-bot.service.example` is a unit for `systemd --user`, which starts
+the bot when the machine does and starts it again if it stops. The steps are
+at the top of that file; it serves for any of the bots with the command
+changed.
 
 ## What a bot can read
 

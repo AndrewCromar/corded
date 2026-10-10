@@ -1,0 +1,25 @@
+# Keeps the birthday bot running: started when the machine starts, started
+# again if it stops. For any other bot, change the command.
+#
+#   1. Change the three paths and the server's address below.
+#   2. cp birthday-bot.service.example ~/.config/systemd/user/birthday-bot.service
+#   3. systemctl --user daemon-reload
+#   4. systemctl --user enable --now birthday-bot
+#   5. loginctl enable-linger "$USER"      (so it runs while you are logged out)
+#
+# What it prints: journalctl --user -u birthday-bot -f
+
+[Unit]
+Description=Corded birthday bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/you/corded/bots
+Environment=CORDED_CLI=/home/you/corded/corded-cli
+ExecStart=/usr/bin/python3 -u birthday_bot.py 127.0.0.1:7443 --channel "#general" --at 09:00 --vault /home/you/corded-bots/birthdays
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
