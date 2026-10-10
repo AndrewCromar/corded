@@ -16,6 +16,8 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'update_launch.dart';
+
 /// Which release this build is, stamped in when it was built ("v0.6.1", or
 /// "v0.6.1-3-gabc1234" for a build made after it). "dev" for a build made by hand.
 const appVersion = String.fromEnvironment('CORDED_VERSION', defaultValue: 'dev');
@@ -210,30 +212,17 @@ Future<void> installUpdate(String path) async {
     if (problem != null || fresh == null || !File('${fresh.path}\\corded_app.exe').existsSync()) {
       throw CordedError('update', 'The update could not be unpacked. ${problem ?? ''}'.trim());
     }
-    // The one helper that is started runs detached, which gives it no window.
-    const quiet = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden'];
     // Windows will not replace a program while it runs: a script waits for
     // this app to end, copies the new files over the old, and starts it again.
     final script = File('${File(path).parent.path}\\apply-update.ps1');
     script.writeAsStringSync(await rootBundle.loadString('assets/apply-update.ps1'));
-    await Process.start(
-        'powershell',
-        [
-          ...quiet,
-          '-File',
-          script.path,
-          '-ProcessId',
-          '$pid',
-          '-Source',
-          fresh.path,
-          '-Target',
-          home.path,
-          '-Start',
-          program.path,
-          '-Log',
-          updateLogPath(),
-        ],
-        mode: ProcessStartMode.detached);
+    await launchWindowsUpdate(
+        script: script.path,
+        appPid: pid,
+        source: fresh.path,
+        target: home.path,
+        start: program.path,
+        log: updateLogPath());
     // The app has to be gone for its files to be replaced. On Windows an
     // ordinary exit can leave the window standing (the first version of this
     // did, and the update waited on an app that never left), so the process

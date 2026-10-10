@@ -194,6 +194,8 @@ jobs:
       # a program that is running (so its file is locked) is replaced once it
       # ends, by the same script the app starts, under the Windows PowerShell
       # that every Windows has.
+      - uses: dart-lang/setup-dart@v1
+
       - name: Check the app's update script
         shell: pwsh
         run: |
@@ -207,12 +209,17 @@ jobs:
           Set-Content (Join-Path $source 'data\new.txt') 'new'
           $running = Start-Process -FilePath (Join-Path $target 'corded_app.exe') -ArgumentList '-n','6','127.0.0.1' -PassThru -WindowStyle Hidden
           $log = Join-Path $work 'update.log'
-          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden `
-            -File frontends\flutter\app\assets\apply-update.ps1 `
-            -ProcessId $running.Id -Source $source -Target $target -Start (Join-Path $target 'corded_app.exe') -Log $log
-          Get-Content $log
-          if ($LASTEXITCODE -ne 0) { throw 'the update script reported a failure' }
-          if (-not (Select-String -Path $log -Pattern 'OK' -Quiet)) { throw 'the log does not end in OK' }
+          # Started exactly as the app starts it: by a program that ends at once.
+          dart frontends\flutter\app\tool\launch_update.dart (Resolve-Path frontends\flutter\app\assets\apply-update.ps1) `
+            $running.Id $source $target (Join-Path $target 'corded_app.exe') $log
+          $global:LASTEXITCODE = 0
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern '  OK$' -Quiet)) { $ok = $true }
+          }
+          if (Test-Path $log) { Get-Content $log } else { 'no log was written: the script never ran' }
+          if (-not $ok) { throw 'the update did not happen' }
           $new = (Get-FileHash (Join-Path $source 'corded_app.exe')).Hash
           $now = (Get-FileHash (Join-Path $target 'corded_app.exe')).Hash
           if ($new -ne $now) { throw 'the program was not replaced' }
