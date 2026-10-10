@@ -4,6 +4,7 @@ import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../platform.dart';
 import '../updater.dart';
 import '../app_state.dart';
 import '../background.dart';
@@ -353,9 +354,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : server.permissions.contains('administrator')
                 ? 'You are an administrator'
                 : 'You are a member';
+    // The page is grouped under a few headings, most-used things first.
+    Widget heading(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+          child: Text(text,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleSmall
+                  ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+        );
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(children: [
+        heading('You'),
         ListTile(
           leading: const Icon(Icons.person_outline),
           title: Text(widget.state.store.username),
@@ -374,28 +385,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onTap: () => Navigator.push(
               context, MaterialPageRoute(builder: (_) => EditProfileScreen(state: widget.state))),
         ),
-        SwitchListTile(
-          secondary: const Icon(Icons.done_all),
-          title: const Text('Read receipts'),
-          subtitle: const Text('Let others see which messages you have read'),
-          value: _settings['send_read_receipts'] != false,
-          onChanged: (v) => _set({'cmd': 'set_read_receipts', 'enabled': v}),
-        ),
-        SwitchListTile(
-          secondary: const Icon(Icons.history),
-          title: const Text('Share earlier messages'),
-          subtitle: const Text('Give newcomers the messages sent before they joined'),
-          value: _settings['share_history'] != false,
-          onChanged: (v) => _set({'cmd': 'set_history_sharing', 'enabled': v}),
-        ),
-        if (widget.state.fingerprintAvailable)
-          SwitchListTile(
-            secondary: const Icon(Icons.fingerprint),
-            title: const Text('Unlock with fingerprint'),
-            subtitle: const Text('Open Corded with your fingerprint instead of typing the passphrase'),
-            value: widget.state.fingerprintUnlock,
-            onChanged: _setFingerprint,
+        if (server != null)
+          ListTile(
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('Your devices'),
+            subtitle: const Text('See what is signed in as you, and sign a device out'),
+            onTap: () => Navigator.push(
+                context, MaterialPageRoute(builder: (_) => DevicesScreen(state: widget.state))),
           ),
+        ListTile(
+          leading: const Icon(Icons.key_outlined),
+          title: const Text('Recovery key'),
+          subtitle: const Text('For setting up another device as you'),
+          onTap: _recoveryKey,
+        ),
+        if (Background.supported || isDesktop) heading('Notifications'),
         if (Background.supported)
           SwitchListTile(
             secondary: const Icon(Icons.notifications_active_outlined),
@@ -411,7 +415,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (mounted) setState(() {});
             },
           ),
-        if (widget.state.backgroundMode)
+        // On a desktop the app itself announces messages while its window is not in front.
+        if (widget.state.backgroundMode || isDesktop)
           SwitchListTile(
             secondary: const Icon(Icons.visibility_outlined),
             title: const Text('Show message text in notifications'),
@@ -422,11 +427,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (mounted) setState(() {});
             },
           ),
-        ListTile(
-          leading: const Icon(Icons.system_update_alt),
-          title: const Text('Check for updates'),
-          subtitle: Text('This is ${appVersion == 'dev' ? 'a build made by hand' : releaseOf(appVersion)}'),
-          onTap: _checkForUpdates,
+        heading('Privacy and security'),
+        SwitchListTile(
+          secondary: const Icon(Icons.done_all),
+          title: const Text('Read receipts'),
+          subtitle: const Text('Let others see which messages you have read'),
+          value: _settings['send_read_receipts'] != false,
+          onChanged: (v) => _set({'cmd': 'set_read_receipts', 'enabled': v}),
+        ),
+        SwitchListTile(
+          secondary: const Icon(Icons.history),
+          title: const Text('Share earlier messages'),
+          subtitle: const Text('Give newcomers the messages sent before they joined'),
+          value: _settings['share_history'] != false,
+          onChanged: (v) => _set({'cmd': 'set_history_sharing', 'enabled': v}),
         ),
         SwitchListTile(
           secondary: const Icon(Icons.link),
@@ -439,6 +453,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (mounted) setState(() {});
           },
         ),
+        if (widget.state.fingerprintAvailable)
+          SwitchListTile(
+            secondary: const Icon(Icons.fingerprint),
+            title: const Text('Unlock with fingerprint'),
+            subtitle: const Text('Open Corded with your fingerprint instead of typing the passphrase'),
+            value: widget.state.fingerprintUnlock,
+            onChanged: _setFingerprint,
+          ),
+        ListTile(
+          leading: const Icon(Icons.lock_outline),
+          title: const Text('Lock'),
+          subtitle: const Text('Ask for the passphrase again'),
+          onTap: () async {
+            final navigator = Navigator.of(context);
+            await widget.state.lock();
+            navigator.popUntil((r) => r.isFirst);
+          },
+        ),
+        heading('Look and feel'),
+        ListTile(
+          leading: const Icon(Icons.add_reaction_outlined),
+          title: const Text('Quick reactions'),
+          subtitle: Text(widget.state.reactionBar.join('  ')),
+          onTap: _reactionBar,
+        ),
         if (Platform.isAndroid)
           ListTile(
             leading: const Icon(Icons.palette_outlined),
@@ -446,27 +485,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: const Text('The colour of the icon on your home screen'),
             onTap: _chooseIcon,
           ),
-        ListTile(
-          leading: const Icon(Icons.add_reaction_outlined),
-          title: const Text('Quick reactions'),
-          subtitle: Text(widget.state.reactionBar.join('  ')),
-          onTap: _reactionBar,
-        ),
-        if (server != null)
-          ListTile(
-            leading: const Icon(Icons.devices_outlined),
-            title: const Text('Your devices'),
-            subtitle: const Text('See what is signed in as you, and sign a device out'),
-            onTap: () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => DevicesScreen(state: widget.state))),
-          ),
-        ListTile(
-          leading: const Icon(Icons.key_outlined),
-          title: const Text('Recovery key'),
-          subtitle: const Text('For setting up another device as you'),
-          onTap: _recoveryKey,
-        ),
-        const Divider(),
+        if (server != null) heading('This server'),
         if (server != null)
           ListTile(
             leading: const Icon(Icons.dns_outlined),
@@ -490,7 +509,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('Leave this server'),
-            subtitle: const Text('Removes it and its chats from this phone. Your account there stays.'),
+            subtitle: const Text('Removes it and its chats from this device. Your account there stays.'),
             onTap: () async {
               final navigator = Navigator.of(context);
               final leave = await showDialog<bool>(
@@ -512,21 +531,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
             },
           ),
+        heading('This app'),
         ListTile(
-          leading: const Icon(Icons.lock_outline),
-          title: const Text('Lock'),
-          subtitle: const Text('Ask for the passphrase again'),
-          onTap: () async {
-            final navigator = Navigator.of(context);
-            await widget.state.lock();
-            navigator.popUntil((r) => r.isFirst);
-          },
-        ),
-        ListTile(
-          leading: Icon(Icons.delete_forever_outlined, color: Theme.of(context).colorScheme.error),
-          title: const Text('Sign out and erase this device'),
-          subtitle: const Text('To start over, or to set this phone up as a different person'),
-          onTap: _signOut,
+          leading: const Icon(Icons.system_update_alt),
+          title: const Text('Check for updates'),
+          subtitle: Text('This is ${appVersion == 'dev' ? 'a build made by hand' : releaseOf(appVersion)}'),
+          onTap: _checkForUpdates,
         ),
         ListTile(
           leading: const Icon(Icons.info_outline),
@@ -534,6 +544,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: Text(
               '${widget.state.engine.version}\nPrototype. Not yet audited; do not rely on it for secrets.'),
           isThreeLine: true,
+        ),
+        ListTile(
+          leading: Icon(Icons.delete_forever_outlined, color: Theme.of(context).colorScheme.error),
+          title: const Text('Sign out and erase this device'),
+          subtitle: const Text('To start over, or to set this device up as a different person'),
+          onTap: _signOut,
         ),
       ]),
     );

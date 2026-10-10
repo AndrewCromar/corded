@@ -157,6 +157,7 @@ class AppState extends ChangeNotifier {
   // app where no one can type into it: the environment says who to be, which
   // server to join and which chat to open. Ordinary builds contain none of this.
   static const _devBuild = bool.fromEnvironment('CORDED_DEV');
+  void Function(String screen)? onDevScreen;
 
   Future<void> _devDrive() async {
     final env = Platform.environment;
@@ -183,6 +184,11 @@ class AppState extends ChangeNotifier {
           stderr.writeln('dev update: signature ok, installing $path');
           await installUpdate(path);
         }
+      }
+      // CORDED_DEV_SCREEN=settings: show that screen, for a picture of it.
+      if (env['CORDED_DEV_SCREEN'] != null) {
+        await Future<void>.delayed(const Duration(seconds: 3));
+        onDevScreen?.call(env['CORDED_DEV_SCREEN']!);
       }
       final open = env['CORDED_DEV_OPEN'];
       for (var i = 0; open != null && i < 20; i++) {

@@ -10,6 +10,7 @@ import 'app_state.dart';
 import 'screens/add_server.dart';
 import 'screens/chat.dart';
 import 'screens/home.dart';
+import 'screens/settings.dart';
 import 'screens/unlock.dart';
 import 'screens/welcome.dart';
 
@@ -62,6 +63,11 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
     // A message somewhere else shows as a banner at the top for a few seconds.
     state.onBanner = _showBanner;
     // A tapped notification leads to its chat, and into its thread if it has one.
+    state.onDevScreen = (screen) {
+      if (screen == 'settings') {
+        _navigator.currentState?.push(MaterialPageRoute(builder: (_) => SettingsScreen(state: state)));
+      }
+    };
     final shot = Platform.environment['CORDED_SCREENSHOT'];
     if (shot != null && shot.isNotEmpty) {
       _camera = Timer.periodic(const Duration(seconds: 3), (_) => _photograph(shot));
