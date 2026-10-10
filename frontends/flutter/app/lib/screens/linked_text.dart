@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 /// One piece of a message: plain words, or a web address.
 typedef TextPiece = ({String text, Uri? link});
 
+final _channelWord = RegExp(r'(^|[^A-Za-z0-9_#-])#([A-Za-z0-9_-]+)');
 final _address = RegExp(r'https?://[^\s<>]+', caseSensitive: false);
 
 /// Splits a message into plain text and web addresses. Punctuation that ends
@@ -30,8 +31,13 @@ List<TextPiece> splitLinks(String text) {
 
 /// Message text in which web addresses can be tapped to open the browser.
 class LinkedText extends StatefulWidget {
-  const LinkedText(this.text, {super.key, this.style, required this.linkColor});
+  const LinkedText(this.text,
+      {super.key, this.style, required this.linkColor, this.channels = const {}, this.onChannel});
   final String text;
+
+  /// Channel names (without the #) the person can open, and where each leads.
+  final Map<String, String> channels;
+  final void Function(String roomId)? onChannel;
   final TextStyle? style;
   final Color linkColor;
 
@@ -54,11 +60,29 @@ class _LinkedTextState extends State<LinkedText> {
   List<TextSpan> _withMentions(String text) {
     final spans = <TextSpan>[];
     var at = 0;
-    for (final (start, end) in mentionSpans(text)) {
+    // "@name" and "#channel", in the order they appear.
+    final marks = <(int, int, String?)>[
+      for (final (start, end) in mentionSpans(text)) (start, end, null),
+      for (final m in _channelWord.allMatches(text))
+        if (widget.channels.containsKey(m.group(2)!.toLowerCase()))
+          (m.start + m.group(1)!.length, m.end, widget.channels[m.group(2)!.toLowerCase()]),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    for (final (start, end, roomId) in marks) {
+      if (start < at) continue;
       if (start > at) spans.add(TextSpan(text: text.substring(at, start)));
+      TapGestureRecognizer? tap;
+      if (roomId != null && widget.onChannel != null) {
+        tap = TapGestureRecognizer()..onTap = () => widget.onChannel!(roomId);
+        _recognizers.add(tap);
+      }
       spans.add(TextSpan(
           text: text.substring(start, end),
-          style: TextStyle(color: widget.linkColor, fontWeight: FontWeight.w600)));
+          recognizer: tap,
+          style: TextStyle(
+              color: widget.linkColor,
+              fontWeight: FontWeight.w600,
+              decoration: roomId != null ? TextDecoration.underline : null,
+              decorationColor: widget.linkColor)));
       at = end;
     }
     if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
@@ -83,7 +107,9 @@ class _LinkedTextState extends State<LinkedText> {
     }
     _recognizers.clear();
     final pieces = splitLinks(widget.text);
-    if (pieces.every((p) => p.link == null) && mentionSpans(widget.text).isEmpty) {
+    if (pieces.every((p) => p.link == null) &&
+        mentionSpans(widget.text).isEmpty &&
+        !_channelWord.hasMatch(widget.text)) {
       return Text(widget.text, style: widget.style);
     }
     return Text.rich(

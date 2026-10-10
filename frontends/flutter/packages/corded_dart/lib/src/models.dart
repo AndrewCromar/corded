@@ -26,6 +26,7 @@ class Room {
   int disappearAfter = 0;
   List<Member> members = const [];
   List<String> pinned = const []; // ids of the pinned messages, oldest pin first
+  bool nsfw = false; // a channel marked so that clients warn before showing it
   int lastActivity = 0;
 
   void apply(Map<String, dynamic> j) {
@@ -34,6 +35,7 @@ class Room {
     kind = j['kind'] as String? ?? kind;
     unread = (j['unread'] as num?)?.toInt() ?? unread;
     disappearAfter = (j['disappear_after'] as num?)?.toInt() ?? disappearAfter;
+    nsfw = j['nsfw'] as bool? ?? nsfw;
     final p = j['pinned'] as List?;
     if (p != null) pinned = p.map((e) => '$e').toList();
     final m = j['members'] as List?;

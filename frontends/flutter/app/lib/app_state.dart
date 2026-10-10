@@ -170,10 +170,14 @@ class AppState extends ChangeNotifier {
   void _shareRoomTitles({bool force = false}) {
     if (!backgroundMode) return;
     final titles = {for (final r in store.rooms.values) r.id: r.title};
-    final key = titles.toString();
+    final key = '$titles ${[
+      for (final r in store.rooms.values)
+        if (r.nsfw) r.id
+    ]}';
     if (!force && key == _sharedTitles) return;
     _sharedTitles = key;
     Background.tell({'rooms': titles});
+    _shareNotificationOptions();
   }
 
   /// Where a tapped notification wants to go, until the app can go there
@@ -228,8 +232,15 @@ class AppState extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setBool('show_message_text', show);
   }
 
-  void _shareNotificationOptions() =>
-      Background.tell({'muted': mutedRooms.toList(), 'show_text': showMessageText, 'me': store.username});
+  void _shareNotificationOptions() => Background.tell({
+        'muted': mutedRooms.toList(),
+        'show_text': showMessageText,
+        'me': store.username,
+        'nsfw': [
+          for (final r in store.rooms.values)
+            if (r.nsfw) r.id
+        ],
+      });
 
   /// With do not disturb on, this phone shows no message notifications.
   void setDoNotDisturb(bool on) => Background.tell(on ? 'dnd_on' : 'dnd_off');

@@ -118,6 +118,16 @@ class _ServerScreenState extends State<ServerScreen> {
             },
           ),
           ListTile(
+            leading: Icon(r.nsfw ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+            title: Text(r.nsfw ? 'Remove the NSFW mark' : 'Mark as NSFW'),
+            subtitle: const Text('People are warned before the channel opens'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _do({'cmd': 'set_channel_nsfw', 'room_id': r.id, 'nsfw': !r.nsfw},
+                  r.nsfw ? 'The NSFW mark was removed.' : 'Marked as NSFW.');
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.edit_outlined),
             title: const Text('Rename'),
             onTap: () async {
@@ -244,7 +254,7 @@ class _ServerScreenState extends State<ServerScreen> {
           for (final r in channels)
             ListTile(
               leading: const Icon(Icons.tag),
-              title: Text(r.title.replaceFirst('#', '')),
+              title: Text(r.title.replaceFirst('#', '') + (r.nsfw ? '  ·  NSFW' : '')),
               trailing: const Icon(Icons.more_vert),
               onTap: () => _channelActions(r),
             ),

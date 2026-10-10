@@ -23,7 +23,7 @@ void backgroundEntry() {
 /// Only messages written by someone else are announced.
 ({String roomId, String title, String body, String payload})? notificationFor(
     Map<String, dynamic> event, Map<String, String> roomTitles,
-    {Set<String> muted = const {}, bool showText = true, String me = ''}) {
+    {Set<String> muted = const {}, bool showText = true, String me = '', Set<String> nsfw = const {}}) {
   if (event['event'] != 'event_received') return null;
   final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
   if (data['type'] != 'm.text' || data['mine'] == true || data['shared_history'] == true) return null;
@@ -43,6 +43,8 @@ void backgroundEntry() {
     if (relation['kind'] == 'thread') 'thread': relation['target'],
   });
   // Hidden text still says who wrote and where, never what.
+  // An NSFW channel's words never appear in a notification.
+  if (nsfw.contains(roomId)) showText = false;
   final shown = !showText
       ? (mentioned ? '$sender mentioned you' : (title == sender ? 'New message' : 'New message from $sender'))
       : (title == sender ? body : '$sender: $body');
@@ -58,6 +60,7 @@ class _EventReader extends TaskHandler {
   bool _doNotDisturb = false;
   Set<String> _muted = {};
   String _me = '';
+  Set<String> _nsfw = {};
   bool _showText = true;
   final _roomTitles = <String, String>{};
   final _notifications = FlutterLocalNotificationsPlugin();
@@ -91,7 +94,7 @@ class _EventReader extends TaskHandler {
         _roomTitles['${room['room_id']}'] = '${room['title']}';
       }
       if (_onScreen || _doNotDisturb || !_ready) continue;
-      final n = notificationFor(event, _roomTitles, muted: _muted, showText: _showText, me: _me);
+      final n = notificationFor(event, _roomTitles, muted: _muted, showText: _showText, me: _me, nsfw: _nsfw);
       if (n == null) continue;
       _notifications.show(
         n.roomId.hashCode & 0x7fffffff,
@@ -122,6 +125,7 @@ class _EventReader extends TaskHandler {
       _muted = (data['muted'] as List).map((e) => '$e').toSet();
       if (data['show_text'] is bool) _showText = data['show_text'] as bool;
       if (data['me'] is String) _me = data['me'] as String;
+      if (data['nsfw'] is List) _nsfw = (data['nsfw'] as List).map((e) => '$e').toSet();
     }
     if (data is Map && data['engine'] is int) _engine = data['engine'] as int;
     // Names of the chats, for the titles of notifications.

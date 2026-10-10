@@ -45,6 +45,12 @@ void main() {
     expect(hidden.body, 'bob mentioned you');
   });
 
+  test('an NSFW channel never shows its text in a notification', () {
+    final n = notificationFor(message('something'), {'r1': '#after-dark'}, nsfw: {'r1'})!;
+    expect(n.title, '#after-dark');
+    expect(n.body, 'New message from bob');
+  });
+
   test('in a direct chat the title is the sender and the body is just the text', () {
     final n = notificationFor(message('hello'), {'r1': 'bob'})!;
     expect(n.title, 'bob');

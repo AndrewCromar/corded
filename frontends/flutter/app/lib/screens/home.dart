@@ -94,6 +94,19 @@ class HomeScreen extends StatelessWidget {
                 padding: const EdgeInsets.only(right: 6),
                 child: Icon(Icons.notifications_off_outlined, size: 18, color: theme.colorScheme.outline),
               ),
+            if (r.nsfw)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      border: Border.all(color: theme.colorScheme.error),
+                      borderRadius: BorderRadius.circular(6)),
+                  child: Text('NSFW',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.error, fontWeight: FontWeight.bold)),
+                ),
+              ),
             if (r.unread > 0) Badge(label: Text('${r.unread}')),
           ]),
           onTap: () => _open(context, r.id),

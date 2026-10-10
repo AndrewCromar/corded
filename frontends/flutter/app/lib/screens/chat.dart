@@ -250,6 +250,21 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // "#name" in a message leads to that channel on this server.
+  Map<String, String> get _channelLinks {
+    final here = _store.rooms[_room]?.serverId;
+    return {
+      for (final r in _store.rooms.values)
+        if (r.kind == 'channel' && r.serverId == here) r.title.replaceFirst('#', '').toLowerCase(): r.id
+    };
+  }
+
+  void _openChannel(String roomId) {
+    if (roomId == _room && _thread == null) return;
+    Navigator.push(
+        context, MaterialPageRoute(builder: (_) => ChatScreen(state: widget.state, roomId: roomId)));
+  }
+
   final _keys = <String, GlobalKey>{};
   String? _highlight;
 
@@ -568,6 +583,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                   LinkedText(gone ? m.text : m.body,
+                      channels: _channelLinks,
+                      onChannel: _openChannel,
                       style: theme.textTheme.bodyLarge?.copyWith(
                           color: foreground.withValues(alpha: gone ? 0.6 : 1),
                           fontStyle: gone ? FontStyle.italic : null),
@@ -640,10 +657,43 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // An NSFW channel stays covered until the person chooses to open it, each
+  // time they come to it.
+  bool _uncovered = false;
+
+  Widget _nsfwGate(Room room) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(room.title)),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.visibility_off_outlined, size: 56, color: theme.colorScheme.error),
+              const SizedBox(height: 16),
+              Text('NSFW channel', style: theme.textTheme.headlineSmall),
+              const SizedBox(height: 8),
+              Text(
+                  '${room.title} is marked NSFW. It may contain content you do not want on your screen right now.',
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Go back')),
+              const SizedBox(height: 8),
+              TextButton(
+                  onPressed: () => setState(() => _uncovered = true), child: const Text('Open anyway')),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final room = _store.rooms[_room];
+    if (room != null && room.nsfw && !_uncovered) return _nsfwGate(room);
     final messages = _shown;
     final typing = _store.typing(_room);
     final banner = _editing != null

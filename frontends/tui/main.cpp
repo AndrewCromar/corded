@@ -65,6 +65,8 @@ struct Room {
     int64_t server_id = 0;
     int next_num = 1;
     std::vector<std::string> pinned;  // ids of the pinned messages
+    bool nsfw = false;                // warn before showing this channel
+    bool uncovered = false;           // the person chose to see it, this visit
     std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
     std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
     std::map<std::string, std::string> read_upto;  // display name -> id of the newest message they read
@@ -318,6 +320,7 @@ private:
                 room.server_id = r.value("server_id", int64_t{0});
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
                 room.unread = r.value("unread", room.unread);
+                room.nsfw = r.value("nsfw", false);
                 room.pinned.clear();
                 for (const auto& pin : r.value("pinned", json::array())) room.pinned.push_back(pin.get<std::string>());
             }
@@ -714,7 +717,8 @@ private:
             if (current_server_ != 0 && r.server_id != current_server_) continue;
             if (r.id == open) selected_ = static_cast<int>(visible_.size());
             visible_.push_back(i);
-            titles_.push_back(r.title + (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
+            titles_.push_back(r.title + (r.nsfw ? " [NSFW]" : "") +
+                              (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
         titles_.push_back("-- members --");
         titles_.push_back("-- settings --");
@@ -729,6 +733,8 @@ private:
     }
     void on_room_selected() {
         page_ = members_selected() ? 1 : settings_selected() ? 2 : 0;
+        // An NSFW channel is covered again each time it is come to.
+        for (auto& r : rooms_) r.uncovered = false;
         if (page_ == 1) command({{"cmd", "member_list"}});  // refresh the page
         if (page_ == 2) {
             server_settings_ = json::array();
@@ -844,6 +850,8 @@ private:
             std::string arg = space == std::string::npos ? "" : line.substr(space + 1);
             if (cmd == "/quit" || cmd == "/exit" || cmd == "/q") {
                 screen_.Exit();
+            } else if (room && cmd == "/show") {
+                room->uncovered = true;
             } else if (room && cmd == "/pins") {
                 Elements rows = {text("Pinned messages") | bold};
                 for (const auto& id : room->pinned) {
@@ -1051,7 +1059,7 @@ private:
                 info_box_ = vbox(std::move(rows)) | border;
                 show_info_ = true;
             } else if (cmd == "/channel" && !arg.empty()) {
-                // /channel new <name> | rename <name> | delete | private <role> | readonly | open
+                // /channel new <name> | rename <name> | delete | private <role> | readonly | open | nsfw on|off
                 auto sp = arg.find(' ');
                 std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
                 bool on_channel = room && room->kind == "channel";
@@ -1068,6 +1076,8 @@ private:
                              {"deny", {"view_channel"}}});
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", rest},
                              {"allow", {"view_channel"}}});
+                } else if (sub == "nsfw" && (rest == "on" || rest == "off")) {
+                    command({{"cmd", "set_channel_nsfw"}, {"room_id", room->id}, {"nsfw", rest == "on"}});
                 } else if (sub == "readonly") {
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"},
                              {"deny", {"send_messages"}}});
@@ -1215,7 +1225,7 @@ private:
                               text("/presence auto|dnd|invisible   how others see you (the members page shows everyone)"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
-                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
+                              text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open|nsfw on/off"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                               text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
                               text("   /setnick <user> <name>   change someone's display name"),
@@ -1316,6 +1326,12 @@ private:
         if (!room) {
             return vbox({text(""), text("No conversations yet.") | center,
                          text("Type  /chat <username>  to start one.") | center}) |
+                   flex;
+        }
+        if (room->nsfw && !room->uncovered) {
+            return vbox({text(""), text("NSFW channel") | bold | color(Color::Red) | center,
+                         text(room->title + " is marked NSFW.") | center, text(""),
+                         text("Type  /show  to open it, or pick another chat.") | dim | center}) |
                    flex;
         }
         Elements lines;
