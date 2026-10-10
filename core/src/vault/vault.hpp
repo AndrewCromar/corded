@@ -31,6 +31,7 @@ struct MemberRow {
     std::vector<uint32_t> roles;  // role ids, not counting @everyone
     std::string nickname;  // display name held by the server, if one was set there
     std::string profile_name;  // display name from their own profile, which no server sees
+    bool bot = false;          // their profile says they are a program, not a person
     // What to show for this person: their own choice first.
     const std::string& display() const {
         return !profile_name.empty() ? profile_name : nickname.empty() ? username : nickname;

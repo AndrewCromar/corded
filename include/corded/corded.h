@@ -32,7 +32,7 @@
  *       device containing the words, newest first. Nothing is sent anywhere.
  *   {"cmd":"set_profile","display_name":"Drew","full_name":"...","birthday":"2004-05-17",
  *    "bio":"...","links":["https://..."],"picture":"<base64 of a small JPEG or PNG>"}
- *       what you say about yourself; fields left out stay,
+ *       what you say about yourself ("bot":true marks a program, not a person); fields left out stay,
  *       "" clears one. Sent encrypted to the chats you are in; no server sees it.
  *   {"cmd":"get_profile","user_id":"..."}     someone's profile as this device knows it (yours
  *       without user_id). "profile_updated" {user_id, profile} arrives when one changes.

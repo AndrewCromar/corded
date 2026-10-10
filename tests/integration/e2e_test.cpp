@@ -1903,6 +1903,20 @@ TEST_CASE("profiles are shared with the people you talk to and not the server") 
     REQUIRE(now["full_name"] == "Robert Example");
     REQUIRE(!now.contains("bio"));
     REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", std::string(60, 'x')}})["ok"] == false);
+    // A program says it is one, and everyone it talks to sees that.
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"bot", true}})["ok"] == true);
+    alice.wait("bob is a bot", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["profile"].value("bot", false) == true;
+    });
+    {
+        json rooms = alice.cmd({{"cmd", "list_rooms"}});
+        bool marked = false;
+        for (const auto& r : rooms["data"]["rooms"])
+            for (const auto& m : r["members"])
+                if (m["username"] == "bob") marked = m["bot"] == true;
+        REQUIRE(marked);
+    }
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"bot", false}})["ok"] == true);
     // A small picture rides inside the profile; a large one is refused.
     std::string picture(12000, 'A');
     REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"picture", picture}})["ok"] == true);

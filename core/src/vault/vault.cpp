@@ -439,6 +439,7 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
             json profile = json::parse(st.text(6), nullptr, false);
             if (profile.is_object() && profile.value("display_name", json()).is_string())
                 m.profile_name = profile["display_name"].get<std::string>();
+            if (profile.is_object() && profile.value("bot", json()).is_boolean()) m.bot = profile["bot"].get<bool>();
         }
         std::string roles = st.text(4);
         for (size_t pos = 0; pos < roles.size();) {

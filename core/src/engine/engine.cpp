@@ -271,6 +271,7 @@ Session::json Session::member_json(const MemberRow& m) {
             {"nickname", m.nickname},
             {"display_name", m.display()},
             {"me", me},
+            {"bot", m.bot},
             {"status", presence_.count(m.user_id) ? presence_[m.user_id] : std::string("offline")},
             {"is_owner", m.is_owner},
             {"is_admin", m.is_admin},
@@ -575,6 +576,12 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                 }
                 if (value.empty()) profile.erase(field);
                 else profile[field] = value;
+            }
+            // "I am a program, not a person." Self-declared, so that people
+            // know what they are talking to.
+            if (cmd.contains("bot")) {
+                if (cmd.at("bot").get<bool>()) profile["bot"] = true;
+                else profile.erase("bot");
             }
             if (cmd.contains("picture")) {
                 // A small picture, already shrunk by the frontend, as base64.
@@ -1093,6 +1100,7 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
                 json profile = json::parse(vault_.profile(m->user_id).value_or("{}"), nullptr, false);
                 if (profile.is_object() && profile.value("display_name", json()).is_string())
                     row.profile_name = profile["display_name"].get<std::string>();
+                if (profile.is_object() && profile.value("bot", json()).is_boolean()) row.bot = profile["bot"].get<bool>();
                 members.push_back(member_json(row));
             }
             ok(req, {{"members", std::move(members)}});
