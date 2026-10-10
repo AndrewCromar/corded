@@ -273,7 +273,17 @@ class _MembersScreenState extends State<MembersScreen> {
                         ),
                       const Divider(),
                     ],
-                    for (final m in members)
+                    // People first; programs in a group of their own below them.
+                    for (final m in [...members.where((m) => !m.bot), ...members.where((m) => m.bot)]) ...[
+                      if (m.bot && m == members.firstWhere((x) => x.bot))
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                          child: Text('Bots',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelLarge
+                                  ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+                        ),
                       ListTile(
                         leading: PresenceAvatar(
                             name: m.displayName,
@@ -293,6 +303,7 @@ class _MembersScreenState extends State<MembersScreen> {
                         ].join(' · ')),
                         onTap: () => _actions(m),
                       ),
+                    ],
                   ]),
                 ),
     );
