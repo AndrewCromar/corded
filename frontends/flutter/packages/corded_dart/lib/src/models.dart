@@ -25,6 +25,7 @@ class Room {
   int unread = 0;
   int disappearAfter = 0;
   List<Member> members = const [];
+  List<String> pinned = const []; // ids of the pinned messages, oldest pin first
   int lastActivity = 0;
 
   void apply(Map<String, dynamic> j) {
@@ -33,6 +34,8 @@ class Room {
     kind = j['kind'] as String? ?? kind;
     unread = (j['unread'] as num?)?.toInt() ?? unread;
     disappearAfter = (j['disappear_after'] as num?)?.toInt() ?? disappearAfter;
+    final p = j['pinned'] as List?;
+    if (p != null) pinned = p.map((e) => '$e').toList();
     final m = j['members'] as List?;
     if (m != null) members = m.map((e) => Member.fromJson((e as Map).cast<String, dynamic>())).toList();
   }

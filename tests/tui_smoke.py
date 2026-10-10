@@ -155,6 +155,14 @@ def main():
         bob.expect("you can only edit your own messages")
         print("ok  commands take a message number")
 
+        # Pins: in a direct chat either person pins; both see the mark and the list.
+        alice.type("/pin 1\r")
+        bob.expect("(pinned)", timeout=20)
+        bob.type("/pins\r")
+        bob.expect("Pinned messages")
+        bob.type("\r")   # closes the box
+        print("ok  pinned messages")
+
         # The same reaction again takes it back.
         bob.type("/react 1 star\r")
         alice.pump(2.0)

@@ -224,6 +224,15 @@ void main() {
     await freshStore.dispose();
     await bobStore.open(room.id);
 
+    // The owner pins a message; everyone's copy of the room says so.
+    await alice.command({'cmd': 'pin_event', 'room_id': room.id, 'event_id': last.id});
+    await eventually(() => bobStore.rooms[room.id]!.pinned.contains(last.id) ? true : null, 'the pin');
+    await expectLater(
+        bob.command({'cmd': 'pin_event', 'room_id': room.id, 'event_id': last.id, 'pinned': false}),
+        throwsA(isA<CordedError>()));
+    await alice.command({'cmd': 'pin_event', 'room_id': room.id, 'event_id': last.id, 'pinned': false});
+    await eventually(() => bobStore.rooms[room.id]!.pinned.isEmpty ? true : null, 'unpinned');
+
     // Leaving a server takes it and its chats off this device only.
     await alice.command({'cmd': 'forget_server', 'server_id': aliceServer.id});
     await eventually(() => aliceStore.servers.isEmpty && aliceStore.rooms.isEmpty ? true : null, 'the server gone');

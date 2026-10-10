@@ -53,6 +53,7 @@ struct Room {
     uint64_t disappear_after = 0;  // seconds; 0 = messages are kept
     int64_t server_id = 0;
     int next_num = 1;
+    std::vector<std::string> pinned;  // ids of the pinned messages
     std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
     std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
     std::map<std::string, std::string> read_upto;  // display name -> id of the newest message they read
@@ -272,6 +273,8 @@ private:
                 room.server_id = r.value("server_id", int64_t{0});
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
                 room.unread = r.value("unread", room.unread);
+                room.pinned.clear();
+                for (const auto& id : r.value("pinned", json::array())) room.pinned.push_back(id.get<std::string>());
             }
             if (members_selected()) command({{"cmd", "member_list"}});
             refresh_titles();  // re-sorts, so look the room up again
@@ -786,6 +789,24 @@ private:
             std::string arg = space == std::string::npos ? "" : line.substr(space + 1);
             if (cmd == "/quit" || cmd == "/exit" || cmd == "/q") {
                 screen_.Exit();
+            } else if (room && cmd == "/pins") {
+                Elements rows = {text("Pinned messages") | bold};
+                for (const auto& id : room->pinned) {
+                    std::string line = "(not loaded here)";
+                    for (const auto& m : room->messages)
+                        if (m.event_id == id) line = std::to_string(m.num) + "  " + m.sender + ": " + m.body;
+                    rows.push_back(text(line));
+                }
+                if (room->pinned.empty()) rows.push_back(text("Nothing is pinned here. /pin <number> pins a message.") | dim);
+                info_box_ = vbox(std::move(rows)) | border;
+                show_info_ = true;
+            } else if (room && (cmd == "/pin" || cmd == "/unpin")) {
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                if (!target) notice_ = "there is no message to pin; give its number, like /pin 12";
+                else
+                    command({{"cmd", "pin_event"}, {"room_id", room->id}, {"event_id", target->event_id},
+                             {"pinned", cmd == "/pin"}});
             } else if (room && (cmd == "/reply" || cmd == "/thread" || cmd == "/react" || cmd == "/edit" ||
                                 cmd == "/delete" || cmd == "/remove")) {
                 // These act on one message. Give its number ("/reply 12 agreed"), or
@@ -1124,6 +1145,7 @@ private:
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/receipts on|off   whether others see what you have read"),
+                              text("/pin <n>  /unpin <n>  /pins      pin a message for everyone, and list what is pinned"),
                               text("/presence auto|dnd|invisible   how others see you (the members page shows everyone)"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
@@ -1243,6 +1265,8 @@ private:
             if (m.edited) mark += " (edited)";
             if (m.disappearing) mark += " (disappears)";
             if (m.from_history) mark += " (earlier, shared)";
+            if (std::find(room->pinned.begin(), room->pinned.end(), m.event_id) != room->pinned.end())
+                mark += " (pinned)";
             bool mentioned = !m.mine && mentions_user(m.body, username_);
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
             if (mentioned) name = hbox({text("@ ") | bold | color(Color::Yellow), name});

@@ -184,6 +184,55 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {});
   }
 
+  bool _isPinned(Message m) => _store.rooms[_room]?.pinned.contains(m.id) ?? false;
+
+  // In a channel pinning is for those who manage messages; elsewhere anyone may.
+  bool get _mayPin {
+    final room = _store.rooms[_room];
+    if (room == null) return false;
+    return room.kind != 'channel' || (widget.state.server?.can('manage_messages') ?? false);
+  }
+
+  // The pinned messages, newest pin first; tap one to go to it.
+  void _showPinned(Room room) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          const ListTile(title: Text('Pinned messages')),
+          for (final id in room.pinned.reversed)
+            () {
+              final m = _store.message(_room, id);
+              return ListTile(
+                leading: const Icon(Icons.push_pin_outlined),
+                title: Text(m == null ? 'A message not loaded on this device yet' : m.text,
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+                subtitle: m == null ? null : Text(m.sender),
+                trailing: _mayPin
+                    ? IconButton(
+                        tooltip: 'Unpin',
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          Navigator.pop(sheet);
+                          attempt(
+                              context,
+                              () => widget.state.engine.command(
+                                  {'cmd': 'pin_event', 'room_id': _room, 'event_id': id, 'pinned': false}));
+                        },
+                      )
+                    : null,
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _jumpTo(id);
+                },
+              );
+            }(),
+        ]),
+      ),
+    );
+  }
+
   final _keys = <String, GlobalKey>{};
   String? _highlight;
 
@@ -347,6 +396,18 @@ class _ChatScreenState extends State<ChatScreen> {
               Clipboard.setData(ClipboardData(text: m.body));
             },
           ),
+          if (_mayPin)
+            ListTile(
+              leading: Icon(_isPinned(m) ? Icons.push_pin : Icons.push_pin_outlined),
+              title: Text(_isPinned(m) ? 'Unpin' : 'Pin'),
+              onTap: () {
+                Navigator.pop(sheet);
+                attempt(
+                    context,
+                    () => widget.state.engine.command(
+                        {'cmd': 'pin_event', 'room_id': _room, 'event_id': m.id, 'pinned': !_isPinned(m)}));
+              },
+            ),
           if (m.mine)
             ListTile(
               leading: const Icon(Icons.edit_outlined),
@@ -433,11 +494,39 @@ class _ChatScreenState extends State<ChatScreen> {
                           ? scheme.tertiaryContainer
                           : scheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(14),
-                  // Lit up for a moment after jumping here.
-                  border:
-                      Border.all(color: m.id == _highlight ? scheme.primary : Colors.transparent, width: 2),
+                  // Lit up for a moment after jumping here; a message that
+                  // mentions you keeps a coloured edge.
+                  border: Border.all(
+                      color: m.id == _highlight
+                          ? scheme.primary
+                          : m.mentionsMe
+                              ? scheme.tertiary
+                              : Colors.transparent,
+                      width: 2),
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (m.mentionsMe)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.alternate_email, size: 13, color: scheme.tertiary),
+                        const SizedBox(width: 4),
+                        Text('Mentioned you',
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: scheme.tertiary, fontWeight: FontWeight.bold)),
+                      ]),
+                    ),
+                  if (_isPinned(m))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.push_pin, size: 13, color: foreground.withValues(alpha: 0.7)),
+                        const SizedBox(width: 4),
+                        Text('Pinned',
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: foreground.withValues(alpha: 0.7))),
+                      ]),
+                    ),
                   if (!m.mine)
                     Text(m.sender,
                         style: theme.textTheme.labelMedium
@@ -594,6 +683,28 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: SafeArea(
         child: Column(children: [
+          if (_thread == null && room != null && room.pinned.isNotEmpty)
+            Material(
+              color: theme.colorScheme.surfaceContainerHigh,
+              child: InkWell(
+                onTap: () => _showPinned(room),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(children: [
+                    Icon(Icons.push_pin, size: 16, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(() {
+                        final latest = _store.message(_room, room.pinned.last);
+                        final count = room.pinned.length == 1 ? 'Pinned' : '${room.pinned.length} pinned';
+                        return latest == null ? count : '$count: ${latest.text}';
+                      }(), maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.labelLarge),
+                    ),
+                    const Icon(Icons.expand_more, size: 18),
+                  ]),
+                ),
+              ),
+            ),
           Expanded(
             child: messages.isEmpty
                 ? Center(
