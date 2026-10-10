@@ -28,14 +28,26 @@ option(CORDED_PORTABLE "Link the C++ runtime statically so the programs run on o
 set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
 set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
 option(CORDED_BUILD_TUI "Build the terminal client" ON)
+# A phone or a GUI embeds libcorded and has no use for the server or the
+# terminal programs.
+option(CORDED_CORE_ONLY "Build only libcorded" OFF)
+if(ANDROID)
+  set(CORDED_CORE_ONLY ON)
+endif()
+if(CORDED_CORE_ONLY)
+  set(CORDED_BUILD_TESTS OFF)
+  set(CORDED_BUILD_TUI OFF)
+endif()
 
 # ---- dependencies ---------------------------------------------------------
 find_package(Threads REQUIRED)
 find_package(asio CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
-find_package(unofficial-sqlite3 CONFIG REQUIRED)
-find_package(spdlog CONFIG REQUIRED)
+if(NOT CORDED_CORE_ONLY)  # only the server uses these
+  find_package(unofficial-sqlite3 CONFIG REQUIRED)
+  find_package(spdlog CONFIG REQUIRED)
+endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 
 # libsodium. On Windows vcpkg provides it. Elsewhere the system's copy is used
@@ -164,8 +176,21 @@ if(UNIX AND NOT APPLE)
     -Wl,--version-script=${CMAKE_SOURCE_DIR}/core/corded.map)
   set_target_properties(corded PROPERTIES LINK_DEPENDS ${CMAKE_SOURCE_DIR}/core/corded.map)
 endif()
-set_target_properties(corded PROPERTIES
-  CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON VERSION ${PROJECT_VERSION} SOVERSION 0)
+set_target_properties(corded PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+if(ANDROID)
+  # An app loads plain "libcorded.so". Newer phones use 16 KB memory pages and
+  # refuse a library laid out for 4 KB ones.
+  target_link_options(corded PRIVATE -Wl,-z,max-page-size=16384)
+  target_link_libraries(corded PRIVATE log)
+else()
+  set_target_properties(corded PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
+endif()
+
+if(CORDED_CORE_ONLY)
+  install(TARGETS corded RUNTIME DESTINATION . LIBRARY DESTINATION .)
+  install(FILES include/corded/corded.h LICENSE NOTICE DESTINATION .)
+  return()
+endif()
 
 # ---- server ---------------------------------------------------------------
 add_executable(cordedd server/src/main.cpp)

@@ -45,6 +45,72 @@ jobs:
           extra=$(nm -D --defined-only build/dev/lib/libcorded.so | grep -v -E ' T corded_| A CORDED_0' || true)
           if [ -n "$extra" ]; then echo "unexpected exported symbols:"; echo "$extra"; exit 1; fi
 
+  android:
+    name: Android build of the core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: android-arm64
+            abi: arm64-v8a
+          - preset: android-x64
+            abi: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar \
+            perl autoconf automake libtool autoconf-archive
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-android-${{ matrix.abi }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-android-${{ matrix.abi }}-
+
+      - name: Fetch vcpkg
+        run: |
+          git submodule update --init external/vcpkg
+          ./external/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      # The build machines come with the Android NDK installed.
+      - name: Build libcorded
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          echo "NDK: $ANDROID_NDK_HOME"
+          cmake --preset ${{ matrix.preset }}
+          cmake --build --preset ${{ matrix.preset }}
+
+      - name: Check the library
+        run: |
+          lib=build/${{ matrix.preset }}/lib/libcorded.so
+          file "$lib"
+          nm="$(ls "${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm)"
+          extra=$("$nm" -D --defined-only "$lib" | grep -v -E ' T corded_| A CORDED_0' || true)
+          if [ -n "$extra" ]; then echo "unexpected exported symbols:"; echo "$extra"; exit 1; fi
+          needed=$("$(dirname "$nm")/llvm-readelf" -d "$lib" | grep NEEDED)
+          echo "$needed"
+          # Only libraries every Android phone has may be needed at run time.
+          if echo "$needed" | grep -v -E 'lib(c|m|dl|log)\.so'; then echo "needs a library a phone does not have"; exit 1; fi
+
+      - name: Package
+        run: |
+          mkdir -p out/jniLibs/${{ matrix.abi }} out/include/corded
+          cp build/${{ matrix.preset }}/lib/libcorded.so out/jniLibs/${{ matrix.abi }}/
+          cp include/corded/corded.h out/include/corded/
+          cp LICENSE NOTICE out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libcorded-${{ matrix.preset }}
+          path: out/
+
   windows:
     name: Windows build
     runs-on: windows-2022

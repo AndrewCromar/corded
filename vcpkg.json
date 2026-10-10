@@ -6,15 +6,27 @@
     "asio",
     {
       "name": "libsodium",
-      "platform": "windows"
+      "platform": "windows | android"
     },
     "openssl",
     "flatbuffers",
-    "sqlite3",
-    "spdlog",
+    {
+      "name": "sqlite3",
+      "platform": "!android"
+    },
+    {
+      "name": "spdlog",
+      "platform": "!android"
+    },
     "nlohmann-json",
-    "ftxui",
-    "catch2",
+    {
+      "name": "ftxui",
+      "platform": "!android"
+    },
+    {
+      "name": "catch2",
+      "platform": "!android"
+    },
     {
       "name": "flatbuffers",
       "host": true
