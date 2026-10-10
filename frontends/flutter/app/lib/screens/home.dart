@@ -92,7 +92,11 @@ class HomeScreen extends StatelessWidget {
                     return other == null ? null : state.store.picture(other.userId);
                   }(),
                   status: statusIn(r) ?? 'offline')
-              : Icon(r.kind == 'channel' ? Icons.tag : Icons.group_outlined),
+              : Icon(r.isTaskList
+                  ? Icons.checklist
+                  : r.kind == 'channel'
+                      ? Icons.tag
+                      : Icons.group_outlined),
           title: Text(r.kind == 'channel' ? r.title.replaceFirst('#', '') : r.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

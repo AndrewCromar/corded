@@ -26,8 +26,10 @@ void backgroundEntry() {
     {Set<String> muted = const {}, bool showText = true, String me = '', Set<String> nsfw = const {}}) {
   if (event['event'] != 'event_received') return null;
   final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-  final isPoll = data['type'] == 'm.poll', isFile = data['type'] == 'm.file';
-  if ((data['type'] != 'm.text' && !isPoll && !isFile) ||
+  final isPoll = data['type'] == 'm.poll',
+      isFile = data['type'] == 'm.file',
+      isTask = data['type'] == 'm.task';
+  if ((data['type'] != 'm.text' && !isPoll && !isFile && !isTask) ||
       data['mine'] == true ||
       data['shared_history'] == true) {
     return null;
@@ -36,11 +38,13 @@ void backgroundEntry() {
   // A file is announced by its caption, or by what it is.
   final body = isPoll
       ? 'Poll: ${content['question'] ?? ''}'
-      : isFile && (content['body'] is! String || (content['body'] as String).isEmpty)
-          ? ('${content['mime'] ?? ''}'.startsWith('image/')
-              ? 'Sent a photo'
-              : 'Sent a file: ${content['name'] ?? ''}')
-          : content['body'];
+      : isTask
+          ? 'New task: ${content['body'] ?? ''}'
+          : isFile && (content['body'] is! String || (content['body'] as String).isEmpty)
+              ? ('${content['mime'] ?? ''}'.startsWith('image/')
+                  ? 'Sent a photo'
+                  : 'Sent a file: ${content['name'] ?? ''}')
+              : content['body'];
   if (body is! String || body.isEmpty) return null;
   final roomId = '${data['room_id']}';
   // A mention gets through even from a muted chat.

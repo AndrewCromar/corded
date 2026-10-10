@@ -368,7 +368,7 @@ class CordedStore {
       return false;
     }
     // Edits, deletions and room changes arrive as updates.
-    if (type != 'm.text' && type != 'm.poll' && type != 'm.file') return false;
+    if (type != 'm.text' && type != 'm.poll' && type != 'm.file' && type != 'm.task') return false;
     final list = _messages[roomId] ??= [];
     for (final m in list) {
       if (m.id == id) {

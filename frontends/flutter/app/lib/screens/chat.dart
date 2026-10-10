@@ -16,6 +16,7 @@ import 'presence.dart';
 import 'profile.dart';
 import 'search.dart';
 import 'swipe_to_reply.dart';
+import 'tasks.dart';
 
 /// One conversation: its messages and the box for writing a new one. With
 /// [threadRoot] it shows one thread instead: the message that started it and
@@ -73,6 +74,14 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.state.viewingThread = _thread;
     if (_thread == null) _newFrom = _store.rooms[_room]?.firstUnread ?? '';
     final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
+    // A task list is shown whole, however old its first task is.
+    if (_thread == null && (_store.rooms[_room]?.isTaskList ?? false)) {
+      opened.then((_) async {
+        for (var pages = 0; pages < 40 && mounted && _store.hasOlder(_room); pages++) {
+          await _store.loadOlder(_room);
+        }
+      });
+    }
     // With a lot unread, start where the unread messages begin, not at the end.
     final startAt =
         widget.jumpTo ?? ((_store.rooms[_room]?.unread ?? 0) > 6 && _newFrom.isNotEmpty ? _newFrom : null);
@@ -1073,6 +1082,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final theme = Theme.of(context);
     final room = _store.rooms[_room];
     if (room != null && room.nsfw && !_uncovered) return _nsfwGate(room);
+    if (room != null && room.isTaskList && _thread == null) {
+      return TasksView(state: widget.state, room: room, tasks: [
+        for (final m in _shown)
+          if (m.isTask && m.status != 'redacted') m
+      ]);
+    }
     final messages = _shown;
     final typing = _store.typing(_room);
     final banner = _editing != null

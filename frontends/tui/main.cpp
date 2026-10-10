@@ -71,6 +71,7 @@ struct Room {
     std::map<std::string, std::vector<int>> my_votes;  // poll -> this person's choices
     bool nsfw = false;                // warn before showing this channel
     bool archived = false;            // readable, closed to writing
+    bool tasks = false;               // a task list: what is typed becomes a task
     bool uncovered = false;           // the person chose to see it, this visit
     std::map<std::string, std::map<std::string, std::string>> my_reactions;  // message -> emoji -> my reaction's id
     std::map<std::string, uint64_t> typing;        // display name -> when the notice lapses (ms)
@@ -341,6 +342,7 @@ private:
                 room.unread = r.value("unread", room.unread);
                 room.nsfw = r.value("nsfw", false);
                 room.archived = r.value("archived", false);
+                room.tasks = r.value("channel_type", "") == "tasks";
                 room.pinned.clear();
                 for (const auto& pin : r.value("pinned", json::array())) room.pinned.push_back(pin.get<std::string>());
             }
@@ -421,7 +423,9 @@ private:
                 m.status = d.value("status", m.status);
                 m.edited = d.value("edited", false);
         m.disappearing = d.value("expires_at", uint64_t{0}) != 0;
-                m.body = m.status == "redacted" ? "[deleted]" : d["content"].value("body", m.body);
+                if (m.status == "redacted") m.body = "[deleted]";
+                else if (m.type == "m.task") m.body = task_line(d);
+                else if (m.type == "m.text") m.body = d["content"].value("body", m.body);
             }
             for (auto& [target, keys] : room.reactions)
                 for (auto& [key, ids] : keys) ids.erase(id);
@@ -673,6 +677,7 @@ private:
         }
         // Edits and deletions are not lines of their own; they arrive again as
         // event_updated for the message they change.
+        if (type == "m.task.done") return false;  // shows as the task's own tick, through event_updated
         if (type == "m.poll.vote") {
             // A person's newest vote on a poll replaces their earlier one.
             uint64_t at = d.value("origin_ts", uint64_t{0});
@@ -721,6 +726,7 @@ private:
             m.body = "[file] " + d["content"].value("name", "file") + " (" + amount + ")" +
                      (caption.empty() ? "" : "  " + caption);
         }
+        else if (type == "m.task") m.body = task_line(d);
         else if (type == "m.poll") {
             m.body = "[poll] " + d["content"].value("question", "");
             for (const auto& o : d["content"].value("options", json::array())) m.poll_options.push_back(o.get<std::string>());
@@ -827,7 +833,8 @@ private:
             if (current_server_ != 0 && r.server_id != current_server_) continue;
             if (r.id == open) selected_ = static_cast<int>(visible_.size());
             visible_.push_back(i);
-            titles_.push_back(r.title + (r.nsfw ? " [NSFW]" : "") + (r.archived ? " [archived]" : "") +
+            titles_.push_back(r.title + (r.tasks ? " [tasks]" : "") + (r.nsfw ? " [NSFW]" : "") +
+                              (r.archived ? " [archived]" : "") +
                               (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
         titles_.push_back("-- members --");
@@ -1177,6 +1184,14 @@ private:
                 }
             } else if (cmd == "/poll") {
                 notice_ = "/poll Question | option | option ...     vote with /vote <message number> <option number>";
+            } else if (room && (cmd == "/done" || cmd == "/undone")) {
+                // /done <number> ticks a task; /undone takes the tick back.
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                if (!target || target->type != "m.task") notice_ = "give the task's number, like " + cmd + " 12";
+                else
+                    command({{"cmd", "set_task_done"}, {"room_id", room->id}, {"event_id", target->event_id},
+                             {"done", cmd == "/done"}});
             } else if (room && cmd == "/vote") {
                 // /vote <message number> <option number>; the same again takes it back.
                 std::string rest = arg;
@@ -1296,6 +1311,9 @@ private:
                 };
                 if (sub == "new" && !rest.empty()) {
                     command({{"cmd", "create_channel"}, {"name", tidy(rest)}});
+                } else if (sub == "tasks" && !rest.empty()) {
+                    // A task list: what people type there becomes a row to tick.
+                    command({{"cmd", "create_channel"}, {"name", tidy(rest)}, {"type", "tasks"}});
                 } else if (!on_channel) {
                     notice_ = "open a channel first";
                 } else if (sub == "rename" && !rest.empty()) {
@@ -1317,7 +1335,7 @@ private:
                 } else if (sub == "open") {
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"}});
                 } else {
-                    notice_ = "/channel new <name> | rename <name> | delete | private <role> | readonly | open";
+                    notice_ = "/channel new <name> | tasks <name> | rename <name> | delete | private <role> | readonly | open";
                 }
             } else if (cmd == "/role" && !arg.empty()) {
                 // /role new <name> [permission ...] | delete <name> | give <user> <role> | take <user> <role>
@@ -1402,7 +1420,9 @@ private:
                                          : "start a chat first: /chat <username>";
             return;
         }
-        command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", line}});
+        // In a task list a line is a new task; tick it with /done <number>.
+        if (room->tasks) command({{"cmd", "add_task"}, {"room_id", room->id}, {"body", line}});
+        else command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", line}});
     }
 
     // ------------------------------------------------------------ views
@@ -1451,6 +1471,7 @@ private:
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
                               text("/poll Question | option | option     start a poll      /vote <n> <option number>"),
+                              text("/channel tasks <name>   make a task list; type to add a task; /done <n>  /undone <n>"),
                               text("/file <path> | caption   send a file         /save <n> [folder]   keep a file you were sent"),
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
@@ -1475,6 +1496,15 @@ private:
     }
 
     // Everyone on this server, with what can be done about them.
+    // A task as one line: a box, ticked or not, the words, and who ticked it.
+    static std::string task_line(const json& d) {
+        const json task = d.value("task", json::object());
+        bool done = task.value("done", false);
+        std::string by = task.value("by_name", "");
+        return std::string(done ? "[x] " : "[ ] ") + d["content"].value("body", "") +
+               (done && !by.empty() ? "   (done by " + by + ")" : "");
+    }
+
     Element members_view() {
         Elements rows;
         for (const auto& m : member_list_) {

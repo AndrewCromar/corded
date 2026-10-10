@@ -100,8 +100,28 @@ class _ServerScreenState extends State<ServerScreen> {
   Future<void> _newChannel() async {
     final name = await _ask('New channel',
         hint: 'Spaces become dashes and capitals become lower case', action: 'Create');
-    if (name == null || name.isEmpty) return;
-    await _do({'cmd': 'create_channel', 'name': tidyChannelName(name)}, 'Channel created.');
+    if (name == null || name.isEmpty || !mounted) return;
+    // What kind: messages, or a list of tasks to tick off.
+    final type = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(title: const Text('What kind of channel?'), children: [
+        ListTile(
+          leading: const Icon(Icons.tag),
+          title: const Text('Messages'),
+          subtitle: const Text('An ordinary channel'),
+          onTap: () => Navigator.pop(context, ''),
+        ),
+        ListTile(
+          leading: const Icon(Icons.checklist),
+          title: const Text('Task list'),
+          subtitle: const Text('Rows to tick off; anyone who can write can add and tick'),
+          onTap: () => Navigator.pop(context, 'tasks'),
+        ),
+      ]),
+    );
+    if (type == null) return;
+    await _do({'cmd': 'create_channel', 'name': tidyChannelName(name), if (type.isNotEmpty) 'type': type},
+        type == 'tasks' ? 'Task list created.' : 'Channel created.');
   }
 
   void _channelActions(Room r) {

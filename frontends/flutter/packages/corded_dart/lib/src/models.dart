@@ -35,6 +35,8 @@ class Room {
   List<String> pinned = const []; // ids of the pinned messages, oldest pin first
   bool nsfw = false; // a channel marked so that clients warn before showing it
   bool archived = false; // a channel kept to read, closed to writing
+  String channelType = ''; // how a channel is laid out: '' for messages, 'tasks' for a task list
+  bool get isTaskList => channelType == 'tasks';
   String firstUnread = ''; // where this person's unread messages start; empty if none
   int lastActivity = 0;
 
@@ -46,6 +48,7 @@ class Room {
     disappearAfter = (j['disappear_after'] as num?)?.toInt() ?? disappearAfter;
     nsfw = j['nsfw'] as bool? ?? nsfw;
     archived = j['archived'] as bool? ?? archived;
+    channelType = j['channel_type'] as String? ?? channelType;
     firstUnread = j['first_unread'] as String? ?? firstUnread;
     final p = j['pinned'] as List?;
     if (p != null) pinned = p.map((e) => '$e').toList();
@@ -91,6 +94,11 @@ class Message {
   Uint8List? thumbnail;
   int width = 0, height = 0;
   bool get isFile => type == 'm.file';
+
+  /// For a task: whether it is ticked, and by whom.
+  bool taskDone = false;
+  String taskDoneBy = '';
+  bool get isTask => type == 'm.task';
   bool get isImage => isFile && fileMime.startsWith('image/');
 
   /// Whether it mentions the person using this device (set by the store).
@@ -120,6 +128,11 @@ class Message {
           // Shown without a preview.
         }
       }
+    }
+    final task = j['task'];
+    if (task is Map) {
+      taskDone = task['done'] == true;
+      taskDoneBy = task['by_name'] as String? ?? '';
     }
     if (type == 'm.poll') {
       body = content['question'] as String? ?? body;
