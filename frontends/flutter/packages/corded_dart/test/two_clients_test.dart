@@ -103,6 +103,16 @@ void main() {
       'relation': {'kind': 'annotation', 'target': last.id, 'key': '+1'},
     });
     await eventually(() => aliceStore.reactions(room.id, last.id)['+1'] == 1 ? true : null, 'the reaction');
+    // Reacting twice with the same emoji takes the reaction back.
+    expect(aliceStore.myReaction(room.id, last.id, '+1'), isNull); // it is bob's, not alice's
+    await aliceStore.toggleReaction(room.id, last.id, 'ok');
+    await eventually(() => bobStore.reactions(room.id, last.id)['ok'] == 1 ? true : null, "alice's reaction");
+    await eventually(() => aliceStore.myReaction(room.id, last.id, 'ok'), 'her own reaction known');
+    await aliceStore.toggleReaction(room.id, last.id, 'ok');
+    await eventually(() => bobStore.reactions(room.id, last.id)['ok'] == null ? true : null, 'reaction taken back');
+    await eventually(() => aliceStore.myReaction(room.id, last.id, 'ok') == null ? true : null, 'gone for alice too');
+    expect(bobStore.reactions(room.id, last.id)['+1'], 1);
+
     await alice.command({'cmd': 'edit_event', 'room_id': room.id, 'event_id': last.id, 'body': 'message 5, edited'});
     await eventually(
         () => bobStore.messages(room.id).any((m) => m.body == 'message 5, edited' && m.edited) ? true : null,

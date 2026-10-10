@@ -113,15 +113,34 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _react(Message m, String key) => attempt(
-      context,
-      () => widget.state.engine.command({
-            'cmd': 'send_event',
-            'room_id': _room,
-            'type': 'm.reaction',
-            'content': {'key': key},
-            'relation': {'kind': 'annotation', 'target': m.id, 'key': key},
-          }));
+  // Reacting again with the same emoji takes the reaction back.
+  Future<void> _react(Message m, String key) =>
+      attempt(context, () => _store.toggleReaction(_room, m.id, key));
+
+  // Any emoji, typed or picked from the phone's own keyboard.
+  Future<void> _reactWithOther(Message m) async {
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('React with'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 28),
+          decoration: const InputDecoration(hintText: 'Pick an emoji on your keyboard'),
+          onSubmitted: (v) => Navigator.pop(context, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('React')),
+        ],
+      ),
+    );
+    final picked = AppState.parseReactions(text ?? '');
+    if (picked.isNotEmpty) await _react(m, picked.first);
+  }
 
   void _showActions(Message m) {
     final canManage = widget.state.server?.permissions.contains('manage_messages') ?? false;
@@ -131,14 +150,26 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (sheet) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            for (final key in const ['👍', '❤️', '😂', '😮', '😢', '🎉'])
-              IconButton(
-                icon: Text(key, style: const TextStyle(fontSize: 24)),
+            for (final key in widget.state.reactionBar)
+              Flexible(
+                child: IconButton(
+                  icon: Text(key, style: const TextStyle(fontSize: 24)),
+                  onPressed: () {
+                    Navigator.pop(sheet);
+                    _react(m, key);
+                  },
+                ),
+              ),
+            Flexible(
+              child: IconButton(
+                tooltip: 'Another emoji',
+                icon: const Icon(Icons.add_circle_outline),
                 onPressed: () {
                   Navigator.pop(sheet);
-                  _react(m, key);
+                  _reactWithOther(m);
                 },
               ),
+            ),
           ]),
           if (_thread == null) ...[
             ListTile(
@@ -231,6 +262,7 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             GestureDetector(
               onLongPress: gone ? null : () => _showActions(m),
+              onDoubleTap: gone ? null : () => _react(m, widget.state.reactionBar.first),
               onSecondaryTap: gone ? null : () => _showActions(m),
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -275,10 +307,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
                 child: Wrap(spacing: 4, children: [
                   for (final e in reactions.entries)
-                    ActionChip(
+                    // Filled when one of them is yours; tap to add or take back.
+                    FilterChip(
                       visualDensity: VisualDensity.compact,
+                      showCheckmark: false,
+                      selected: _store.myReaction(_room, m.id, e.key) != null,
                       label: Text('${e.key} ${e.value}'),
-                      onPressed: () => _react(m, e.key),
+                      onSelected: (_) => _react(m, e.key),
                     ),
                 ]),
               ),

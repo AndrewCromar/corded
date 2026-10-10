@@ -25,6 +25,7 @@ class CordedStore {
   final Map<String, Room> rooms = {};
   final Map<String, List<Message>> _messages = {};
   final Map<String, Map<String, Map<String, Set<String>>>> _reactions = {}; // room -> message -> key -> ids
+  final Map<String, Map<String, Map<String, String>>> _myReactions = {}; // room -> message -> key -> my reaction's id
   final Map<String, Map<String, DateTime>> _typing = {}; // room -> name -> until
   final Map<String, Map<String, String>> _readUpTo = {}; // room -> name -> message id
   final Set<String> _loaded = {};
@@ -93,6 +94,30 @@ class CordedStore {
       for (final e in byKey.entries)
         if (e.value.isNotEmpty) e.key: e.value.length
     };
+  }
+
+  /// The id of this person's own reaction with [key] on a message, if they
+  /// made one. Deleting that event takes the reaction back.
+  String? myReaction(String roomId, String messageId, String key) {
+    final id = _myReactions[roomId]?[messageId]?[key];
+    final live = _reactions[roomId]?[messageId]?[key]?.contains(id) ?? false;
+    return live ? id : null;
+  }
+
+  /// Adds this person's reaction, or takes it back if they already made it.
+  Future<void> toggleReaction(String roomId, String messageId, String key) async {
+    final mine = myReaction(roomId, messageId, key);
+    if (mine != null) {
+      await engine.command({'cmd': 'delete_event', 'room_id': roomId, 'event_id': mine});
+    } else {
+      await engine.command({
+        'cmd': 'send_event',
+        'room_id': roomId,
+        'type': 'm.reaction',
+        'content': {'key': key},
+        'relation': {'kind': 'annotation', 'target': messageId, 'key': key},
+      });
+    }
   }
 
   /// Display names of those typing in a room right now.
@@ -222,6 +247,7 @@ class CordedStore {
       if (target == null) return false;
       final key = '${relation['key'] ?? (j['content'] as Map?)?['key'] ?? '?'}';
       if (j['status'] == 'redacted') return false;
+      if (j['mine'] == true) ((_myReactions[roomId] ??= {})[target] ??= {})[key] = id;
       return (((_reactions[roomId] ??= {})[target] ??= {})[key] ??= {}).add(id);
     }
     if (type != 'm.text') return false; // edits, deletions and room changes arrive as updates

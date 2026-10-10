@@ -57,6 +57,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  Future<void> _reactionBar() async {
+    final controller = TextEditingController(text: widget.state.reactionBar.join(' '));
+    final text = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Quick reactions'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: controller,
+            autofocus: true,
+            style: const TextStyle(fontSize: 24),
+            decoration: const InputDecoration(helperText: 'Up to 8. The first is sent by a double-tap.'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, ''), child: const Text('Reset')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (text == null) return;
+    await widget.state.setReactionBar(AppState.parseReactions(text));
+    if (mounted) setState(() {});
+  }
+
   Future<void> _recoveryKey() async {
     final go = await showDialog<bool>(
       context: context,
@@ -129,6 +154,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: const Text('Give newcomers the messages sent before they joined'),
           value: _settings['share_history'] != false,
           onChanged: (v) => _set({'cmd': 'set_history_sharing', 'enabled': v}),
+        ),
+        ListTile(
+          leading: const Icon(Icons.add_reaction_outlined),
+          title: const Text('Quick reactions'),
+          subtitle: Text(widget.state.reactionBar.join('  ')),
+          onTap: _reactionBar,
         ),
         ListTile(
           leading: const Icon(Icons.key_outlined),
