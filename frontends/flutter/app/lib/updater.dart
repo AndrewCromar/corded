@@ -7,8 +7,10 @@
 // desktop app replaces its own files and starts itself again.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:archive/archive_io.dart';
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:open_filex/open_filex.dart';
@@ -196,18 +198,20 @@ Future<void> installUpdate(String path) async {
     exit(0);
   }
   if (Platform.isWindows) {
-    // Unpacked and swapped by PowerShell, run without a window.
-    const quiet = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden'];
-    String quoted(String text) => "'${text.replaceAll("'", "''")}'";
-    final expand = await Process.run('powershell', [
-      ...quiet,
-      '-Command',
-      'Expand-Archive -LiteralPath ${quoted(path)} -DestinationPath ${quoted(unpacked.path)} -Force'
-    ]);
-    final fresh = unpacked.listSync().whereType<Directory>().firstOrNull;
-    if (expand.exitCode != 0 || fresh == null || !File('${fresh.path}\\corded_app.exe').existsSync()) {
-      throw CordedError('update', 'The update could not be unpacked. ${'${expand.stderr}'.trim()}'.trim());
+    // Unpacked here, in the app: starting a program for it would put a
+    // terminal window on the screen for as long as the unpacking takes.
+    String? problem;
+    try {
+      await Isolate.run(() => extractFileToDisk(path, unpacked.path));
+    } catch (e) {
+      problem = '$e';
     }
+    final fresh = unpacked.listSync().whereType<Directory>().firstOrNull;
+    if (problem != null || fresh == null || !File('${fresh.path}\\corded_app.exe').existsSync()) {
+      throw CordedError('update', 'The update could not be unpacked. ${problem ?? ''}'.trim());
+    }
+    // The one helper that is started runs detached, which gives it no window.
+    const quiet = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden'];
     // Windows will not replace a program while it runs: a script waits for
     // this app to end, copies the new files over the old, and starts it again.
     final script = File('${File(path).parent.path}\\apply-update.ps1');
