@@ -533,6 +533,7 @@ private:
                 if (!value.empty()) rows.push_back(hbox({text(std::string(label) + ": ") | dim, text(value)}));
             };
             line("display name", p.value("display_name", ""));
+            if (p.value("bot", false)) line("kind", "a bot (a program, not a person)");
             line("full name", p.value("full_name", ""));
             line("birthday", p.value("birthday", ""));
             line("about", p.value("bio", ""));
@@ -1174,12 +1175,15 @@ private:
             } else if (cmd == "/profile") {
                 // /profile            yours        /profile <user>      theirs
                 // /profile fullname|birthday|bio|link <text>   change yours ("" clears)
+                // /profile bot on|off                          say whether this account is a program
                 auto sp = arg.find(' ');
                 std::string field = arg.substr(0, sp), value = sp == std::string::npos ? "" : arg.substr(sp + 1);
                 static const std::map<std::string, std::string> fields = {
                     {"fullname", "full_name"}, {"birthday", "birthday"}, {"bio", "bio"}, {"name", "display_name"}};
                 if (arg.empty()) command({{"cmd", "get_profile"}});
                 else if (fields.count(field)) command({{"cmd", "set_profile"}, {fields.at(field), value}});
+                else if (field == "bot" && (value == "on" || value == "off"))
+                    command({{"cmd", "set_profile"}, {"bot", value == "on"}});
                 else if (field == "link")
                     command({{"cmd", "set_profile"}, {"links", value.empty() ? json::array() : json::array({value})}});
                 else command({{"cmd", "get_profile"}, {"username", arg}});
@@ -1406,6 +1410,7 @@ private:
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
                               text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
+                              text("/profile bot on|off   mark this account as a program, not a person"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/receipts on|off   whether others see what you have read"),
@@ -1439,6 +1444,7 @@ private:
                 text(status == "offline" ? "o " : "* ") | color(dot),
                 text(shown) | bold | color(m.value("me", false) ? Color::Cyan : Color::Green),
                 text(status == "dnd" ? "  do not disturb" : status == "online" ? "" : "  " + status) | color(dot),
+                text(m.value("bot", false) ? " [bot]" : "") | color(Color::Blue),
                 text(shown != username ? "  (" + username + ")" : "") | dim,
                 text(m.value("is_owner", false) ? "  owner" : m.value("is_admin", false) ? "  admin" : "") |
                     color(Color::Magenta),

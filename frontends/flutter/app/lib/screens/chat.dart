@@ -37,6 +37,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Message? _editing;
   int _seen = 0;
   bool _loadingOlder = false;
+  // The first message that was unread when this screen opened; a "New" line
+  // is drawn above it.
+  String _newFrom = '';
 
   CordedStore get _store => widget.state.store;
   String get _room => widget.roomId;
@@ -63,6 +66,7 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     widget.state.viewingRoom = _room;
     widget.state.viewingThread = _thread;
+    if (_thread == null) _newFrom = _store.rooms[_room]?.firstUnread ?? '';
     final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
     if (widget.jumpTo != null) {
       opened.then((_) {
@@ -282,6 +286,43 @@ class _ChatScreenState extends State<ChatScreen> {
     if (roomId == _room && _thread == null) return;
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => ChatScreen(state: widget.state, roomId: roomId)));
+  }
+
+  bool _isBot(String userId) => _store.rooms[_room]?.members.any((x) => x.userId == userId && x.bot) ?? false;
+
+  // Where the unread messages began when the chat was opened.
+  Widget _newLine() {
+    final colour = Theme.of(context).colorScheme.error;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Row(children: [
+        Expanded(child: Divider(color: colour, height: 1)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('New',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: colour, fontWeight: FontWeight.bold)),
+        ),
+        Expanded(child: Divider(color: colour, height: 1)),
+      ]),
+    );
+  }
+
+  // Only your own place moves back; nobody else is told. The chat closes,
+  // since staying in it would read everything again.
+  Future<void> _markUnreadFrom(Message m) async {
+    final navigator = Navigator.of(context);
+    _sub?.cancel();
+    _sub = null;
+    try {
+      await widget.state.engine.command({'cmd': 'mark_unread', 'room_id': _room, 'event_id': m.id});
+    } on CordedError catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    }
+    if (mounted) navigator.pop();
   }
 
   void _showProfile(Message m) {
@@ -589,6 +630,15 @@ class _ChatScreenState extends State<ChatScreen> {
               Clipboard.setData(ClipboardData(text: m.body));
             },
           ),
+          if (_thread == null && !m.mine && m.seq != null)
+            ListTile(
+              leading: const Icon(Icons.mark_chat_unread_outlined),
+              title: const Text('Mark unread from here'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _markUnreadFrom(m);
+              },
+            ),
           if (_mayPin)
             ListTile(
               leading: Icon(_isPinned(m) ? Icons.push_pin : Icons.push_pin_outlined),
@@ -684,6 +734,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Text(m.sender,
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+                if (_isBot(m.senderId)) const BotTag(),
               ]),
             ),
           ),
@@ -980,8 +1031,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: messages.length,
                     itemBuilder: (context, i) {
                       final m = messages[messages.length - 1 - i];
-                      return KeyedSubtree(
+                      final bubble = KeyedSubtree(
                           key: _keys.putIfAbsent(m.id, GlobalKey.new), child: _bubble(m, messages));
+                      if (m.id != _newFrom) return bubble;
+                      return Column(mainAxisSize: MainAxisSize.min, children: [_newLine(), bubble]);
                     },
                   ),
           ),

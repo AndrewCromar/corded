@@ -58,3 +58,21 @@ class PresenceAvatar extends StatelessWidget {
     ]);
   }
 }
+
+/// Marks a program, so people know they are not talking to a person.
+class BotTag extends StatelessWidget {
+  const BotTag({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(5)),
+      child: Text('BOT',
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSecondaryContainer, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+    );
+  }
+}

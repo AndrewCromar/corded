@@ -8,11 +8,15 @@ class Member {
         me = j['me'] == true,
         isOwner = j['is_owner'] == true,
         isAdmin = j['is_admin'] == true,
+        bot = j['bot'] == true,
         nickname = j['nickname'] as String? ?? '',
         online = j['online'] == true,
         roles = ((j['roles'] as List?) ?? const []).map((r) => '$r').toList();
   final String userId, username, displayName, nickname;
   final bool me, isOwner, isAdmin, online;
+
+  /// Their profile says they are a program, not a person.
+  final bool bot;
   final List<String> roles;
 }
 
@@ -28,6 +32,7 @@ class Room {
   List<String> pinned = const []; // ids of the pinned messages, oldest pin first
   bool nsfw = false; // a channel marked so that clients warn before showing it
   bool archived = false; // a channel kept to read, closed to writing
+  String firstUnread = ''; // where this person's unread messages start; empty if none
   int lastActivity = 0;
 
   void apply(Map<String, dynamic> j) {
@@ -38,6 +43,7 @@ class Room {
     disappearAfter = (j['disappear_after'] as num?)?.toInt() ?? disappearAfter;
     nsfw = j['nsfw'] as bool? ?? nsfw;
     archived = j['archived'] as bool? ?? archived;
+    firstUnread = j['first_unread'] as String? ?? firstUnread;
     final p = j['pinned'] as List?;
     if (p != null) pinned = p.map((e) => '$e').toList();
     final m = j['members'] as List?;
@@ -126,6 +132,8 @@ class ServerInfo {
   ServerInfo(this.id);
   final int id;
   String name = '';
+  String description = ''; // a short line about the community
+  String icon = ''; // a small picture as base64, or empty
   String address = '';
   String connection = 'disconnected';
   bool isOwner = false;
@@ -139,6 +147,8 @@ class ServerInfo {
 
   void apply(Map<String, dynamic> j) {
     name = j['name'] as String? ?? name;
+    description = j['description'] as String? ?? description;
+    icon = j['icon'] as String? ?? icon;
     address = j['address'] as String? ?? address;
     connection = j['connection'] as String? ?? connection;
     isOwner = j['is_owner'] as bool? ?? isOwner;
@@ -167,8 +177,12 @@ class Profile {
         birthday = j['birthday'] as String? ?? '',
         bio = j['bio'] as String? ?? '',
         picture = j['picture'] as String? ?? '',
+        bot = j['bot'] == true,
         links = ((j['links'] as List?) ?? const []).map((e) => '$e').toList();
   final String displayName, fullName, birthday, bio;
+
+  /// Whether this is a program, not a person. Self-declared.
+  final bool bot;
 
   /// A small picture as base64 (JPEG or PNG), or empty.
   final String picture;

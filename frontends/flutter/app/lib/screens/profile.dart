@@ -103,7 +103,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: PresenceAvatar(name: name, radius: 48, status: status, picture: _pictureBytes(p)),
               ),
               const SizedBox(height: 12),
-              Center(child: Text(name, style: theme.textTheme.headlineSmall)),
+              Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Flexible(child: Text(name, style: theme.textTheme.headlineSmall)),
+                  if (p.bot) const BotTag(),
+                ]),
+              ),
+              if (p.bot)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Center(child: Text('This account says it is a program, not a person.')),
+                ),
               Center(
                   child: Text('@${widget.username}  ·  ${presenceLook(status).label}',
                       style: theme.textTheme.bodyMedium)),
@@ -168,6 +178,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   // Each link: what it is called, and where it leads.
   final _links = <(TextEditingController, TextEditingController)>[];
   bool _loaded = false;
+  bool _bot = false;
   String _picture = ''; // base64, as it will be saved
   bool _pictureChanged = false;
 
@@ -208,6 +219,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           _links.add((TextEditingController(text: parts.label), TextEditingController(text: parts.url)));
         }
         _picture = p.picture;
+        _bot = p.bot;
         _loaded = true;
       });
     }).catchError((_) {
@@ -233,6 +245,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               'full_name': _fullName.text.trim(),
               'birthday': birthday,
               'bio': _bio.text.trim(),
+              'bot': _bot,
               if (_pictureChanged) 'picture': _picture,
               'links': [
                 for (final (label, url) in _links)
@@ -305,6 +318,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               field(_fullName, 'Full name', max: 80),
               field(_birthday, 'Birthday', helper: '2004-05-17, or 05-17 without the year'),
               field(_bio, 'About you', lines: 3, max: 500),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('This account is a bot'),
+                subtitle: const Text('Shows a BOT tag beside the name, so people know it is a program'),
+                value: _bot,
+                onChanged: (v) => setState(() => _bot = v),
+              ),
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text('Links', style: Theme.of(context).textTheme.titleSmall),

@@ -240,7 +240,12 @@ class _MembersScreenState extends State<MembersScreen> {
                             name: m.displayName,
                             picture: widget.state.store.picture(m.userId),
                             status: widget.state.store.presence(_server.id, m.userId)),
-                        title: Text(m.me ? '${m.displayName} (you)' : m.displayName),
+                        title: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Flexible(
+                              child: Text(m.me ? '${m.displayName} (you)' : m.displayName,
+                                  overflow: TextOverflow.ellipsis)),
+                          if (m.bot) const BotTag(),
+                        ]),
                         subtitle: Text([
                           presenceLook(widget.state.store.presence(_server.id, m.userId)).label,
                           '@${m.username}',

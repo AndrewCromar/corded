@@ -1,10 +1,13 @@
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import 'channel_access.dart';
 import 'common.dart';
+import 'home.dart';
 import 'roles.dart';
 import 'scan.dart';
 
@@ -240,6 +243,26 @@ class _ServerScreenState extends State<ServerScreen> {
         s['needs_restart'] == true ? '$key changed. It takes effect after a restart.' : '$key changed.');
   }
 
+  // The picture is shrunk here, so the server only ever holds a small one.
+  Future<void> _choosePicture() async {
+    final messenger = ScaffoldMessenger.of(context);
+    String? small;
+    try {
+      final file =
+          await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, maxHeight: 1024);
+      if (file == null) return;
+      small = shrinkToProfilePicture(await file.readAsBytes());
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The picture could not be opened.')));
+      return;
+    }
+    if (small == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
+      return;
+    }
+    await _do({'cmd': 'set_setting', 'key': 'icon', 'value': small}, 'Server picture changed.');
+  }
+
   String _uptime() {
     final started = (_status['started_at'] as num?)?.toInt() ?? 0;
     if (started == 0) return '';
@@ -295,7 +318,21 @@ class _ServerScreenState extends State<ServerScreen> {
         ],
         if (_server.can('manage_server')) ...[
           heading('Settings'),
-          for (final s in _settings)
+          ListTile(
+            leading: ServerIcon(_server),
+            title: const Text('Server picture'),
+            subtitle: Text(_server.icon.isEmpty ? 'None. Tap to choose one.' : 'Tap to change it.'),
+            trailing: _server.icon.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Remove the picture',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () =>
+                        _do({'cmd': 'set_setting', 'key': 'icon', 'value': ''}, 'Server picture removed.'),
+                  ),
+            onTap: _choosePicture,
+          ),
+          for (final s in _settings.where((s) => s['key'] != 'icon'))
             ListTile(
               title: Text('${s['key']}: ${s['value']}'),
               subtitle: Text([

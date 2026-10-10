@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
@@ -124,7 +127,15 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(server == null || server.name.isEmpty ? 'Corded' : server.name),
+        title: server == null || server.description.isEmpty
+            ? Text(server == null || server.name.isEmpty ? 'Corded' : server.name)
+            : Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text(server.name.isEmpty ? 'Corded' : server.name),
+                Text(server.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall),
+              ]),
         actions: [
           IconButton(
             tooltip: 'Search messages',
@@ -153,9 +164,10 @@ class HomeScreen extends StatelessWidget {
             heading('Servers'),
             for (final s in state.store.servers.values)
               ListTile(
-                leading: const Icon(Icons.dns_outlined),
+                leading: ServerIcon(s),
                 title: Text(s.name.isEmpty ? s.address : s.name),
-                subtitle: Text(s.address),
+                subtitle: Text(s.description.isEmpty ? s.address : s.description,
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
                 selected: s.id == server?.id,
                 onTap: () {
                   state.selectServer(s.id);
@@ -247,5 +259,29 @@ class HomeScreen extends StatelessWidget {
         label: const Text('Message'),
       ),
     );
+  }
+}
+
+/// A server's picture, or a plain mark when it has none.
+class ServerIcon extends StatelessWidget {
+  const ServerIcon(this.server, {super.key, this.radius = 16});
+  final ServerInfo server;
+  final double radius;
+
+  static final _decoded = <String, Uint8List?>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = server.icon.isEmpty
+        ? null
+        : _decoded.putIfAbsent(server.icon, () {
+            try {
+              return base64Decode(server.icon);
+            } on FormatException {
+              return null;
+            }
+          });
+    if (bytes == null) return const Icon(Icons.dns_outlined);
+    return CircleAvatar(radius: radius, backgroundImage: MemoryImage(bytes));
   }
 }
