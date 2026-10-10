@@ -9,9 +9,12 @@ their birthday. They answer there (05-17, 17 May, 2004-05-17) or put it in
 their profile; an answer in the chat wins. On the day, at --at by this
 machine's clock, the bot wishes them in the direct chat and in the channel.
 
-In the direct chat the bot also understands: when, forget, no (never ask
-again), private (no post in the channel), public. In a channel, !birthdays
-lists the next few.
+In the direct chat the bot also understands: help, when, forget, no (never
+ask again), private (no post in the channel), public. In a channel, !birthdays
+lists the next few and !help says what the bot is for.
+
+Its messages use the marks the apps draw as styling: **bold**, `code`, lines
+starting with "- " as a list and "## " as a heading.
 
 Birthdays told to the bot are kept in its folder on this machine (store.json
 beside its vault) and are sent nowhere.
@@ -27,9 +30,8 @@ from corded_bot import Bot
 
 MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
           "november", "december"]
-HELP = ("Tell me your birthday like `05-17` (month-day), `17 May`, or `2004-05-17` if you want your age shown. "
-        "Other words I know: `when`, `forget`, `no` (I won't ask again), `private` (I wish you here only, "
-        "not in the channel), `public`.")
+DATES = ("- `05-17` (month-day) or `17 May`\n"
+         "- `2004-05-17` to have your age shown")
 
 
 def parse_birthday(text, this_year):
@@ -155,16 +157,46 @@ def main():
         """The birthday in their profile, if the bot goes by it: they have told it none."""
         return "" if people.get(user_id, {}).get("birthday") else birthday_of(user_id)
 
-    def how_to(user_id):
-        """What to tell someone who asks for help: not "tell me your birthday"
-        to someone whose birthday it has."""
+    def bold(birthday):
+        return f"**{in_words(birthday)}**"
+
+    def source_of(user_id):
+        return "from your profile" if in_profile(user_id) else "as you told me"
+
+    def help_for(user_id):
+        """Everything the bot does, for one person: what it has for them
+        comes first, and it does not ask for a birthday it already has."""
         birthday = birthday_of(user_id)
-        if not birthday:
-            return "I don't have a birthday for you. " + HELP
-        source = "from your profile" if in_profile(user_id) else "as you told me"
-        return (f"I have your birthday as {in_words(birthday)}, {source}. To change it, send me another date "
-                "(`05-17`, `17 May`, or `2004-05-17` to have your age shown). Other words I know: `forget`, "
-                "`private` (I wish you here only, not in the channel), `public`.")
+        person = people.get(user_id, {})
+        return "\n".join([
+            "## 🎂 Birthday Bot",
+            f"I wish people a happy birthday on the day, in a direct chat and in {channel}.",
+            "",
+            f"**Your birthday:** {in_words(birthday)}, {source_of(user_id)}" if birthday
+            else "**Your birthday:** not set yet",
+            f"**Wished in {channel}:** " + ("no, here only" if person.get("private") else "yes"),
+            "",
+            "**To change it, send me a date**" if birthday else "**To set it, send me a date**",
+            DATES,
+            "",
+            "**Other things you can send me**",
+            "- `when`: what I have for you",
+            "- `forget`: drop the date you told me",
+            f"- `private`: wish me here only, not in {channel}",
+            f"- `public`: wish me in {channel} too",
+            "- `no`: don't ask me again",
+            "- `help`: this message",
+            "",
+            f"In a channel, `{bot.prefix}birthdays` lists the next few.",
+        ])
+
+    def hint_for(user_id):
+        """The short version, after something it could not read."""
+        birthday = birthday_of(user_id)
+        if birthday:
+            return (f"I have your birthday as {bold(birthday)}, {source_of(user_id)}. Send another date to change "
+                    "it, or `help` to see everything I know.")
+        return "Send me your birthday like `05-17` or `17 May`, or `help` to see everything I know."
 
     def name_of(member):
         return member.get("display_name") or member.get("username", "")
@@ -176,14 +208,30 @@ def main():
         seen = in_profile(member["user_id"])
         if seen:
             # Nothing to ask: say what it found and what it will do with it.
-            words = (f"Hi {name_of(member)}, I'm the birthday bot here. I see from your profile that your birthday "
-                     f"is {in_words(seen)}, so I'll wish you a happy one then, here and in {channel}. Reply "
-                     "`private` if you'd rather I didn't post in the channel, or send me another date if that "
-                     "one is wrong.")
+            words = "\n".join([
+                f"Hi **{name_of(member)}**, I'm the birthday bot here. 🎂",
+                "",
+                f"I see from your profile that your birthday is {bold(seen)}, so I'll wish you a happy one then, "
+                f"here and in {channel}.",
+                "",
+                "**If you'd like something else, reply with**",
+                f"- `private`: wish me here only, not in {channel}",
+                "- another date, if that one is wrong",
+                "- `help`: everything I know",
+            ])
         else:
-            words = (f"Hi {name_of(member)}, I'm the birthday bot here. Tell me your birthday and I'll wish you a "
-                     "happy one: reply `05-17` (month-day), or `2004-05-17` if you want your age shown. Or put it "
-                     "in your profile. Reply `no` and I won't ask again.")
+            words = "\n".join([
+                f"Hi **{name_of(member)}**, I'm the birthday bot here. 🎂",
+                "",
+                "Tell me your birthday and I'll wish you a happy one on the day.",
+                "",
+                "**Reply with**",
+                DATES,
+                "- `no`: I won't ask again",
+                "- `help`: everything I know",
+                "",
+                "Or put it in your profile, and I'll find it there.",
+            ])
         # Marked first, as with a wish: a greeting that fails half way is not repeated.
         person["asked"] = True
         person["seen"] = seen
@@ -206,7 +254,7 @@ def main():
         if falls_on(seen, today()):
             wish()   # the wish says it all
             return
-        bot.dm(member["username"], f"I see your birthday in your profile now: {in_words(seen)}. "
+        bot.dm(member["username"], f"I see your birthday in your profile now: {bold(seen)}. "
                                    "I'll wish you a happy one then.")
 
     def wish_one(member, birthday, day):
@@ -215,10 +263,10 @@ def main():
         person["wished"] = day.year
         bot.store.save()
         age = age_on(birthday, day)
-        bot.dm(member["username"], f"🎂 Happy birthday, {name_of(member)}!" + (f" {age} today." if age else ""))
+        bot.dm(member["username"], f"🎂 **Happy birthday, {name_of(member)}!**" + (f" {age} today." if age else ""))
         if not person.get("private"):
             # By username with an @, so they are called to it as by any mention.
-            bot.say(channel, f"🎂 Happy birthday, @{member['username']}!" + (f" ({age} today.)" if age else ""))
+            bot.say(channel, f"🎂 **Happy birthday**, @{member['username']}!" + (f" ({age} today.)" if age else ""))
 
     def wish():
         now = datetime.datetime.now()
@@ -236,8 +284,8 @@ def main():
 
     @bot.on_message
     def told(message):
-        if not message.direct:
-            return
+        if not message.direct or message.body.strip().startswith(bot.prefix):
+            return   # elsewhere, or a command, which is answered below
         person = people.setdefault(message.sender_id, {})
         word = message.body.strip().lower().strip(".!")
         lost = person.pop("lost", 0)
@@ -249,27 +297,26 @@ def main():
             written = in_profile(message.sender_id)
             if written:
                 answer = (("Forgotten what you told me. " if told_before else "") +
-                          f"Your profile says {in_words(written)}, and I go by that; clear it there if you "
+                          f"Your profile says {bold(written)}, and I go by that; clear it there if you "
                           "want no wish.")
             else:
                 answer = "Forgotten. I have no birthday for you now." if told_before else "I had none to forget."
         elif word == "when":
             birthday = birthday_of(message.sender_id)
-            source = "from your profile" if in_profile(message.sender_id) else "as you told me"
-            answer = (f"I have {in_words(birthday)}, {source}." if birthday
-                      else "I don't have a birthday for you. " + HELP)
+            answer = (f"I have {bold(birthday)}, {source_of(message.sender_id)}." if birthday
+                      else "I don't have a birthday for you yet. " + hint_for(message.sender_id))
         elif word in ("private", "public"):
             person["private"] = word == "private"
             answer = ("I'll wish you here only, not in the channel." if word == "private"
                       else f"I'll wish you in {channel} too.")
-        elif word in ("help", "?"):
-            answer = how_to(message.sender_id)
+        elif word in ("help", "?", "commands", "hi", "hello", "hey"):
+            answer = help_for(message.sender_id)
         else:
             birthday = parse_birthday(message.body, today().year)
             if not birthday:
                 slashed = re.fullmatch(r"\d{1,4}[/.]\d{1,2}([/.]\d{1,4})?", word)
                 answer = ("I can't tell the day from the month there. Write it like `05-17` (month-day) or `17 May`."
-                          if slashed else "I didn't understand that. " + how_to(message.sender_id))
+                          if slashed else "I didn't understand that. " + hint_for(message.sender_id))
                 # Whatever keeps writing things it cannot read (another program,
                 # perhaps) gets three answers and then silence.
                 person["lost"] = lost + 1
@@ -280,11 +327,11 @@ def main():
                 written = in_profile(message.sender_id)
                 person["birthday"] = birthday
                 person.pop("no", None)
-                answer = f"Got it: {in_words(birthday)}. " + (
+                answer = f"Got it: {bold(birthday)}. " + (
                     "That's today!" if falls_on(birthday, today()) and person.get("wished") != today().year
                     else "I'll wish you a happy birthday then.")
                 if written and written[-5:] != birthday[-5:]:
-                    answer += f" Your profile says {in_words(written)}; I'll go by what you told me here."
+                    answer += f" Your profile says {bold(written)}; I'll go by what you told me here."
         bot.store.save()
         bot.reply(message, answer)
         wish()   # it may be today
@@ -298,9 +345,26 @@ def main():
             if birthday and not member.get("bot") and not people.get(user_id, {}).get("private"):
                 known.append((days_until(birthday, day), name_of(member), birthday))
         if not known:
-            return "I don't know any birthdays yet. Tell me yours in a direct chat."
-        return "\n".join(f"{name}: {' '.join(in_words(b).split()[:2])}" + (" (today)" if days == 0 else "")
-                         for days, name, b in sorted(known)[:5])
+            return "I don't know any birthdays yet. Tell me yours in a direct chat: send me `help` there."
+        lines = ["**Next birthdays**"]
+        for days, name, birthday in sorted(known)[:5]:
+            when = "today 🎂" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+            lines.append(f"- **{name}**: {' '.join(in_words(birthday).split()[:2])} ({when})")
+        return "\n".join(lines)
+
+    @bot.command("help", help="what I do")
+    def help_(message, words):
+        if message.direct:
+            return help_for(message.sender_id)
+        return "\n".join([
+            "## 🎂 Birthday Bot",
+            f"I wish people a happy birthday on the day, in a direct chat and in {channel}.",
+            "",
+            f"- **Tell me yours:** open a direct chat with me (`@{bot.username}`) and send a date like `05-17`, "
+            "or put it in your profile.",
+            "- **More:** send me `help` in that chat: changing the date, being wished privately, and the rest.",
+            f"- `{bot.prefix}birthdays`: the next few birthdays",
+        ])
 
     bot.connect(args.address)
     print(f"{args.username} is connected", flush=True)

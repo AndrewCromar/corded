@@ -54,9 +54,11 @@ shown) or put it in their profile; an answer in the chat wins. On the day, at
 direct chat and in `--channel` (`#general` if not given), where it mentions
 them by `@name` so that they are notified.
 
-In the direct chat it also understands `when`, `forget`, `no` (never ask
-again), `private` (no post in the channel) and `public`. In a channel,
-`!birthdays` lists the next few.
+In the direct chat it also understands `help` (what it has for you and
+everything it knows), `when`, `forget`, `no` (never ask again), `private` (no
+post in the channel) and `public`. In a channel, `!birthdays` lists the next
+few and `!help` says what the bot is for. Its messages use bold, lists and
+headings, which the apps draw as styling.
 
 People who were on the server before the bot's first run are not asked, so
 that starting it does not send everyone a message at once; `--greet-existing`

@@ -161,12 +161,12 @@ def main():
         assert "members" in carol.request({"cmd": "member_list"})
         assert isinstance(carol.profile_of(alice.me), dict)
         assert carol.dm("birthdays") == asked.room_id
-        wait_for("the date read back", lambda m: m.sender == "birthdays" and "Got it: 17 May 2004" in m.body,
+        wait_for("the date read back", lambda m: m.sender == "birthdays" and "Got it: **17 May 2004**" in m.body,
                  among=carol_heard)
         assert "That's today!" in carol_heard[-1].body or any("That's today!" in m.body for m in carol_heard)
-        wait_for("a wish in the direct chat", lambda m: m.direct and m.body == "🎂 Happy birthday, carol! 22 today.",
+        wait_for("a wish in the direct chat", lambda m: m.direct and m.body == "🎂 **Happy birthday, carol!** 22 today.",
                  among=carol_heard)
-        wait_for("a wish in the channel", lambda item: item == ("birthdays", "🎂 Happy birthday, @carol! (22 today.)"))
+        wait_for("a wish in the channel", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @carol! (22 today.)"))
         its = next(m for m in carol.members().values() if m["username"] == "birthdays")
         profile = carol.profile_of(its["user_id"])
         assert its["display_name"] == "Birthday Bot" and its["bot"] and "birthdays" in profile["bio"]
@@ -177,39 +177,49 @@ def main():
         # A birthday in the profile, without a year; and a bot that joins is not asked.
         dave, dave_heard, _ = person("dave")
         dave.request({"cmd": "set_profile", "birthday": "05-17"})
-        wait_for("a wish from the profile", lambda item: item == ("birthdays", "🎂 Happy birthday, @dave!"))
+        wait_for("a wish from the profile", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @dave!"))
         bot_process("command_bot.py", address, "latecomer", os.path.join(tmp, "latecomer"))
         alice.say("#general", "!birthdays")
-        wait_for("the list", lambda item: item[0] == "birthdays" and "carol: 17 May (today)" in item[1]
-                 and "dave: 17 May (today)" in item[1])
+        wait_for("the list", lambda item: item[0] == "birthdays" and "- **carol**: 17 May (today 🎂)" in item[1]
+                 and "- **dave**: 17 May (today 🎂)" in item[1])
         assert not [item for item in heard if "birthday bot" in item[1]], "someone here before the bot was asked"
         wait_for("the bot to say what it saw in the profile", lambda m: m.sender == "birthdays" and
-                 "I see from your profile that your birthday is 17 May" in m.body and "Tell me" not in m.body,
+                 "I see from your profile that your birthday is **17 May**" in m.body and "Tell me" not in m.body,
                  among=dave_heard)
         print("ok  birthday bot: a birthday from the profile, seen and not asked for; the list of those coming")
         # The other words it knows in a direct chat.
         with_bot = dave.dm("birthdays")
-        for said, answer in (("when", "I have 17 May, from your profile."),
+        for said, answer in (("when", "I have **17 May**, from your profile."),
                              ("17/05", "I can't tell the day from the month"),
                              ("private", "I'll wish you here only"),
-                             ("what?", "I didn't understand that. I have your birthday as 17 May, from your profile."),
-                             ("forget", "Your profile says 17 May, and I go by that")):
+                             ("what?", "I didn't understand that. I have your birthday as **17 May**, from your profile."),
+                             ("forget", "Your profile says **17 May**, and I go by that"),
+                             ("help", "## 🎂 Birthday Bot\nI wish people a happy birthday on the day, in a direct chat and in #general.\n\n**Your birthday:** 17 May, from your profile\n**Wished in #general:** no, here only\n\n**To change it, send me a date**\n- `05-17`"),
+                             ("!help", "**Your birthday:** 17 May, from your profile")):
             dave.say(with_bot, said)
             wait_for(f"the answer to {said}", lambda m: m.sender == "birthdays" and answer in m.body, among=dave_heard)
         del heard[:]
         alice.say("#general", "!birthdays")
-        listed = wait_for("the list again", lambda item: item[0] == "birthdays" and "carol: 17 May" in item[1])
+        listed = wait_for("the list again", lambda item: item[0] == "birthdays" and "**carol**: 17 May" in item[1])
         assert "dave" not in listed[1], "someone who asked to be wished privately was listed"
         # Someone who is asked first and fills in the profile afterwards is told that it was seen.
         erin, erin_heard, _ = person("erin")
         wait_for("erin to be asked", lambda m: "Tell me your birthday" in m.body, among=erin_heard)
+        erin.say(erin.dm("birthdays"), "help")
+        wait_for("help for someone it knows nothing of", lambda m: "**Your birthday:** not set yet" in m.body
+                 and "**To set it, send me a date**" in m.body and "**Wished in #general:** yes" in m.body,
+                 among=erin_heard)
+        alice.say("#general", "!help")
+        wait_for("help in a channel", lambda item: item[0] == "birthdays" and "## 🎂 Birthday Bot" in item[1]
+                 and "`!birthdays`" in item[1] and "Your birthday" not in item[1])
         erin.request({"cmd": "set_profile", "birthday": "1999-12-25"})
         wait_for("the bot to notice", lambda m: m.direct and
-                 "I see your birthday in your profile now: 25 December 1999" in m.body, among=erin_heard)
+                 "I see your birthday in your profile now: **25 December 1999**" in m.body, among=erin_heard)
         erin.say(erin.dm("birthdays"), "24 dec")
-        wait_for("the two dates to be weighed", lambda m: "Got it: 24 December. I'll wish you a happy birthday then. "
-                 "Your profile says 25 December 1999; I'll go by what you told me here." in m.body, among=erin_heard)
-        print("ok  birthday bot: when, private, forget, a date it cannot read, a profile filled in later, "
+        wait_for("the two dates to be weighed", lambda m: "Got it: **24 December**. I'll wish you a happy birthday then. "
+                 "Your profile says **25 December 1999**; I'll go by what you told me here." in m.body, among=erin_heard)
+        print("ok  birthday bot: help (in a chat and in a channel), when, private, forget, a date it cannot read, "
+              "a profile filled in later, "
               "and the list leaves private people out")
 
         time.sleep(6)   # past the wait before a newcomer is asked, and a few looks at the clock
