@@ -7,10 +7,12 @@ class Member {
         displayName = j['display_name'] as String? ?? j['username'] as String? ?? '',
         me = j['me'] == true,
         isOwner = j['is_owner'] == true,
+        isAdmin = j['is_admin'] == true,
+        nickname = j['nickname'] as String? ?? '',
         online = j['online'] == true,
         roles = ((j['roles'] as List?) ?? const []).map((r) => '$r').toList();
-  final String userId, username, displayName;
-  final bool me, isOwner, online;
+  final String userId, username, displayName, nickname;
+  final bool me, isOwner, isAdmin, online;
   final List<String> roles;
 }
 
@@ -92,6 +94,11 @@ class ServerInfo {
   String connection = 'disconnected';
   bool isOwner = false;
   Set<String> permissions = {};
+  List<String> roles = const []; // the roles that can be given to members
+
+  /// Whether this person may do something that needs [permission] here.
+  bool can(String permission) =>
+      isOwner || permissions.contains('administrator') || permissions.contains(permission);
 
   void apply(Map<String, dynamic> j) {
     name = j['name'] as String? ?? name;
@@ -100,5 +107,12 @@ class ServerInfo {
     isOwner = j['is_owner'] as bool? ?? isOwner;
     final p = j['my_permissions'] as List?;
     if (p != null) permissions = p.map((e) => '$e').toSet();
+    final r = j['roles'] as List?;
+    if (r != null) {
+      roles = [
+        for (final role in r)
+          if (role is Map && role['is_everyone'] != true) '${role['name']}'
+      ];
+    }
   }
 }

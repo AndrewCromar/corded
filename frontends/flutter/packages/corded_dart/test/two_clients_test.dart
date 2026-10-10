@@ -70,6 +70,27 @@ void main() {
     // A refused command surfaces as an error, not silence.
     await expectLater(bob.command({'cmd': 'create_channel', 'name': 'nope'}), throwsA(isA<CordedError>()));
 
+    // Who may manage whom, and the roles there are to give.
+    final aliceServer = aliceStore.servers.values.single, bobServer = bobStore.servers.values.single;
+    expect(aliceServer.can('kick_members'), isTrue);
+    expect(bobServer.can('kick_members'), isFalse);
+    await alice.command({'cmd': 'create_role', 'name': 'helper', 'permissions': ['kick_members']});
+    await eventually(() => aliceServer.roles.contains('helper') ? true : null, 'the new role');
+    await alice.command({'cmd': 'grant_role', 'username': 'bob', 'role': 'helper', 'grant': true});
+    await eventually(() => bobServer.can('kick_members') ? true : null, 'bob may kick now');
+    final listed = await alice.command({'cmd': 'member_list'});
+    final members = [for (final m in listed['members'] as List) Member.fromJson((m as Map).cast<String, dynamic>())];
+    expect(members.firstWhere((m) => m.username == 'bob').roles, ['helper']);
+    expect(members.firstWhere((m) => m.username == 'alice').isOwner, isTrue);
+    await alice.command({'cmd': 'set_nickname', 'username': 'bob', 'nickname': 'Bobby'});
+    await eventually(
+        () => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null, 'the display name');
+    await alice.command({'cmd': 'set_nickname', 'username': 'bob', 'nickname': ''});
+    await eventually(
+        () => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null, 'the name restored');
+    await eventually(
+        () => general(bobStore)!.members.any((m) => m.me && m.displayName == 'bob') ? true : null, 'restored for bob');
+
     for (var i = 1; i <= 5; i++) {
       await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'message $i'});
     }

@@ -5,6 +5,7 @@ import '../app_state.dart';
 import 'add_server.dart';
 import 'chat.dart';
 import 'common.dart';
+import 'members.dart';
 import 'settings.dart';
 
 /// The chats of one server, with a drawer for moving between servers.
@@ -89,6 +90,13 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(server == null || server.name.isEmpty ? 'Corded' : server.name),
         actions: [
+          if (server != null)
+            IconButton(
+              tooltip: 'Members',
+              icon: const Icon(Icons.people_outline),
+              onPressed: () =>
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => MembersScreen(state: state))),
+            ),
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
