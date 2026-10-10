@@ -190,7 +190,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _shareNotificationOptions() =>
-      Background.tell({'muted': mutedRooms.toList(), 'show_text': showMessageText});
+      Background.tell({'muted': mutedRooms.toList(), 'show_text': showMessageText, 'me': store.username});
 
   /// With do not disturb on, this phone shows no message notifications.
   void setDoNotDisturb(bool on) => Background.tell(on ? 'dnd_on' : 'dnd_off');

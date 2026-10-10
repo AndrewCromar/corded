@@ -36,6 +36,15 @@ void main() {
     expect(notificationFor(message('a secret'), {'r1': 'bob'}, showText: false)!.body, 'New message');
   });
 
+  test('a mention says so, and gets through a muted chat', () {
+    final n = notificationFor(message('@andrew lunch?'), {'r1': '#general'}, muted: {'r1'}, me: 'andrew')!;
+    expect(n.title, '#general · mentioned you');
+    expect(n.body, 'bob: @andrew lunch?');
+    expect(notificationFor(message('@carol lunch?'), {'r1': '#general'}, muted: {'r1'}, me: 'andrew'), isNull);
+    final hidden = notificationFor(message('@everyone hi'), {'r1': '#general'}, showText: false, me: 'andrew')!;
+    expect(hidden.body, 'bob mentioned you');
+  });
+
   test('in a direct chat the title is the sender and the body is just the text', () {
     final n = notificationFor(message('hello'), {'r1': 'bob'})!;
     expect(n.title, 'bob');

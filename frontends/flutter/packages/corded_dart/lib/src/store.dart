@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'engine.dart';
+import 'mentions.dart';
 import 'models.dart';
 
 /// Keeps the lists a screen draws up to date from the core's events.
@@ -259,11 +260,13 @@ class CordedStore {
     for (final m in list) {
       if (m.id == id) {
         m.apply(j);
+        m.mentionsMe = !m.mine && mentionsUser(m.body, username);
         list.sort(compareMessages);
         return false;
       }
     }
     final message = Message.fromJson(j);
+    message.mentionsMe = !message.mine && mentionsUser(message.body, username);
     // Pages of older messages arrive later, so find its place each time.
     var at = list.length;
     while (at > 0 && compareMessages(list[at - 1], message) > 0) {
@@ -323,7 +326,10 @@ class CordedStore {
         final roomId = data['room_id'] as String? ?? '';
         final id = data['event_id'];
         for (final m in _all(roomId)) {
-          if (m.id == id) m.apply(data);
+          if (m.id == id) {
+            m.apply(data);
+            m.mentionsMe = !m.mine && mentionsUser(m.body, username);
+          }
         }
         // A deleted reaction no longer counts.
         for (final byKey in (_reactions[roomId] ?? const <String, Map<String, Set<String>>>{}).values) {

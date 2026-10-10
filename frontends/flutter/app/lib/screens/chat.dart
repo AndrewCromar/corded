@@ -156,6 +156,34 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // While an "@" word is being typed at the end of the box, the people it could be.
+  static final _typingMention = RegExp(r'(^|\s)@([A-Za-z0-9_-]*)$');
+
+  List<String> _mentionChoices(Room? room) {
+    if (room == null) return const [];
+    final match = _typingMention.firstMatch(_input.text);
+    if (match == null) return const [];
+    final typed = match.group(2)!.toLowerCase();
+    final names = [
+      for (final m in room.members)
+        if (!m.me) m.username,
+      if (room.kind != 'direct') 'everyone',
+    ];
+    return [
+      for (final n in names)
+        if (n.startsWith(typed) && n != typed) n
+    ].take(8).toList();
+  }
+
+  void _completeMention(String name) {
+    final text = _input.text;
+    final at = text.lastIndexOf('@');
+    if (at < 0) return;
+    final next = '${text.substring(0, at)}@$name ';
+    _input.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+    setState(() {});
+  }
+
   final _keys = <String, GlobalKey>{};
   String? _highlight;
 
@@ -398,7 +426,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: m.mine ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+                  // A message that mentions you stands out from the rest.
+                  color: m.mine
+                      ? scheme.primaryContainer
+                      : m.mentionsMe
+                          ? scheme.tertiaryContainer
+                          : scheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(14),
                   // Lit up for a moment after jumping here.
                   border:
@@ -586,6 +619,21 @@ class _ChatScreenState extends State<ChatScreen> {
                     style: theme.textTheme.labelMedium),
               ),
             ),
+          if (_mentionChoices(room).isNotEmpty)
+            SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (final name in _mentionChoices(room))
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ActionChip(label: Text('@$name'), onPressed: () => _completeMention(name)),
+                    ),
+                ],
+              ),
+            ),
           if (banner != null)
             Material(
               color: theme.colorScheme.secondaryContainer,
@@ -615,6 +663,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   onChanged: (v) {
                     // The core sends at most one of these every few seconds.
                     if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
+                    setState(() {}); // the name suggestions follow what is typed
                   },
                   decoration: InputDecoration(
                     hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',

@@ -5,5 +5,6 @@
 library;
 
 export 'src/engine.dart';
+export 'src/mentions.dart';
 export 'src/models.dart';
 export 'src/store.dart';

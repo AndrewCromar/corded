@@ -61,6 +61,9 @@ class Message {
   /// Null until the server has confirmed a message this device sent.
   int? seq;
 
+  /// Whether it mentions the person using this device (set by the store).
+  bool mentionsMe = false;
+
   /// How many thread replies the core knew of when it reported this message.
   int threadCount = 0;
 

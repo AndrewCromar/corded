@@ -23,14 +23,16 @@ void backgroundEntry() {
 /// Only messages written by someone else are announced.
 ({String roomId, String title, String body, String payload})? notificationFor(
     Map<String, dynamic> event, Map<String, String> roomTitles,
-    {Set<String> muted = const {}, bool showText = true}) {
+    {Set<String> muted = const {}, bool showText = true, String me = ''}) {
   if (event['event'] != 'event_received') return null;
   final data = (event['data'] as Map?)?.cast<String, dynamic>() ?? const {};
   if (data['type'] != 'm.text' || data['mine'] == true || data['shared_history'] == true) return null;
   final body = (data['content'] as Map?)?['body'];
   if (body is! String || body.isEmpty) return null;
   final roomId = '${data['room_id']}';
-  if (muted.contains(roomId)) return null;
+  // A mention gets through even from a muted chat.
+  final mentioned = mentionsUser(body, me);
+  if (muted.contains(roomId) && !mentioned) return null;
   final sender = '${data['sender_name'] ?? 'Someone'}';
   final title = roomTitles[roomId] ?? sender;
   // In a direct chat the title is already the sender's name.
@@ -42,8 +44,11 @@ void backgroundEntry() {
   });
   // Hidden text still says who wrote and where, never what.
   final shown = !showText
-      ? (title == sender ? 'New message' : 'New message from $sender')
+      ? (mentioned ? '$sender mentioned you' : (title == sender ? 'New message' : 'New message from $sender'))
       : (title == sender ? body : '$sender: $body');
+  if (mentioned && title != sender) {
+    return (roomId: roomId, title: '$title · mentioned you', body: shown, payload: payload);
+  }
   return (roomId: roomId, title: title, body: shown, payload: payload);
 }
 
@@ -52,6 +57,7 @@ class _EventReader extends TaskHandler {
   bool _onScreen = true;
   bool _doNotDisturb = false;
   Set<String> _muted = {};
+  String _me = '';
   bool _showText = true;
   final _roomTitles = <String, String>{};
   final _notifications = FlutterLocalNotificationsPlugin();
@@ -85,7 +91,7 @@ class _EventReader extends TaskHandler {
         _roomTitles['${room['room_id']}'] = '${room['title']}';
       }
       if (_onScreen || _doNotDisturb || !_ready) continue;
-      final n = notificationFor(event, _roomTitles, muted: _muted, showText: _showText);
+      final n = notificationFor(event, _roomTitles, muted: _muted, showText: _showText, me: _me);
       if (n == null) continue;
       _notifications.show(
         n.roomId.hashCode & 0x7fffffff,
@@ -115,6 +121,7 @@ class _EventReader extends TaskHandler {
     if (data is Map && data['muted'] is List) {
       _muted = (data['muted'] as List).map((e) => '$e').toSet();
       if (data['show_text'] is bool) _showText = data['show_text'] as bool;
+      if (data['me'] is String) _me = data['me'] as String;
     }
     if (data is Map && data['engine'] is int) _engine = data['engine'] as int;
     // Names of the chats, for the titles of notifications.

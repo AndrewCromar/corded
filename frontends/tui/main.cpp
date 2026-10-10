@@ -107,6 +107,29 @@ uint64_t now_ms_() {
                                      .count());
 }
 
+// Whether a message calls for the attention of `username`: "@name", or
+// "@everyone", not as part of a longer word.
+bool mentions_user(const std::string& body, std::string username) {
+    auto lower = [](std::string s) {
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    auto word = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-'; };
+    std::string text = lower(body);
+    username = lower(username);
+    if (username.empty()) return false;
+    for (const std::string& name : {username, std::string("everyone")}) {
+        size_t at = 0;
+        while ((at = text.find("@" + name, at)) != std::string::npos) {
+            size_t end = at + 1 + name.size();
+            bool starts = at == 0 || (!word(text[at - 1]) && text[at - 1] != '@');
+            if (starts && (end == text.size() || !word(text[end]))) return true;
+            at = end;
+        }
+    }
+    return false;
+}
+
 // A wrapped paragraph in which web addresses are links: terminals that
 // support it open them on click, the rest show the address as plain text.
 Element linked_paragraph(const std::string& s) {
@@ -1220,9 +1243,12 @@ private:
             if (m.edited) mark += " (edited)";
             if (m.disappearing) mark += " (disappears)";
             if (m.from_history) mark += " (earlier, shared)";
+            bool mentioned = !m.mine && mentions_user(m.body, username_);
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
+            if (mentioned) name = hbox({text("@ ") | bold | color(Color::Yellow), name});
             Element body = linked_paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
+            else if (mentioned) body = body | color(Color::Yellow);
             lines.push_back(hbox({text(indent) | dim, text(std::to_string(m.num) + " ") | color(Color::GrayDark),
                                   text(clock_time(m.ts) + " ") | dim, name, body | flex}));
             if (auto it = room->reactions.find(m.event_id); it != room->reactions.end()) {

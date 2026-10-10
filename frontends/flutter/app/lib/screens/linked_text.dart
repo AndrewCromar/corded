@@ -1,3 +1,4 @@
+import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -49,6 +50,21 @@ class _LinkedTextState extends State<LinkedText> {
     super.dispose();
   }
 
+  // Plain text with each "@name" picked out.
+  List<TextSpan> _withMentions(String text) {
+    final spans = <TextSpan>[];
+    var at = 0;
+    for (final (start, end) in mentionSpans(text)) {
+      if (start > at) spans.add(TextSpan(text: text.substring(at, start)));
+      spans.add(TextSpan(
+          text: text.substring(start, end),
+          style: TextStyle(color: widget.linkColor, fontWeight: FontWeight.w600)));
+      at = end;
+    }
+    if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
+    return spans;
+  }
+
   Future<void> _open(Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
     var opened = false;
@@ -67,12 +83,14 @@ class _LinkedTextState extends State<LinkedText> {
     }
     _recognizers.clear();
     final pieces = splitLinks(widget.text);
-    if (pieces.every((p) => p.link == null)) return Text(widget.text, style: widget.style);
+    if (pieces.every((p) => p.link == null) && mentionSpans(widget.text).isEmpty) {
+      return Text(widget.text, style: widget.style);
+    }
     return Text.rich(
       TextSpan(style: widget.style, children: [
         for (final p in pieces)
           if (p.link == null)
-            TextSpan(text: p.text)
+            ..._withMentions(p.text)
           else
             TextSpan(
               text: p.text,
