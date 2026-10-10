@@ -11,4 +11,13 @@ out="$(mktemp -d)/corded-android-arm64.apk"
 cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$out"
 git tag "android-test-$n"
 git push -q origin "android-test-$n"
-gh release create "android-test-$n" "$out" --prerelease --title "Android test build $n" --notes-file "$notes"
+# Uploads sometimes time out on a slow line: try again, starting clean each time.
+for attempt in 1 2 3 4; do
+  if gh release create "android-test-$n" "$out" --prerelease --title "Android test build $n" --notes-file "$notes" \
+      && gh release view "android-test-$n" --json assets --jq '.assets[].name' | grep -q apk; then
+    break
+  fi
+  gh release delete "android-test-$n" --yes >/dev/null 2>&1 || true
+  [ "$attempt" = 4 ] && { echo "could not publish the release" >&2; exit 1; }
+  sleep 20
+done

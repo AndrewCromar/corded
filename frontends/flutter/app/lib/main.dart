@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
@@ -30,6 +32,8 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // A message somewhere else shows as a banner at the top for a few seconds.
+    state.onBanner = _showBanner;
     // A tapped notification leads to its chat, and into its thread if it has one.
     state.onOpenChat = (roomId, threadRoot) {
       final navigator = _navigator.currentState;
@@ -47,6 +51,71 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  OverlayEntry? _banner;
+  Timer? _bannerTimer;
+
+  void _dismissBanner() {
+    _bannerTimer?.cancel();
+    _banner?.remove();
+    _banner = null;
+  }
+
+  void _showBanner(String title, String body, String roomId, String? threadRoot) {
+    final overlay = _navigator.currentState?.overlay;
+    if (overlay == null) return;
+    _dismissBanner();
+    final entry = OverlayEntry(
+      builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return Positioned(
+          top: MediaQuery.paddingOf(context).top + 8,
+          left: 12,
+          right: 12,
+          child: Dismissible(
+            key: UniqueKey(),
+            direction: DismissDirection.up,
+            onDismissed: (_) => _dismissBanner(),
+            child: Material(
+              elevation: 6,
+              color: scheme.inverseSurface,
+              borderRadius: BorderRadius.circular(14),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () {
+                  _dismissBanner();
+                  state.openFromNotification(
+                      {'room_id': roomId, if (threadRoot != null) 'thread': threadRoot});
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(children: [
+                    Icon(Icons.chat_bubble_outline, color: scheme.onInverseSurface, size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: scheme.onInverseSurface, fontWeight: FontWeight.bold)),
+                        Text(body,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: scheme.onInverseSurface)),
+                      ]),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    _banner = entry;
+    overlay.insert(entry);
+    _bannerTimer = Timer(const Duration(seconds: 5), _dismissBanner);
   }
 
   // Notifications are for when nobody is looking at the app.

@@ -180,6 +180,36 @@ class AppState extends ChangeNotifier {
     _shareNotificationOptions();
   }
 
+  /// The chat (and thread) on screen right now, so that a message arriving
+  /// there is not announced. Set by the chat screen.
+  String? viewingRoom;
+  String? viewingThread;
+  bool _onScreen = true;
+  bool _doNotDisturb = false;
+
+  /// Called with a message that arrived somewhere the person is not looking,
+  /// while the app is on screen. The app shows a banner for it.
+  void Function(String title, String body, String roomId, String? threadRoot)? onBanner;
+
+  void _maybeBanner(Map<String, dynamic> event) {
+    if (!_onScreen || _doNotDisturb || onBanner == null) return;
+    final n = notificationFor(event, {for (final r in store.rooms.values) r.id: r.title},
+        muted: mutedRooms,
+        showText: true,
+        me: store.username,
+        nsfw: {
+          for (final r in store.rooms.values)
+            if (r.nsfw) r.id
+        });
+    if (n == null) return;
+    final data = (event['data'] as Map).cast<String, dynamic>();
+    final relation = (data['relation'] as Map?) ?? const {};
+    final thread = relation['kind'] == 'thread' ? relation['target'] as String? : null;
+    // Not for what is already in front of the person.
+    if (n.roomId == viewingRoom && thread == viewingThread) return;
+    onBanner!(n.title, n.body, n.roomId, thread);
+  }
+
   /// Where a tapped notification wants to go, until the app can go there
   /// (the vault may still be locked, or the chats not listed yet).
   Map<String, dynamic>? _pendingOpen;
@@ -204,6 +234,7 @@ class AppState extends ChangeNotifier {
   /// Tells the background task whether someone is looking at the app, and the
   /// core too, so that others see this person as online or away.
   void setOnScreen(bool onScreen) {
+    _onScreen = onScreen;
     Background.tell(onScreen ? 'on_screen' : 'off_screen');
     if (ready && store.vaultState == 'unlocked') {
       engine.command({'cmd': 'set_active', 'active': onScreen}).catchError((_) => <String, dynamic>{});
@@ -243,7 +274,10 @@ class AppState extends ChangeNotifier {
       });
 
   /// With do not disturb on, this phone shows no message notifications.
-  void setDoNotDisturb(bool on) => Background.tell(on ? 'dnd_on' : 'dnd_off');
+  void setDoNotDisturb(bool on) {
+    _doNotDisturb = on;
+    Background.tell(on ? 'dnd_on' : 'dnd_off');
+  }
 
   Future<void> start() async {
     Background.init();
@@ -272,6 +306,9 @@ class AppState extends ChangeNotifier {
         _tryPendingOpen();
       });
       Background.listenForTaps(openFromNotification);
+      engine.events.listen((event) {
+        if (event['event'] == 'event_received') _maybeBanner(event);
+      });
       _engine = engine;
       _store = store;
       Background.onEvent((data) {

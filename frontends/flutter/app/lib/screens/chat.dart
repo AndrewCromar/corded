@@ -61,6 +61,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    widget.state.viewingRoom = _room;
+    widget.state.viewingThread = _thread;
     final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
     if (widget.jumpTo != null) {
       opened.then((_) {
@@ -87,6 +89,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    // Back to whatever is underneath: nothing, or the chat this thread belongs to.
+    if (widget.state.viewingRoom == _room && widget.state.viewingThread == _thread) {
+      widget.state.viewingThread = null;
+      if (_thread == null) widget.state.viewingRoom = null;
+    }
     _sub?.cancel();
     _input.dispose();
     _scroll.dispose();
