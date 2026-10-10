@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'linked_text.dart';
 
 /// One conversation: its messages and the box for writing a new one. With
 /// [threadRoot] it shows one thread instead: the message that started it and
@@ -256,10 +257,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         style: theme.textTheme.bodySmall?.copyWith(color: foreground.withValues(alpha: 0.75)),
                       ),
                     ),
-                  Text(m.text,
+                  LinkedText(
+                      gone ? m.text : m.body,
                       style: theme.textTheme.bodyLarge?.copyWith(
                           color: foreground.withValues(alpha: gone ? 0.6 : 1),
-                          fontStyle: gone ? FontStyle.italic : null)),
+                          fontStyle: gone ? FontStyle.italic : null),
+                      linkColor: scheme.primary),
                   const SizedBox(height: 2),
                   Text(note,
                       style: theme.textTheme.labelSmall?.copyWith(

@@ -106,6 +106,27 @@ uint64_t now_ms_() {
                                      .count());
 }
 
+// A wrapped paragraph in which web addresses are links: terminals that
+// support it open them on click, the rest show the address as plain text.
+Element linked_paragraph(const std::string& s) {
+    Elements words;
+    std::istringstream in(s);
+    std::string word;
+    while (in >> word) {
+        bool link = word.rfind("https://", 0) == 0 || word.rfind("http://", 0) == 0;
+        if (!link) {
+            words.push_back(text(word));
+            continue;
+        }
+        // Punctuation that ends a sentence is not part of the address.
+        std::string url = word;
+        while (!url.empty() && std::string(".,;:!?)\"'").find(url.back()) != std::string::npos) url.pop_back();
+        words.push_back(hyperlink(url, text(url) | underlined));
+        if (url.size() < word.size()) words.back() = hbox({words.back(), text(word.substr(url.size()))});
+    }
+    return flexbox(std::move(words), FlexboxConfig().SetGap(1, 0));
+}
+
 class TuiApp {
 public:
     TuiApp(std::string vault_dir, std::string server, std::string name, std::string fingerprint,
@@ -1160,7 +1181,7 @@ private:
             if (m.disappearing) mark += " (disappears)";
             if (m.from_history) mark += " (earlier, shared)";
             Element name = text(m.sender + ": ") | bold | color(m.mine ? Color::Cyan : Color::Green);
-            Element body = paragraph(m.body + mark);
+            Element body = linked_paragraph(m.body + mark);
             if (m.status == "undecryptable" || m.status == "failed") body = body | color(Color::Red);
             lines.push_back(hbox({text(indent) | dim, text(std::to_string(m.num) + " ") | color(Color::GrayDark),
                                   text(clock_time(m.ts) + " ") | dim, name, body | flex}));

@@ -12,8 +12,11 @@ dependencies:
   corded_dart:
     path: ../packages/corded_dart
   path_provider: ^2.1.0
+  url_launcher: ^6.3.0
 
 dev_dependencies:
+  flutter_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
 
 flutter:
