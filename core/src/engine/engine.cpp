@@ -554,6 +554,17 @@ void Engine::run_command(uint64_t req, const std::string& text) {
                 if (value.empty()) profile.erase(field);
                 else profile[field] = value;
             }
+            if (cmd.contains("picture")) {
+                // A small picture, already shrunk by the frontend, as base64.
+                // It travels inside the profile, so no server stores it.
+                std::string picture = cmd.at("picture").get<std::string>();
+                if (picture.size() > 40 * 1024) {
+                    fail(req, "invalid_argument", "the picture is too large; shrink it to about 128 pixels");
+                    return;
+                }
+                if (picture.empty()) profile.erase("picture");
+                else profile["picture"] = picture;
+            }
             if (cmd.contains("links")) {
                 json links = json::array();
                 for (const auto& link : cmd.at("links")) {
@@ -1874,7 +1885,7 @@ void Session::accept_profile(const EventRow& e) {
     // Only a person's own word about themselves counts.
     json content = json::parse(e.content, nullptr, false);
     if (!content.is_object() || !content.value("version", json()).is_number_unsigned()) return;
-    if (content.dump().size() > 4096) return;
+    if (content.dump().size() > 64 * 1024) return;  // room for a small picture
     if (!vault_.set_profile(e.sender_user, content["version"].get<uint64_t>(), content.dump())) return;
     emit({{"event", "profile_updated"}, {"user_id", b64(e.sender_user)}, {"profile", content}});
     // Their name may have changed wherever they appear.

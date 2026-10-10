@@ -1851,6 +1851,14 @@ TEST_CASE("profiles are shared with the people you talk to and not the server") 
     REQUIRE(now["full_name"] == "Robert Example");
     REQUIRE(!now.contains("bio"));
     REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", std::string(60, 'x')}})["ok"] == false);
+    // A small picture rides inside the profile; a large one is refused.
+    std::string picture(12000, 'A');
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"picture", picture}})["ok"] == true);
+    alice.wait("the picture", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["profile"].value("picture", "") == picture;
+    });
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"picture", std::string(60000, 'A')}})["ok"] == false);
+    REQUIRE_FALSE(tree_contains(tmp.path / "server", picture.substr(0, 200)));
     REQUIRE(bob.cmd({{"cmd", "get_profile"}})["data"]["profile"]["display_name"] == "Bob the Builder");
 
     // Someone who joins later hears it with the next thing Bob says.
