@@ -139,7 +139,10 @@ class _TasksViewState extends State<TasksView> {
         padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Checkbox(
-              value: task.taskDone, onChanged: widget.room.archived ? null : (v) => _tick(task, v ?? false)),
+              value: task.taskDone,
+              // Ticking is writing: not in an archived channel, nor one this person may only read.
+              onChanged:
+                  widget.room.archived || !widget.room.canSend ? null : (v) => _tick(task, v ?? false)),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(top: 10, bottom: 6),
@@ -210,7 +213,7 @@ class _TasksViewState extends State<TasksView> {
                       ),
                   ]),
           ),
-          if (!widget.room.archived)
+          if (!widget.room.archived && widget.room.canSend)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
               child: Row(children: [

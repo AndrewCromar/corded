@@ -506,6 +506,7 @@ public:
                 case wire::FrameBody_UpdateServer: on_update(*c, rid); break;
                 case wire::FrameBody_CancelScheduled: on_cancel_scheduled(*c, rid, *f.body.AsCancelScheduled()); break;
                 case wire::FrameBody_EditSection: on_edit_section(*c, rid, *f.body.AsEditSection()); break;
+                case wire::FrameBody_PurgeFiles: on_purge_files(*c, rid, *f.body.AsPurgeFiles()); break;
                 case wire::FrameBody_SetChannelSection:
                     on_set_channel_section(*c, rid, *f.body.AsSetChannelSection());
                     break;
@@ -574,8 +575,13 @@ private:
 
     wire::RoomListT room_list(const Bytes& for_user) {
         wire::RoomListT list;
-        for (const auto& room_id : storage_.rooms_of_user(for_user))
-            list.rooms.push_back(std::make_unique<wire::RoomInfoT>(storage_.room_info(room_id)));
+        for (const auto& room_id : storage_.rooms_of_user(for_user)) {
+            auto info = std::make_unique<wire::RoomInfoT>(storage_.room_info(room_id));
+            // In a channel, writing is a permission; in a direct or group chat every member may.
+            info->can_send = info->kind != kChannel ||
+                             (storage_.permissions(for_user, room_id) & perm::SendMessages) != 0;
+            list.rooms.push_back(std::move(info));
+        }
         return list;
     }
 
@@ -892,6 +898,10 @@ private:
         wire::MemberListT list;
         for (const auto& id : storage_.member_ids())
             if (auto m = storage_.member(id)) list.members.push_back(std::move(m));
+        // Those who can lift a ban see who is banned.
+        if (storage_.permissions(c.user_id) & perm::BanMembers)
+            for (const auto& id : storage_.banned_ids())
+                if (auto m = storage_.member(id)) list.banned.push_back(std::move(m));
         c.reply(rid, std::move(list));
     }
 
@@ -1122,6 +1132,20 @@ private:
         if (row->owner != c.user_id && !require(c, rid, perm::ManageMessages)) return;
         drop_blob(q.blob_id);
         c.reply(rid, wire::OkT{});
+    }
+
+    // Making room: the files members sent, older than a number of days.
+    void on_purge_files(Conn& c, uint32_t rid, const wire::PurgeFilesT& q) {
+        if (!require(c, rid, perm::ManageServer)) return;
+        wire::PurgedT done;
+        for (const auto& [id, size] : storage_.blobs_older_than(q.older_than_days)) {
+            drop_blob(id);
+            ++done.files;
+            done.bytes += size;
+        }
+        spdlog::info("{} deleted {} stored files ({} bytes), older than {} days", c.username, done.files, done.bytes,
+                     q.older_than_days);
+        c.reply(rid, std::move(done));
     }
 
     // Sections group channels in everyone's list. Whoever manages channels manages them.
@@ -1376,6 +1400,9 @@ private:
         std::error_code ec;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(options_.data_dir, ec))
             if (entry.is_regular_file(ec)) st.stored_bytes += entry.file_size(ec);
+        st.file_bytes = storage_.blob_bytes();
+        st.file_count = storage_.blob_count();
+        st.scheduled = storage_.scheduled_total();
         if (auto last = storage_.info("last_housekeeping")) st.last_housekeeping = std::stoull(to_string(*last));
         c.reply(rid, std::move(st));
     }

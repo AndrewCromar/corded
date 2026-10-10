@@ -385,6 +385,55 @@ class _ServerScreenState extends State<ServerScreen> {
     await _do({'cmd': 'set_setting', 'key': 'icon', 'value': small}, 'Server picture changed.');
   }
 
+  static String _megabytes(Object? bytes) {
+    final n = (bytes as num?) ?? 0;
+    return n >= 1024 * 1024 * 1024
+        ? '${(n / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB'
+        : n >= 1024 * 1024
+            ? '${(n / (1024 * 1024)).toStringAsFixed(1)} MB'
+            : '${(n / 1024).ceil()} KB';
+  }
+
+  // Deletes stored files older than a chosen age. The messages stay; the
+  // files can no longer be opened by anyone who has not already kept a copy.
+  Future<void> _purgeFiles() async {
+    final days = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(title: const Text('Delete stored files'), children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: Text('Frees space on the server. The messages stay, but these files can no longer be '
+              'fetched by anyone. This cannot be undone.'),
+        ),
+        for (final (label, value) in const [
+          ('Older than 90 days', 90),
+          ('Older than 30 days', 30),
+          ('Older than 7 days', 7),
+          ('All of them', 0),
+        ])
+          ListTile(title: Text(label), onTap: () => Navigator.pop(context, value)),
+      ]),
+    );
+    if (days == null || !mounted) return;
+    if (!await _confirm(days == 0 ? 'Delete every stored file?' : 'Delete files older than $days days?',
+        'They are removed from the server for everyone. This cannot be undone.', 'Delete')) {
+      return;
+    }
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final r = await _command({'cmd': 'purge_files', 'older_than_days': days});
+      messenger.showSnackBar(SnackBar(
+          content: Text((r['files'] as num? ?? 0) == 0
+              ? 'There was nothing that old.'
+              : 'Deleted ${r['files']} files, freeing ${_megabytes(r['bytes'])}.')));
+    } on CordedError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    }
+    await _load();
+    if (mounted) setState(() {});
+  }
+
   String _uptime() {
     final started = (_status['started_at'] as num?)?.toInt() ?? 0;
     if (started == 0) return '';
@@ -492,8 +541,20 @@ class _ServerScreenState extends State<ServerScreen> {
             ListTile(
               leading: const Icon(Icons.monitor_heart_outlined),
               title: Text('Version ${_status['version'] ?? '?'}, ${_uptime()}'),
-              subtitle: Text('${_status['members'] ?? 0} members, ${_status['online'] ?? 0} online, '
-                  '${(((_status['stored_bytes'] as num?) ?? 0) / 1024).round()} KB stored'),
+              subtitle: Text('${_status['members'] ?? 0} members, ${_status['online'] ?? 0} online'),
+            ),
+          // What takes the space, and a way to make room.
+          if (_status.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.storage_outlined),
+              title: Text('${_megabytes(_status['stored_bytes'])} stored in all'),
+              subtitle: Text('${_status['file_count'] ?? 0} files sent by members take '
+                  '${_megabytes(_status['file_bytes'])}; the rest is messages and accounts'
+                  '${((_status['scheduled'] as num?) ?? 0) > 0 ? '. ${_status['scheduled']} scheduled messages are waiting' : ''}'),
+              trailing: ((_status['file_count'] as num?) ?? 0) > 0
+                  ? const Icon(Icons.cleaning_services_outlined)
+                  : null,
+              onTap: ((_status['file_count'] as num?) ?? 0) > 0 ? _purgeFiles : null,
             ),
           if (_server.isOwner)
             ListTile(

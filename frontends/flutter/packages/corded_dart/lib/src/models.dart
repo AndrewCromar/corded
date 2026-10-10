@@ -37,6 +37,7 @@ class Room {
   bool archived = false; // a channel kept to read, closed to writing
   bool featured = false; // a channel pinned to the top of everyone's list
   int section = 0; // the server's section it is listed under; 0 for none
+  bool canSend = true; // whether this person may write here; false for a read-only channel
   String channelType = ''; // how a channel is laid out: '' for messages, 'tasks' for a task list
   bool get isTaskList => channelType == 'tasks';
   String firstUnread = ''; // where this person's unread messages start; empty if none
@@ -52,6 +53,7 @@ class Room {
     archived = j['archived'] as bool? ?? archived;
     featured = j['featured'] as bool? ?? featured;
     section = (j['section'] as num?)?.toInt() ?? section;
+    canSend = j['can_send'] as bool? ?? canSend;
     channelType = j['channel_type'] as String? ?? channelType;
     firstUnread = j['first_unread'] as String? ?? firstUnread;
     final p = j['pinned'] as List?;

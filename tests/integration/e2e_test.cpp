@@ -2669,3 +2669,66 @@ TEST_CASE("channels can be grouped into sections that everyone sees in the same 
         return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["section"] == 0;
     });
 }
+
+TEST_CASE("the owner sees what takes space, clears old files, and sees who is banned; a reader is told a channel is read-only") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        json room = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"];
+        general = room["room_id"];
+        REQUIRE(room["can_send"] == true);
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+
+    // Made read-only for everyone: Bob's client is told before he tries; the owner still may.
+    REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", general}, {"role", "@everyone"},
+                       {"allow", json::array()}, {"deny", json::array({"send_messages"})}})["ok"] == true);
+    bob.wait("told it is read-only", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["can_send"] == false;
+    });
+    for (const auto& r : alice.cmd({{"cmd", "list_rooms"}})["data"]["rooms"])
+        if (r["room_id"] == general) REQUIRE(r["can_send"] == true);
+    REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", general}, {"role", "@everyone"},
+                       {"allow", json::array()}, {"deny", json::array()}})["ok"] == true);
+    bob.wait("told he may write again", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["can_send"] == true;
+    });
+
+    // Two files; the status says how many and how much.
+    auto file = tmp.path / "doc.bin";
+    std::ofstream(file, std::ios::binary) << std::string(50 * 1024, 'q');
+    REQUIRE(bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", file.string()}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", file.string()}})["ok"] == true);
+    json status = alice.cmd({{"cmd", "server_status"}})["data"]["status"];
+    REQUIRE(status["file_count"] == 2);
+    REQUIRE(status["file_bytes"].get<uint64_t>() >= 100 * 1024);
+    REQUIRE(bob.cmd({{"cmd", "purge_files"}, {"older_than_days", 0}})["ok"] == false);  // not his to do
+    // Nothing is a month old; asking for everything clears both.
+    REQUIRE(alice.cmd({{"cmd", "purge_files"}, {"older_than_days", 30}})["data"]["files"] == 0);
+    json cleared = alice.cmd({{"cmd", "purge_files"}, {"older_than_days", 0}});
+    REQUIRE(cleared["data"]["files"] == 2);
+    REQUIRE(cleared["data"]["bytes"].get<uint64_t>() >= 100 * 1024);
+    REQUIRE(alice.cmd({{"cmd", "server_status"}})["data"]["status"]["file_count"] == 0);
+    REQUIRE(std::filesystem::is_empty(tmp.path / "server" / "blobs"));
+
+    // A banned person leaves the members and appears under "banned", for those who may lift it.
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}, {"banned", true}})["ok"] == true);
+    json list = alice.cmd({{"cmd", "member_list"}})["data"];
+    REQUIRE(list["members"].size() == 1);
+    REQUIRE(list["banned"].size() == 1);
+    REQUIRE(list["banned"][0]["username"] == "bob");
+    REQUIRE(alice.cmd({{"cmd", "ban_user"}, {"username", "bob"}, {"banned", false}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "member_list"}})["data"]["banned"].empty());
+}

@@ -1593,6 +1593,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 const Expanded(child: Text('This channel is archived. It can be read but not written in.')),
               ]),
             )
+          else if (room != null && !room.canSend)
+            // Read-only for this person: say so where the message box would be.
+            Container(
+              width: double.infinity,
+              color: theme.colorScheme.surfaceContainerHigh,
+              padding: const EdgeInsets.all(14),
+              child: Row(children: [
+                Icon(Icons.lock_outline, size: 18, color: theme.colorScheme.outline),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Text('You can read this channel but not write in it.',
+                        style: TextStyle(color: theme.colorScheme.outline))),
+              ]),
+            )
           else
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),

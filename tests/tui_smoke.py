@@ -308,6 +308,7 @@ def main():
         # Running the server from the client.
         alice.type("/settings\r")
         alice.expect("Server settings")
+        alice.type("\x1b[6~")  # PgDn: the page is taller than this window
         alice.expect("retention_days = ")
         alice.type("/set retention_days 14\r")
         alice.expect("retention_days is now 14")

@@ -65,6 +65,9 @@ table RoomInfo {
   channel_type: string;   // channels only: empty for messages, "tasks" for a task list
   featured: bool;   // channels only: pinned to the top of everyone's list
   section: uint32;  // channels only: the section it is listed under; 0 for none
+  // Whether the person this is sent to may write here. The server refuses a
+  // message from someone who may not; this lets a client say so beforehand.
+  can_send: bool = true;
 }
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
@@ -92,6 +95,9 @@ table GetStatus {}
 table Status {
   version: string; started_at: uint64; members: uint32; online: uint32;
   stored_bytes: uint64; last_housekeeping: uint64; scope: string;
+  // What takes the space: files members sent, and how many of them; and how
+  // many scheduled messages are waiting.
+  file_bytes: uint64; file_count: uint32; scheduled: uint32;
 }
 table Notice { message: string; }   // something the server wants members to read
 // Passed straight on to the room's members who are online, and never stored.
@@ -101,7 +107,8 @@ table Ephemeral { room_id: [ubyte]; kind: string; sender_user: [ubyte]; }
 table HistoryRequest { room_id: [ubyte]; limit: uint32; }
 table HistoryWanted { room_id: [ubyte]; requester: [ubyte]; limit: uint32; }
 table GetMembers {}
-table MemberList { members: [Member]; }
+// `banned` is filled only for those who may ban and unban.
+table MemberList { members: [Member]; banned: [Member]; }
 table NewRole { name: string; permissions: uint64; }
 table EditRole { role_id: uint32; name: string; permissions: uint64; }
 table RemoveRole { role_id: uint32; }
@@ -169,6 +176,10 @@ table CancelScheduled { room_id: [ubyte]; event_id: [ubyte]; }
 // Makes a section (section_id 0), renames or moves one, or removes it; the
 // channels of a removed section go back to no section.
 table EditSection { section_id: uint32; name: string; position: int32; remove: bool; }
+// Deletes stored files older than so many days (0: all of them) to make room.
+// The messages that announced them stay; the files can no longer be fetched.
+table PurgeFiles { older_than_days: uint32; }
+table Purged { files: uint32; bytes: uint64; }
 table SetChannelSection { room_id: [ubyte]; section_id: uint32; }
 table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
 table RoomEvent {
@@ -199,7 +210,8 @@ union FrameBody {
   PutBlob, GetBlob, Blob, DeleteBlob,
   UpdateServer, SetChannelFeatured,
   Scheduled, CancelScheduled,
-  EditSection, SetChannelSection
+  EditSection, SetChannelSection,
+  PurgeFiles, Purged
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

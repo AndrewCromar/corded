@@ -639,8 +639,14 @@ private:
             show_info_ = true;
             return;
         }
+        if (ok && ev["data"].contains("files") && ev["data"].contains("bytes")) {
+            notice_ = "deleted " + std::to_string(ev["data"].value("files", 0)) + " stored files, freeing " +
+                      std::to_string(ev["data"].value("bytes", uint64_t{0}) / 1024) + " KB";
+            return;
+        }
         if (ok && ev["data"].contains("members")) {
             member_list_ = ev["data"]["members"];
+            banned_list_ = ev["data"].value("banned", json::array());
             if (members_selected()) return;  // the page itself shows them
             Elements rows = {text("Members of " + (server_name_.empty() ? std::string("this server") : server_name_)) | bold};
             for (const auto& m : ev["data"]["members"]) {
@@ -880,6 +886,7 @@ private:
     }
     void on_room_selected() {
         page_ = members_selected() ? 1 : settings_selected() ? 2 : 0;
+        page_scroll_ = 0;  // each page starts at its top
         // An NSFW channel is covered again each time it is come to.
         for (auto& r : rooms_) r.uncovered = false;
         if (page_ == 1) command({{"cmd", "member_list"}});  // refresh the page
@@ -1364,6 +1371,11 @@ private:
                 }
                 info_box_ = vbox(std::move(rows)) | border;
                 show_info_ = true;
+            } else if (cmd == "/purge-files") {
+                // /purge-files <days>: delete the server's stored files older than that. Cannot be undone.
+                if (arg.empty() || arg.find_first_not_of("0123456789") != std::string::npos)
+                    notice_ = "/purge-files <days>   deletes stored files older than that many days, for everyone (0: all)";
+                else command({{"cmd", "purge_files"}, {"older_than_days", std::atoi(arg.c_str())}});
             } else if (cmd == "/section") {
                 // /section new <name> | rename <name> = <new name> | delete <name> | first <name>
                 auto sp = arg.find(' ');
@@ -1643,6 +1655,10 @@ private:
             }));
         }
         if (rows.empty()) rows.push_back(text("Loading...") | dim);
+        // Shown only to those who may lift a ban.
+        for (const auto& b : banned_list_)
+            rows.push_back(hbox({text("x ") | color(Color::Red), text(b.value("username", "?")) | dim,
+                                 text("  banned   /unban " + b.value("username", "?")) | dim}));
         rows.push_back(text(""));
         rows.push_back(text("Use the name in brackets (the username) in these commands:") | dim);
         rows.push_back(text("  /nick <name>               set your own display name    (/nick alone clears it)") | dim);
@@ -1655,10 +1671,27 @@ private:
             rows.push_back(text("  /ban <user>   /unban <user>") | dim);
             rows.push_back(text("  /remove-account <user>     delete the account and free its name") | dim);
         }
-        return vbox(std::move(rows)) | yframe | flex;
+        return scrolled(std::move(rows));
     }
 
     // What can be changed, for you and (if you may) for the server.
+    // The members and settings pages can be taller than the window. PgDn and
+    // PgUp move through them; a line at the bottom says when there is more.
+    Element scrolled(Elements rows) {
+        int total = static_cast<int>(rows.size());
+        int room = std::max(4, Terminal::Size().dimy - 8);  // the lines left for a page
+        page_scroll_ = std::clamp(page_scroll_, 0, std::max(0, total - room));
+        if (page_scroll_ > 0) rows.erase(rows.begin(), rows.begin() + page_scroll_);
+        bool more = static_cast<int>(rows.size()) > room;
+        if (more) {
+            rows.resize(static_cast<size_t>(room - 1));
+            rows.push_back(text("  PgDn for more, PgUp to go back") | dim);
+        } else if (page_scroll_ > 0) {
+            rows.push_back(text("  PgUp to go back") | dim);
+        }
+        return vbox(std::move(rows)) | flex;
+    }
+
     Element settings_view() {
         auto onoff = [](bool v) { return std::string(v ? "on" : "off"); };
         auto line = [](const std::string& name, const std::string& value, const std::string& how) {
@@ -1688,6 +1721,9 @@ private:
                                               std::to_string(server_status_.value("online", 0)) + " online), " +
                                               std::to_string(server_status_.value("stored_bytes", uint64_t{0}) / 1024) + " KB stored",
                                 ""));
+            rows.push_back(line("files", std::to_string(server_status_.value("file_count", 0)) + " sent by members, " +
+                                             std::to_string(server_status_.value("file_bytes", uint64_t{0}) / 1024) + " KB",
+                                "/purge-files <days>  deletes those older (0: all)"));
         }
         if (!server_settings_.empty()) {
             rows.push_back(text(""));
@@ -1700,7 +1736,7 @@ private:
                                      text("   " + st.value("description", "")) | dim | xflex_shrink}));
             }
         }
-        return vbox(std::move(rows)) | yframe | flex;
+        return scrolled(std::move(rows));
     }
 
     Element messages_view() {
@@ -1886,6 +1922,10 @@ private:
         Component main_fields = Container::Horizontal({room_menu_, input_});
         Component main = Renderer(main_fields, [this] { return main_view(); });
         main = CatchEvent(main, [this](Event e) {
+            if ((members_selected() || settings_selected()) && (e == Event::PageDown || e == Event::PageUp)) {
+                page_scroll_ += e == Event::PageDown ? 8 : -8;
+                return true;
+            }
             if (e == Event::Tab) {
                 if (input_->Focused()) room_menu_->TakeFocus();
                 else input_->TakeFocus();
@@ -1915,6 +1955,8 @@ private:
     std::map<int64_t, std::string> open_by_server_;
     std::vector<size_t> visible_;  // positions in rooms_ of the chats listed on screen
     json member_list_ = json::array();
+    json banned_list_ = json::array();  // who is banned, for those who may lift a ban
+    int page_scroll_ = 0;               // how far down the members or settings page is scrolled
     int page_ = 0;  // 0 = a chat is open, 1 = members page, 2 = settings page
     json client_settings_ = json::object(), server_settings_ = json::array(), server_status_ = json::object();
     corded_request settings_request_ = 0, status_request_ = 0;

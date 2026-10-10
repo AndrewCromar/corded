@@ -363,6 +363,8 @@ Session::json Session::room_json(const RoomRow& room) {
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
             // Pinned to the top of the list by whoever manages the channels.
             {"featured", vault_.meta("featured:" + b64(room.room_id)).value_or("0") == "1"},
+            // Whether this person may write here, as the server last said.
+            {"can_send", vault_.meta("can_send:" + b64(room.room_id)).value_or("1") != "0"},
             // Which of the server's sections the channel is listed under; 0 for none.
             {"section", std::strtoul(vault_.meta("section:" + b64(room.room_id)).value_or("0").c_str(), nullptr, 10)},
             {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
@@ -922,7 +924,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
-                   name == "set_channel_featured" || name == "edit_section" || name == "set_channel_section" ||
+                   name == "purge_files" || name == "set_channel_featured" || name == "edit_section" || name == "set_channel_section" ||
                    name == "list_devices" || name == "remove_device" || name == "set_channel_archived" ||
                    name == "kick" ||
                    name == "ban_user" ||
@@ -1301,7 +1303,11 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
                 if (profile.is_object() && profile.value("bot", json()).is_boolean()) row.bot = profile["bot"].get<bool>();
                 members.push_back(member_json(row));
             }
-            ok(req, {{"members", std::move(members)}});
+            // For those who may lift a ban: who is banned.
+            json banned = json::array();
+            for (const auto& m : list->banned)
+                if (m) banned.push_back({{"user_id", b64(m->user_id)}, {"username", m->username}});
+            ok(req, {{"members", std::move(members)}, {"banned", std::move(banned)}});
         });
     } else if (name == "create_role") {
         wire::NewRoleT q;
@@ -1382,6 +1388,18 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         q.room_id = need_b64(cmd, "room_id", 16);
         q.archived = cmd.value("archived", true);
         simple_request(req, std::move(q));
+    } else if (name == "purge_files") {
+        // Deletes the server's stored files older than `older_than_days` (0: all).
+        wire::PurgeFilesT q;
+        q.older_than_days = cmd.value("older_than_days", uint32_t{0});
+        request(std::move(q), [this, req](wire::FrameT& r) {
+            if (auto* done = r.body.AsPurged()) {
+                ok(req, {{"files", done->files}, {"bytes", done->bytes}});
+                return;
+            }
+            auto* e = r.body.AsError();
+            fail(req, "refused", e ? e->message : "the server refused");
+        });
     } else if (name == "edit_section") {
         // {name} makes one; {section_id, name, position?} renames or moves it;
         // {section_id, remove: true} takes it away.
@@ -1506,6 +1524,9 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
                        {"members", st->members},
                        {"online", st->online},
                        {"stored_bytes", st->stored_bytes},
+                       {"file_bytes", st->file_bytes},
+                       {"file_count", st->file_count},
+                       {"scheduled", st->scheduled},
                        {"last_housekeeping", st->last_housekeeping},
                        {"scope", st->scope}}}});
         });
@@ -2851,6 +2872,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
         vault_.set_meta("featured:" + b64(info.room_id), info.featured ? "1" : "0");
         vault_.set_meta("section:" + b64(info.room_id), std::to_string(info.section));
+        vault_.set_meta("can_send:" + b64(info.room_id), info.can_send ? "1" : "0");
         vault_.set_meta("archived:" + b64(info.room_id), info.archived ? "1" : "0");
         vault_.set_meta("channel_type:" + b64(info.room_id), info.channel_type);
         tx.commit();

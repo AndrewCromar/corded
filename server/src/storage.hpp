@@ -935,6 +935,29 @@ CREATE TABLE IF NOT EXISTS blobs (
         auto st = db_.prepare("DELETE FROM blobs WHERE blob_id = ?");
         st.bind(1, id).exec();
     }
+    std::vector<Bytes> banned_ids() {
+        std::vector<Bytes> out;
+        auto st = db_.prepare("SELECT user_id FROM users WHERE access_level = ? ORDER BY username");
+        st.bind(1, static_cast<int64_t>(kBanned));
+        while (st.step()) out.push_back(st.blob(0));
+        return out;
+    }
+    uint32_t blob_count() {
+        auto st = db_.prepare("SELECT COUNT(*) FROM blobs");
+        return st.step() ? static_cast<uint32_t>(st.i64(0)) : 0;
+    }
+    uint32_t scheduled_total() {
+        auto st = db_.prepare("SELECT COUNT(*) FROM scheduled_events");
+        return st.step() ? static_cast<uint32_t>(st.i64(0)) : 0;
+    }
+    // Files older than so many days, with their sizes; 0 days means every file.
+    std::vector<std::pair<Bytes, uint64_t>> blobs_older_than(uint32_t days) {
+        std::vector<std::pair<Bytes, uint64_t>> out;
+        auto st = db_.prepare("SELECT blob_id, total FROM blobs WHERE created_at <= ?");
+        st.bind(1, now_ms() - uint64_t{days} * 24 * 3600 * 1000);
+        while (st.step()) out.emplace_back(st.blob(0), st.u64(1));
+        return out;
+    }
     // Space promised to files, finished or not.
     uint64_t blob_bytes() {
         auto st = db_.prepare("SELECT COALESCE(SUM(total), 0) FROM blobs");

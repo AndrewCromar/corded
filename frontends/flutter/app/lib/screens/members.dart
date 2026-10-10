@@ -21,6 +21,7 @@ class MembersScreen extends StatefulWidget {
 
 class _MembersScreenState extends State<MembersScreen> {
   List<Member>? _members;
+  List<String> _banned = const []; // usernames; only filled for those who may lift a ban
   String? _error;
 
   ServerInfo get _server => widget.state.server!;
@@ -66,6 +67,7 @@ class _MembersScreenState extends State<MembersScreen> {
       if (mounted) {
         setState(() {
           _members = list;
+          _banned = [for (final b in (r['banned'] as List? ?? const [])) '${(b as Map)['username']}'];
           _error = null;
         });
       }
@@ -256,6 +258,21 @@ class _MembersScreenState extends State<MembersScreen> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(children: [
+                    // Banned people are not members, but whoever can lift a ban needs to see them.
+                    if (_banned.isNotEmpty) ...[
+                      for (final name in _banned)
+                        ListTile(
+                          leading: const Icon(Icons.block),
+                          title: Text(name),
+                          subtitle: const Text('Banned'),
+                          trailing: TextButton(
+                            onPressed: () =>
+                                _do({'cmd': 'ban_user', 'username': name, 'banned': false}, 'Ban lifted.'),
+                            child: const Text('Lift the ban'),
+                          ),
+                        ),
+                      const Divider(),
+                    ],
                     for (final m in members)
                       ListTile(
                         leading: PresenceAvatar(
