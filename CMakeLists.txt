@@ -193,9 +193,8 @@ if(CORDED_CORE_ONLY)
 endif()
 
 # ---- server ---------------------------------------------------------------
-add_executable(cordedd server/src/main.cpp)
-# The server knows which release it is, and carries the public key that
-# updates are checked against (see server/src/update.hpp).
+# Which release this is, and the public key that updates are checked against
+# (see server/src/update.hpp and the verify_release command in the core).
 execute_process(COMMAND git describe --tags --match v* --always
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE CORDED_BUILD_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -204,6 +203,8 @@ if(NOT CORDED_BUILD_VERSION)
 endif()
 file(STRINGS "${CMAKE_SOURCE_DIR}/packaging/release-signing.pub" CORDED_RELEASE_KEY_LINES REGEX "^[A-Za-z0-9+/=]+$")
 list(JOIN CORDED_RELEASE_KEY_LINES "" CORDED_RELEASE_KEY)
+add_executable(cordedd server/src/main.cpp)
+target_compile_definitions(corded_core PRIVATE CORDED_RELEASE_KEY="${CORDED_RELEASE_KEY}")
 target_compile_definitions(cordedd PRIVATE ASIO_STANDALONE
   CORDED_BUILD_VERSION="${CORDED_BUILD_VERSION}" CORDED_RELEASE_KEY="${CORDED_RELEASE_KEY}")
 target_link_libraries(cordedd PRIVATE

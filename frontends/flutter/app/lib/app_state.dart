@@ -1,4 +1,5 @@
 import 'desktop_notifier.dart';
+import 'updater.dart';
 import 'platform.dart';
 import 'dart:async';
 import 'dart:io';
@@ -128,6 +129,30 @@ class AppState extends ChangeNotifier {
 
   Directory? _vaultDir;
 
+  /// A newer release, if the daily look found one.
+  Update? updateAvailable;
+
+  // Once a day, a quiet look at whether a newer release exists. Nothing is
+  // downloaded; the person is told, and updates from Settings when they like.
+  Future<void> _lookForUpdate(SharedPreferences prefs) async {
+    if (appVersion == 'dev') return; // a build made by hand is left alone
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (prefs.getString('update_looked') == today) return;
+    await Future<void>.delayed(const Duration(seconds: 20));
+    try {
+      final update = await checkForUpdate();
+      await prefs.setString('update_looked', today);
+      if (update == null) return;
+      updateAvailable = update;
+      notifyListeners();
+      if (_onScreen && onBanner != null) {
+        onBanner!('Corded ${update.tag} is available', 'Settings > Check for updates installs it.', '', null);
+      }
+    } catch (_) {
+      // No network, or GitHub is busy: tomorrow is soon enough.
+    }
+  }
+
   // Only in builds made with --dart-define=CORDED_DEV=true, for trying the
   // app where no one can type into it: the environment says who to be, which
   // server to join and which chat to open. Ordinary builds contain none of this.
@@ -148,6 +173,16 @@ class AppState extends ChangeNotifier {
       if (server != null && store.servers.isEmpty) {
         final parts = server.split(':');
         await engine.command({'cmd': 'connect', 'host': parts[0], 'port': int.parse(parts[1])});
+      }
+      // CORDED_DEV_UPDATE=1: go through a whole update without anyone clicking.
+      if (env['CORDED_DEV_UPDATE'] == '1') {
+        final update = await checkForUpdate();
+        stderr.writeln('dev update: running $appVersion, found ${update?.tag}');
+        if (update != null) {
+          final path = await downloadUpdate(engine, update);
+          stderr.writeln('dev update: signature ok, installing $path');
+          await installUpdate(path);
+        }
       }
       final open = env['CORDED_DEV_OPEN'];
       for (var i = 0; open != null && i < 20; i++) {
@@ -399,6 +434,7 @@ class AppState extends ChangeNotifier {
         Future<void>.delayed(const Duration(seconds: 1), _shareNotificationOptions);
       }
       if (_devBuild) unawaited(_devDrive());
+      unawaited(_lookForUpdate(prefs));
       fingerprintAvailable = await Fingerprint.available();
       fingerprintUnlock = fingerprintAvailable && (prefs.getBool('fingerprint_unlock') ?? false);
       // Chosen earlier, but the service is gone (the phone restarted, say):

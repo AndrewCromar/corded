@@ -107,6 +107,8 @@ jobs:
       - name: Build the desktop app
         if: matrix.arch == 'x86_64'
         id: app
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           version=$(git describe --tags --match 'v*' --always --dirty)
           app="corded-app-${version}-linux-x86_64"
@@ -117,12 +119,21 @@ jobs:
           flutter config --no-analytics >/dev/null
           cd frontends/flutter/app
           flutter pub get
-          CORDED_CORE_LIB="$GITHUB_WORKSPACE/build/dev/lib/libcorded.so" flutter build linux --release
+          CORDED_CORE_LIB="$GITHUB_WORKSPACE/build/dev/lib/libcorded.so" flutter build linux --release \
+            --dart-define=CORDED_VERSION="$(git describe --tags --match 'v*' --always)"
           cd "$GITHUB_WORKSPACE"
           mkdir -p "dist/${app}"
           cp -r frontends/flutter/app/build/linux/x64/release/bundle/. "dist/${app}/"
           cp packaging/README-desktop.txt "dist/${app}/README.txt"
           tar -C dist -czf "${app}.tar.gz" "${app}"
+          apt-get install -y --no-install-recommends openssl >/dev/null
+          # Signed like the server archives, so an app only installs an update that is ours.
+          if [ -n "$RELEASE_SIGNING_KEY" ] && [ "${GITHUB_REF#refs/tags/v}" != "$GITHUB_REF" ]; then
+            key="$(mktemp)"; chmod 600 "$key"; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+            openssl pkeyutl -sign -rawin -inkey "$key" -in "${app}.tar.gz" -out "${app}.tar.gz.sig"
+            rm -f "$key"
+            openssl pkeyutl -verify -rawin -pubin -inkey packaging/release-signing.pub -in "${app}.tar.gz" -sigfile "${app}.tar.gz.sig"
+          fi
           echo "name=${app}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -147,6 +158,9 @@ jobs:
           fi
           if [ -n "${{ steps.app.outputs.name }}" ]; then
             gh release upload "$tag" "${{ steps.app.outputs.name }}.tar.gz" --clobber
+            if [ -f "${{ steps.app.outputs.name }}.tar.gz.sig" ]; then
+              gh release upload "$tag" "${{ steps.app.outputs.name }}.tar.gz.sig" --clobber
+            fi
           fi
 
   android:
@@ -193,6 +207,7 @@ jobs:
         working-directory: frontends/flutter/app
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           CORDED_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
@@ -203,9 +218,18 @@ jobs:
           fi
           flutter pub get
           flutter analyze
-          flutter build apk --release --target-platform android-arm64 \
-            --build-name "$(git describe --tags --match 'v*' --always | sed 's/^v//')" --build-number "${{ github.run_number }}"
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/corded-android-arm64.apk"
+          flutter build apk --release --target-platform android-arm64 --split-per-abi \
+            --build-name "$(git describe --tags --match 'v*' --always | sed 's/^v//')" --build-number "$(( ($(date +%s) - 1767225600) / 600 ))" \
+            --dart-define=CORDED_VERSION="$(git describe --tags --match 'v*' --always)"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$GITHUB_WORKSPACE/corded-android-arm64.apk"
+          cd "$GITHUB_WORKSPACE"
+          # Signed like the server archives, so an app only installs an update that is ours.
+          if [ -n "$RELEASE_SIGNING_KEY" ] && [ "${GITHUB_REF#refs/tags/v}" != "$GITHUB_REF" ]; then
+            key="$(mktemp)"; chmod 600 "$key"; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+            openssl pkeyutl -sign -rawin -inkey "$key" -in "corded-android-arm64.apk" -out "corded-android-arm64.apk.sig"
+            rm -f "$key"
+            openssl pkeyutl -verify -rawin -pubin -inkey packaging/release-signing.pub -in "corded-android-arm64.apk" -sigfile "corded-android-arm64.apk.sig"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -221,6 +245,7 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
             --notes "Pre-alpha build. Not security audited. See the README for how to run it."
           gh release upload "$tag" corded-android-arm64.apk --clobber
+          if [ -f corded-android-arm64.apk.sig ]; then gh release upload "$tag" corded-android-arm64.apk.sig --clobber; fi
 
   windows:
     name: Windows x64
@@ -289,7 +314,7 @@ jobs:
           $env:CORDED_CORE_DLL = "$env:GITHUB_WORKSPACE\build\windows\bin\corded.dll"
           Push-Location frontends\flutter\app
           flutter pub get
-          flutter build windows --release
+          flutter build windows --release "--dart-define=CORDED_VERSION=$(git describe --tags --match 'v*' --always)"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Pop-Location
           New-Item -ItemType Directory -Force "dist\$app" | Out-Null
@@ -297,6 +322,20 @@ jobs:
           Copy-Item packaging\README-desktop.txt "dist\$app\README.txt"
           Compress-Archive -Path "dist\$app" -DestinationPath "$app.zip"
           "name=$app" >> $env:GITHUB_OUTPUT
+
+      # Signed like the server archives, so an app only installs an update that is ours.
+      - name: Sign the desktop app
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then echo "no release key set; unsigned"; exit 0; fi
+          file="${{ steps.app.outputs.name }}.zip"
+          key="$(mktemp)"; chmod 600 "$key"; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" -in "$file" -out "$file.sig"
+          rm -f "$key"
+          openssl pkeyutl -verify -rawin -pubin -inkey packaging/release-signing.pub -in "$file" -sigfile "$file.sig"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -314,3 +353,4 @@ jobs:
             --notes "Pre-alpha build. Not security audited. See the README for how to run it."
           gh release upload "$tag" "${{ steps.package.outputs.name }}.zip" --clobber
           gh release upload "$tag" "${{ steps.app.outputs.name }}.zip" --clobber
+          if [ -f "${{ steps.app.outputs.name }}.zip.sig" ]; then gh release upload "$tag" "${{ steps.app.outputs.name }}.zip.sig" --clobber; fi

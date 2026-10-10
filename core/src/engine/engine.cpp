@@ -1,6 +1,7 @@
 #include "corded/corded.h"
 #include "engine/engine.hpp"
 
+#include "corded/common/release.hpp"
 #include "corded/common/sig.hpp"
 
 #include <algorithm>
@@ -545,6 +546,24 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         json cmd = json::parse(text);
         std::string name = cmd.at("cmd").get<std::string>();
 
+        if (name == "verify_release") {
+            // An app checks a downloaded update before it installs it: the
+            // file must carry the release key's signature. Needs no vault.
+            auto read = [](const std::string& path) -> std::optional<Bytes> {
+                std::ifstream in(path, std::ios::binary);
+                if (!in) return std::nullopt;
+                return Bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            };
+            auto file = read(cmd.at("path").get<std::string>());
+            auto signature = read(cmd.at("signature_path").get<std::string>());
+            auto key = release::public_key_from_pem(CORDED_RELEASE_KEY);
+            if (!file || !signature || !key) {
+                fail(req, "invalid_argument", "the update or its signature could not be read");
+                return;
+            }
+            ok(req, {{"valid", release::signed_by(*file, *signature, *key)}});
+            return;
+        }
         if (name == "status") {
             Session* first = default_session();
             json servers = json::array();

@@ -6,7 +6,9 @@ cd "$(dirname "$0")/app"
 n="$1"; notes="$2"
 : "${CORDED_KEYSTORE:?set CORDED_KEYSTORE and CORDED_KEYSTORE_PASSWORD}"
 flutter build apk --release --target-platform android-arm64 --split-per-abi \
-  --build-name "0.3.0-test$n" --build-number "$n"
+  --build-name "$(git describe --tags --match 'v*' --always | sed 's/^v//')-test$n" \
+  --build-number "$(( ($(date +%s) - 1767225600) / 600 ))" \
+  --dart-define=CORDED_VERSION="$(git describe --tags --match 'v*' --always)"
 out="$(mktemp -d)/corded-android-arm64.apk"
 cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$out"
 git tag "android-test-$n"

@@ -4,6 +4,7 @@ import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../updater.dart';
 import '../app_state.dart';
 import '../background.dart';
 import 'common.dart';
@@ -168,6 +169,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SnackBar(content: Text('The fingerprint check did not finish, so nothing changed.')));
     }
     if (mounted) setState(() {});
+  }
+
+  // Asks GitHub for a newer release; if there is one, downloads it, has the
+  // core check its signature, and installs it.
+  Future<void> _checkForUpdates() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final Update? update;
+    try {
+      update = await checkForUpdate();
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not reach GitHub to look for an update.')));
+      return;
+    }
+    if (!mounted) return;
+    if (update == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('You have the newest version.')));
+      return;
+    }
+    final found = update;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${found.tag} is available'),
+        content: Text(Platform.isAndroid
+            ? 'Corded downloads it and checks that it is a genuine release. Android then asks you to confirm the install.'
+            : 'Corded downloads it, checks that it is a genuine release, installs it and starts again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Not now')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Update')),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    final progress = ValueNotifier<double?>(null);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Getting ${found.tag}'),
+        content: ValueListenableBuilder<double?>(
+            valueListenable: progress, builder: (context, value, _) => LinearProgressIndicator(value: value)),
+      ),
+    );
+    try {
+      final path = await downloadUpdate(widget.state.engine, found,
+          progress: (got, total) => progress.value = total > 0 ? got / total : null);
+      if (mounted) Navigator.pop(context);
+      await installUpdate(path); // on a desktop the app ends here and comes back as the new one
+    } on CordedError catch (e) {
+      if (mounted) Navigator.pop(context);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (mounted) Navigator.pop(context);
+      messenger.showSnackBar(const SnackBar(content: Text('The update could not be downloaded.')));
+    }
   }
 
   static const _iconChannel = MethodChannel('org.corded.app/icon');
@@ -366,6 +422,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (mounted) setState(() {});
             },
           ),
+        ListTile(
+          leading: const Icon(Icons.system_update_alt),
+          title: const Text('Check for updates'),
+          subtitle: Text('This is ${appVersion == 'dev' ? 'a build made by hand' : releaseOf(appVersion)}'),
+          onTap: _checkForUpdates,
+        ),
         SwitchListTile(
           secondary: const Icon(Icons.link),
           title: const Text('Preview links you send'),
