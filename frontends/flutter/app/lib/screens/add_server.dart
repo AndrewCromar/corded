@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'scan.dart';
 
 /// Joins a server from an invite link or its address.
 class AddServerScreen extends StatefulWidget {
@@ -60,7 +61,20 @@ class _AddServerScreenState extends State<AddServerScreen> {
         autocorrect: false,
         enableSuggestions: false,
         keyboardType: TextInputType.url,
-        decoration: const InputDecoration(labelText: 'Invite link or address', border: OutlineInputBorder()),
+        decoration: InputDecoration(
+          labelText: 'Invite link or address',
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            tooltip: 'Scan an invite code',
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: () async {
+              final text = await scanCode(context, title: 'Scan an invite');
+              if (text == null || !mounted) return;
+              setState(() => _address.text = text.trim());
+              if (text.trim().startsWith('corded://')) await _join();
+            },
+          ),
+        ),
       ),
       const SizedBox(height: 12),
       TextField(

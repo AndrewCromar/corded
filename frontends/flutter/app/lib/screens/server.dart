@@ -6,6 +6,7 @@ import '../app_state.dart';
 import 'channel_access.dart';
 import 'common.dart';
 import 'roles.dart';
+import 'scan.dart';
 
 /// Running the server from the app: channels, invites, settings, restart.
 /// Each part shows only to those the server lets do it.
@@ -157,7 +158,9 @@ class _ServerScreenState extends State<ServerScreen> {
         title: const Text('Invite link'),
         content:
             Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SelectableText(link, style: const TextStyle(fontFamily: 'monospace')),
+          Center(child: CodeToScan(link)),
+          const SizedBox(height: 12),
+          SelectableText(link, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
           const SizedBox(height: 12),
           const Text('Anyone with this link can join for the next 7 days. '
               'It carries the server\'s key, so they cannot be sent to an impostor.'),

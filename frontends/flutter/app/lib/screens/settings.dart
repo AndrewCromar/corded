@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'scan.dart';
 import 'server.dart';
 
 /// Your own settings. The server's settings will join them here later.
@@ -240,7 +241,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Recovery key'),
-        content: SelectableText(key, style: const TextStyle(fontFamily: 'monospace', fontSize: 16)),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // On the new device: "I have another device" > scan.
+            CodeToScan(recoveryCode(widget.state.store.username, key), size: 200),
+            const SizedBox(height: 12),
+            SelectableText(key, style: const TextStyle(fontFamily: 'monospace', fontSize: 16)),
+          ]),
+        ),
         actions: [
           TextButton(onPressed: () => Clipboard.setData(ClipboardData(text: key)), child: const Text('Copy')),
           FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
