@@ -37,6 +37,17 @@ void main() {
     expect(blocks.last.text, 'end');
   });
 
+  test('headings and bulleted lists', () {
+    final blocks = splitBlocks('# Title\n## Smaller\n### Smallest\nwords\n- one\n- two\n* three\nafter');
+    expect(blocks.map((b) => b.kind), ['h1', 'h2', 'h3', 'text', 'list', 'text']);
+    expect(blocks[0].text, 'Title');
+    expect(blocks[4].text, 'one\ntwo\nthree');
+    // A # without a space is a channel link or a tag, not a heading; 2 * 3 is not a list.
+    expect(splitBlocks('#general is busy').single.kind, 'text');
+    expect(splitBlocks('#### too deep').single.kind, 'text');
+    expect(splitBlocks('2 * 3').single.kind, 'text');
+  });
+
   test('a message without any of it is one block of text', () {
     final blocks = splitBlocks('just words');
     expect(blocks.single.kind, 'text');

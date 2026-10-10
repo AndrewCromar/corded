@@ -82,7 +82,7 @@ List<StyledRun> styleRuns(String text,
 }
 
 /// A message cut into blocks: ordinary text, quoted lines, or a block of code.
-typedef TextBlock = ({String kind, String text}); // kind: text, quote or code
+typedef TextBlock = ({String kind, String text}); // kind: text, quote, code, list, h1, h2 or h3
 
 List<TextBlock> splitBlocks(String text) {
   final blocks = <TextBlock>[];
@@ -109,13 +109,30 @@ List<TextBlock> splitBlocks(String text) {
       pending.add(line);
       continue;
     }
+    // "# ", "## " and "### " start a heading: a block of its own.
+    final heading = RegExp(r'^(#{1,3}) +(\S.*)$').firstMatch(line);
+    if (heading != null) {
+      flush();
+      blocks.add((kind: 'h${heading.group(1)!.length}', text: heading.group(2)!.trimRight()));
+      kind = 'text';
+      continue;
+    }
     final quoted = line.startsWith('> ') || line == '>';
-    final next = quoted ? 'quote' : 'text';
+    final bullet = RegExp(r'^\s*[-*] +\S').hasMatch(line);
+    final next = quoted
+        ? 'quote'
+        : bullet
+            ? 'list'
+            : 'text';
     if (next != kind) {
       flush();
       kind = next;
     }
-    pending.add(quoted ? line.substring(line.length > 1 ? 2 : 1) : line);
+    pending.add(quoted
+        ? line.substring(line.length > 1 ? 2 : 1)
+        : bullet
+            ? line.replaceFirst(RegExp(r'^\s*[-*] +'), '')
+            : line);
   }
   flush();
   return blocks;
@@ -265,6 +282,31 @@ class _LinkedTextState extends State<LinkedText> {
             child: Text.rich(TextSpan(
                 style: widget.style?.copyWith(color: base.withValues(alpha: 0.8)), children: _spans(b.text))),
           );
+        case 'h1' || 'h2' || 'h3':
+          final scale = b.kind == 'h1'
+              ? 1.5
+              : b.kind == 'h2'
+                  ? 1.3
+                  : 1.15;
+          final size = (widget.style?.fontSize ?? DefaultTextStyle.of(context).style.fontSize ?? 16) * scale;
+          return Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 2),
+            child: Text.rich(TextSpan(
+                style:
+                    (widget.style ?? const TextStyle()).copyWith(fontSize: size, fontWeight: FontWeight.bold),
+                children: _spans(b.text))),
+          );
+        case 'list':
+          return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final item in b.text.split('\n'))
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('  •  ', style: widget.style),
+                    Flexible(child: Text.rich(TextSpan(style: widget.style, children: _spans(item)))),
+                  ]),
+              ]);
         default:
           return Text.rich(TextSpan(style: widget.style, children: _spans(b.text)));
       }
