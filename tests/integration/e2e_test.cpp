@@ -308,7 +308,26 @@ TEST_CASE("two clients talk end to end through a real server") {
             REQUIRE(th["data"]["thread"].size() == 2);
             REQUIRE(th["data"]["thread"][0]["content"]["body"] == "yes, friday?");
             REQUIRE(th["data"]["thread"][1]["content"]["body"] == "friday works");
+            // Each has one reply from the other that they have not opened the thread for.
+            REQUIRE(th["data"]["root"]["thread_unread"] == 1);
         }
+        json unseen = bob.cmd({{"cmd", "unread_threads"}});
+        REQUIRE(unseen["data"]["threads"].size() == 1);
+        REQUIRE(unseen["data"]["threads"][0]["root_id"] == root);
+        REQUIRE(unseen["data"]["threads"][0]["root"]["content"]["body"] == "shall we plan the trip?");
+        REQUIRE(unseen["data"]["threads"][0]["first"]["content"]["body"] == "friday works");
+        // Opening the thread: seen, on this device only.
+        REQUIRE(bob.cmd({{"cmd", "mark_thread_read"}, {"room_id", room}, {"event_id", root}})["ok"] == true);
+        REQUIRE(bob.cmd({{"cmd", "fetch_thread"}, {"room_id", room}, {"event_id", root}})["data"]["root"]["thread_unread"] == 0);
+        REQUIRE(bob.cmd({{"cmd", "unread_threads"}})["data"]["threads"].empty());
+        REQUIRE(alice.cmd({{"cmd", "unread_threads"}})["data"]["threads"].size() == 1);
+        // A new reply makes it unread again; marking the whole room's threads clears it.
+        REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", room}, {"body", "noon?"}, {"thread", root}})["ok"] == true);
+        bob.wait_message("noon?");
+        REQUIRE(bob.cmd({{"cmd", "fetch_thread"}, {"room_id", room}, {"event_id", root}})["data"]["root"]["thread_first_unread"] ==
+                bob.cmd({{"cmd", "unread_threads"}})["data"]["threads"][0]["first"]["event_id"]);
+        REQUIRE(bob.cmd({{"cmd", "mark_thread_read"}, {"room_id", room}})["ok"] == true);
+        REQUIRE(bob.cmd({{"cmd", "unread_threads"}})["data"]["threads"].empty());
     }
 
     // Edits and deletions: only the original sender can change a message.

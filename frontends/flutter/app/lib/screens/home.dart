@@ -92,6 +92,10 @@ class HomeScreen extends StatelessWidget {
     final others = rooms.where((r) => r.kind != 'channel').toList();
     final unreadChats = rooms.where((r) => r.unread > 0).length;
     final unreadTotal = rooms.fold<int>(0, (sum, r) => sum + r.unread);
+    final unreadThreads = [
+      for (final t in state.unreadThreads)
+        if (rooms.any((r) => r.id == t['room_id'])) t
+    ];
 
     // In a direct chat, how present the other person is.
     String? statusIn(Room r) {
@@ -101,32 +105,21 @@ class HomeScreen extends StatelessWidget {
     }
 
     // What can be done to a chat without opening it: hold it, or right-click.
-    void actions(Room r) => showModalBottomSheet<void>(
-          context: context,
-          showDragHandle: true,
-          builder: (sheet) => SafeArea(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(
-                leading: const Icon(Icons.mark_chat_unread_outlined),
-                title: const Text('Mark as unread'),
-                onTap: () {
-                  Navigator.pop(sheet);
-                  attempt(context, () => state.engine.command({'cmd': 'mark_unread', 'room_id': r.id}));
-                },
-              ),
-              ListTile(
-                leading: Icon(state.isMuted(r.id)
-                    ? Icons.notifications_active_outlined
-                    : Icons.notifications_off_outlined),
-                title: Text(state.isMuted(r.id) ? 'Turn notifications back on' : 'Mute notifications'),
-                onTap: () {
-                  Navigator.pop(sheet);
-                  state.setMuted(r.id, !state.isMuted(r.id));
-                },
-              ),
-            ]),
+    void actions(Room r, {Offset? at}) => showChoices(context, at: at, [
+          (
+            icon: Icons.mark_chat_unread_outlined,
+            title: 'Mark as unread',
+            subtitle: null,
+            run: () => attempt(context, () => state.engine.command({'cmd': 'mark_unread', 'room_id': r.id})),
           ),
-        );
+          (
+            icon:
+                state.isMuted(r.id) ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+            title: state.isMuted(r.id) ? 'Turn notifications back on' : 'Mute notifications',
+            subtitle: null,
+            run: () => state.setMuted(r.id, !state.isMuted(r.id)),
+          ),
+        ]);
     Widget plainTile(Room r) => ListTile(
           leading: r.kind == 'direct'
               ? PresenceAvatar(
@@ -172,7 +165,8 @@ class HomeScreen extends StatelessWidget {
           // Hold a chat for what can be done without opening it.
           onLongPress: () => actions(r),
         );
-    Widget tile(Room r) => GestureDetector(onSecondaryTap: () => actions(r), child: plainTile(r));
+    Widget tile(Room r) =>
+        GestureDetector(onSecondaryTapUp: (d) => actions(r, at: d.globalPosition), child: plainTile(r));
     // Each group of chats folds away under its name. Whether it is open is
     // remembered on this device, per server.
     Widget group(String key, String title, List<Room> inside,
@@ -217,15 +211,13 @@ class HomeScreen extends StatelessWidget {
           IconButton(
             tooltip: 'Search messages',
             icon: const Icon(Icons.search),
-            onPressed: () =>
-                Navigator.push(context, MaterialPageRoute(builder: (_) => SearchScreen(state: state))),
+            onPressed: () => state.openPage(context, (_) => SearchScreen(state: state)),
           ),
           if (server != null)
             IconButton(
               tooltip: 'Members',
               icon: const Icon(Icons.people_outline),
-              onPressed: () =>
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => MembersScreen(state: state))),
+              onPressed: () => state.openPage(context, (_) => MembersScreen(state: state)),
             ),
         ],
       ),
@@ -264,7 +256,7 @@ class HomeScreen extends StatelessWidget {
               title: const Text('Settings'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(state: state)));
+                state.openPage(context, (_) => SettingsScreen(state: state));
               },
             ),
           ]),
@@ -279,14 +271,19 @@ class HomeScreen extends StatelessWidget {
         Expanded(
           child: ListView(children: [
             // Everything unread, gathered in one place to go through.
-            if (unreadTotal > 0)
+            if (unreadTotal > 0 || unreadThreads.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.mark_chat_unread_outlined),
                 title: const Text('Catch up', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('$unreadChats chat${unreadChats == 1 ? '' : 's'} with something new'),
-                trailing: Badge(label: Text('$unreadTotal')),
-                onTap: () =>
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => CatchUpScreen(state: state))),
+                subtitle: Text('${[
+                  if (unreadChats > 0) '$unreadChats chat${unreadChats == 1 ? '' : 's'}',
+                  if (unreadThreads.isNotEmpty)
+                    '${unreadThreads.length} thread${unreadThreads.length == 1 ? '' : 's'}',
+                ].join(' and ')} with something new'),
+                trailing: Badge(
+                    label: Text(
+                        '${unreadTotal > 0 ? unreadTotal : unreadThreads.fold<int>(0, (sum, t) => sum + ((t['count'] as num?)?.toInt() ?? 0))}')),
+                onTap: () => state.openPage(context, (_) => CatchUpScreen(state: state)),
               ),
             if (pinned.isNotEmpty) group('pinned', 'Pinned', pinned),
             // The server's own sections, in its order; then the channels in none.
@@ -324,7 +321,7 @@ class HomeScreen extends StatelessWidget {
                 title: const Text('New group'),
                 onTap: () {
                   Navigator.pop(sheet);
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => NewGroupScreen(state: state)));
+                  state.openPage(context, (_) => NewGroupScreen(state: state));
                 },
               ),
             ]),

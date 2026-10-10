@@ -280,6 +280,18 @@ CREATE TABLE IF NOT EXISTS outbox (
              "json TEXT NOT NULL) WITHOUT ROWID");
     db_.exec("CREATE TABLE IF NOT EXISTS receipts (room_id BLOB NOT NULL, user_id BLOB NOT NULL, "
              "event_id BLOB NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (room_id, user_id)) WITHOUT ROWID");
+    // Where each thread was last seen up to. Threads that exist when this is
+    // first made count as seen: only what arrives from here on is new.
+    try {
+        db_.exec("SELECT seq FROM thread_seen LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("CREATE TABLE thread_seen (room_id BLOB NOT NULL, root_id BLOB NOT NULL, "
+                 "seq INTEGER NOT NULL, PRIMARY KEY (room_id, root_id)) WITHOUT ROWID");
+        db_.exec("INSERT INTO thread_seen (room_id, root_id, seq) "
+                 "SELECT r.room_id, r.target_event_id, MAX(e.seq) FROM relations r "
+                 "JOIN events e ON e.room_id = r.room_id AND e.event_id = r.event_id "
+                 "WHERE r.kind = 'thread' AND e.seq IS NOT NULL GROUP BY r.room_id, r.target_event_id");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -697,6 +709,48 @@ Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
         "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq LIMIT 1");
     st.bind(1, room_id).bind(2, user_id);
     return st.step() ? st.blob(0) : Bytes{};
+}
+
+namespace {
+// A thread's replies from other people that came after it was last seen.
+const char* const kUnseenReplies =
+    "FROM relations r JOIN events e ON e.room_id = r.room_id AND e.event_id = r.event_id "
+    "LEFT JOIN thread_seen s ON s.room_id = r.room_id AND s.root_id = r.target_event_id "
+    "WHERE r.kind = 'thread' AND e.seq IS NOT NULL AND e.sender_user != ?1 AND e.seq > COALESCE(s.seq, 0) "
+    "AND e.status != 'redacted' AND (e.shared_by IS NULL OR length(e.shared_by) = 0) ";
+}  // namespace
+
+Vault::ThreadUnread Vault::thread_unread(ByteView room_id, ByteView root_id, ByteView user_id) {
+    ThreadUnread out{Bytes(room_id.begin(), room_id.end()), Bytes(root_id.begin(), root_id.end()), {}, 0};
+    const std::string sql = std::string("SELECT e.event_id ") + kUnseenReplies +
+                            "AND r.room_id = ?2 AND r.target_event_id = ?3 ORDER BY e.seq";
+    auto st = db_.prepare(sql.c_str());
+    st.bind(1, user_id).bind(2, room_id).bind(3, root_id);
+    while (st.step()) {
+        if (out.count++ == 0) out.first = st.blob(0);
+    }
+    return out;
+}
+
+std::vector<Vault::ThreadUnread> Vault::unread_threads(ByteView user_id) {
+    std::vector<std::pair<Bytes, Bytes>> threads;
+    {
+        const std::string sql = std::string("SELECT DISTINCT r.room_id, r.target_event_id ") + kUnseenReplies;
+        auto st = db_.prepare(sql.c_str());
+        st.bind(1, user_id);
+        while (st.step()) threads.emplace_back(st.blob(0), st.blob(1));
+    }
+    std::vector<ThreadUnread> out;
+    for (const auto& [room, root] : threads) out.push_back(thread_unread(room, root, user_id));
+    return out;
+}
+
+void Vault::see_thread(ByteView room_id, ByteView root_id) {
+    auto st = db_.prepare(
+        "INSERT OR REPLACE INTO thread_seen (room_id, root_id, seq) VALUES (?1, ?2, "
+        "COALESCE((SELECT MAX(e.seq) FROM relations r JOIN events e ON e.room_id = r.room_id "
+        "AND e.event_id = r.event_id WHERE r.room_id = ?1 AND r.target_event_id = ?2 AND r.kind = 'thread'), 0))");
+    st.bind(1, room_id).bind(2, root_id).exec();
 }
 
 std::optional<uint64_t> Vault::last_from_others(ByteView room_id, ByteView user_id) {

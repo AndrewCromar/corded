@@ -161,6 +161,18 @@ public:
     void rewind_receipt(ByteView room_id, ByteView user_id, uint64_t before_seq);
     // The first message from someone else after this person's marker; empty if none.
     Bytes first_unread(ByteView room_id, ByteView user_id);
+    // Threads keep a place of their own: reading a channel does not mean its
+    // threads were opened. Replies from others after the place a thread was
+    // last seen at; `first` is the oldest of them.
+    struct ThreadUnread {
+        Bytes room_id, root_id, first;
+        uint32_t count = 0;
+    };
+    ThreadUnread thread_unread(ByteView room_id, ByteView root_id, ByteView user_id);
+    // Every thread with such replies, in every room.
+    std::vector<ThreadUnread> unread_threads(ByteView user_id);
+    // "Seen up to its newest reply."
+    void see_thread(ByteView room_id, ByteView root_id);
     // Where the newest message from someone else sits, if there is one.
     std::optional<uint64_t> last_from_others(ByteView room_id, ByteView user_id);
     // Messages from others that arrived after this person's read marker.

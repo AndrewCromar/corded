@@ -6,6 +6,9 @@ import 'dart:io';
 
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart'
+    show BuildContext, MaterialPageRoute, Navigator, NavigatorState, WidgetBuilder;
 import 'package:characters/characters.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -185,11 +188,6 @@ class AppState extends ChangeNotifier {
           await installUpdate(path);
         }
       }
-      // CORDED_DEV_SCREEN=settings: show that screen, for a picture of it.
-      if (env['CORDED_DEV_SCREEN'] != null) {
-        await Future<void>.delayed(Duration(seconds: int.tryParse(env['CORDED_DEV_WAIT'] ?? '') ?? 3));
-        onDevScreen?.call(env['CORDED_DEV_SCREEN']!);
-      }
       final open = env['CORDED_DEV_OPEN'];
       for (var i = 0; open != null && i < 20; i++) {
         await Future<void>.delayed(const Duration(seconds: 1));
@@ -198,6 +196,33 @@ class AppState extends ChangeNotifier {
           onOpenChat!(room.id, null);
           break;
         }
+      }
+      // CORDED_DEV_CLICKS="2:700,300;1:120,200": mouse clicks (1 left, 2 right)
+      // at those points of the window, two seconds apart.
+      var pointer = 900;
+      for (final click in (env['CORDED_DEV_CLICKS'] ?? '').split(';').where((c) => c.contains(':'))) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        final xy = click.split(':')[1].split(',');
+        final at = Offset(double.parse(xy[0]), double.parse(xy[1]));
+        final gestures = GestureBinding.instance;
+        pointer++;
+        gestures
+            .handlePointerEvent(PointerAddedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
+        gestures.handlePointerEvent(PointerDownEvent(
+            position: at,
+            kind: PointerDeviceKind.mouse,
+            device: 9,
+            pointer: pointer,
+            buttons: int.parse(click.split(':')[0])));
+        gestures.handlePointerEvent(
+            PointerUpEvent(position: at, kind: PointerDeviceKind.mouse, device: 9, pointer: pointer));
+        gestures
+            .handlePointerEvent(PointerRemovedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
+      }
+      // CORDED_DEV_SCREEN=settings: show that screen, for a picture of it.
+      if (env['CORDED_DEV_SCREEN'] != null) {
+        await Future<void>.delayed(Duration(seconds: int.tryParse(env['CORDED_DEV_WAIT'] ?? '') ?? 3));
+        onDevScreen?.call(env['CORDED_DEV_SCREEN']!);
       }
     } catch (e) {
       startError = 'dev drive: $e';
@@ -357,6 +382,36 @@ class AppState extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setStringList('muted_rooms', mutedRooms.toList());
   }
 
+  /// Threads holding replies not seen yet, as the core lists them: each with
+  /// `room_id`, `root_id`, `count`, and the messages `root` and `first`. A
+  /// thread keeps its own place; reading its channel does not open it.
+  List<Map<String, dynamic>> unreadThreads = const [];
+  Timer? _threadsTimer;
+
+  Future<void> refreshUnreadThreads() async {
+    if (_store == null || store.vaultState != 'unlocked') return;
+    try {
+      final r = await engine.command({'cmd': 'unread_threads'});
+      final now = [
+        for (final t in (r['threads'] as List? ?? const []))
+          if (t is Map) t.cast<String, dynamic>()
+      ];
+      String mark(List<Map<String, dynamic>> l) => l.map((t) => '${t['root_id']}:${t['count']}').join(',');
+      if (mark(now) == mark(unreadThreads)) return;
+      unreadThreads = now;
+      notifyListeners();
+    } on CordedError {
+      // Asked again at the next change.
+    }
+  }
+
+  /// On a wide desktop window, the part beside the list of chats; a page
+  /// opened from the list goes there instead of covering everything.
+  NavigatorState? Function()? paneNavigator;
+
+  void openPage(BuildContext context, WidgetBuilder page) =>
+      (paneNavigator?.call() ?? Navigator.of(context)).push(MaterialPageRoute(builder: page));
+
   /// The groups in the list of chats that are not as they start out: opened
   /// when they start closed, or closed when they start open.
   Set<String> _sectionsFlipped = {};
@@ -441,6 +496,11 @@ class AppState extends ChangeNotifier {
       });
       _engine = engine;
       _store = store;
+      // Whatever changes may have changed which threads hold something new.
+      store.changes.listen((_) {
+        _threadsTimer?.cancel();
+        _threadsTimer = Timer(const Duration(milliseconds: 400), refreshUnreadThreads);
+      });
       Background.onEvent((data) {
         if (data is String) engine.deliver(data);
       });

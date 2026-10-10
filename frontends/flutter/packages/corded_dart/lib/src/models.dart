@@ -120,12 +120,19 @@ class Message {
   /// How many thread replies the core knew of when it reported this message.
   int threadCount = 0;
 
+  /// Of those, the replies from others that came since the thread was last
+  /// opened on this device, and the first of them.
+  int threadUnread = 0;
+  String threadFirstUnread = '';
+
   void apply(Map<String, dynamic> j) {
     status = j['status'] as String? ?? status;
     edited = j['edited'] == true;
     seq = (j['seq'] as num?)?.toInt() ?? seq;
     scheduledFor = (j['scheduled_for'] as num?)?.toInt() ?? scheduledFor;
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
+    threadUnread = (j['thread_unread'] as num?)?.toInt() ?? threadUnread;
+    threadFirstUnread = j['thread_first_unread'] as String? ?? threadFirstUnread;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
     final card = content['preview'];

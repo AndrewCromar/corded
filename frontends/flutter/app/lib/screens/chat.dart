@@ -1,13 +1,16 @@
 import '../platform.dart';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:corded_dart/corded_dart.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -52,7 +55,8 @@ class _ChatScreenState extends State<ChatScreen> {
   // is drawn above it.
   String _newFrom = '';
   bool _sendingFile = false;
-  // With a keyboard, Enter sends and Shift+Enter starts a new line.
+  // With a keyboard, Enter sends and Shift+Enter starts a new line; Up in an
+  // empty box edits your last message; Ctrl+V also takes pictures and files.
   late final _inputFocus = FocusNode(onKeyEvent: (node, event) {
     if (!isDesktop || event is! KeyDownEvent) return KeyEventResult.ignored;
     // Esc backs out of a reply or an edit.
@@ -63,6 +67,13 @@ class _ChatScreenState extends State<ChatScreen> {
         _replyingTo = null;
       });
       return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp && _input.text.isEmpty && _editing == null) {
+      return _editLast() ? KeyEventResult.handled : KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyV && HardwareKeyboard.instance.isControlPressed) {
+      _pasteFiles(); // beside the usual paste of words, which goes ahead
+      return KeyEventResult.ignored;
     }
     final enter =
         event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
@@ -91,6 +102,13 @@ class _ChatScreenState extends State<ChatScreen> {
     return [if (root != null) root, ..._store.thread(_room, thread)];
   }
 
+  // What is in the thread on screen has been seen.
+  void _seeThread() {
+    widget.state.engine
+        .command({'cmd': 'mark_thread_read', 'room_id': _room, 'event_id': _thread}).catchError(
+            (_) => const <String, dynamic>{});
+  }
+
   void _openThread(Message root) {
     Navigator.push(
         context,
@@ -103,8 +121,17 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     widget.state.viewingRoom = _room;
     widget.state.viewingThread = _thread;
-    if (_thread == null) _newFrom = _store.rooms[_room]?.firstUnread ?? '';
+    if (_thread == null) {
+      _newFrom = _store.rooms[_room]?.firstUnread ?? '';
+    } else {
+      // A thread keeps its own place: the line goes above the first reply
+      // that came since it was last opened.
+      final unseen = widget.state.unreadThreads.where((t) => t['root_id'] == _thread).firstOrNull;
+      _newFrom =
+          '${(unseen?['first'] as Map?)?['event_id'] ?? _store.message(_room, _thread!)?.threadFirstUnread ?? ''}';
+    }
     final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
+    if (_thread != null) opened.then((_) => _seeThread());
     // A task list is shown whole, however old its first task is.
     if (_thread == null && (_store.rooms[_room]?.isTaskList ?? false)) {
       opened.then((_) async {
@@ -130,6 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (count != _seen) {
         _seen = count;
         _store.markRead(_room);
+        if (_thread != null) _seeThread();
       }
       if (mounted) setState(() {});
     });
@@ -903,14 +931,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // The photo is made smaller, encrypted on this device and uploaded; what is
   // typed in the message box goes with it as its caption.
-  Future<void> _sendPhoto(ImageSource source) async {
+  Future<void> _sendPhoto(ImageSource source) => _sendPictureFile(() async {
+        final file =
+            await ImagePicker().pickImage(source: source, maxWidth: 2000, maxHeight: 2000, imageQuality: 85);
+        return file == null ? null : (path: file.path, name: file.name);
+      });
+
+  Future<void> _sendPictureFile(Future<({String path, String name})?> Function() pick) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final file =
-          await ImagePicker().pickImage(source: source, maxWidth: 2000, maxHeight: 2000, imageQuality: 85);
+      final file = await pick();
       if (file == null) return;
       if (mounted) setState(() => _sendingFile = true);
-      final preview = await compute(previewOf, await file.readAsBytes());
+      final preview = await compute(previewOf, await File(file.path).readAsBytes());
       if (preview == null) {
         messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
         return;
@@ -1022,127 +1055,197 @@ class _ChatScreenState extends State<ChatScreen> {
     if (picked.isNotEmpty) await _react(m, picked.first);
   }
 
-  void _showActions(Message m) {
+  // What can be done with a message: held on a phone, right-clicked with a mouse.
+  void _showActions(Message m, {Offset? at}) {
     final canManage = widget.state.server?.permissions.contains('manage_messages') ?? false;
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheet) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            for (final key in widget.state.reactionBar)
-              Flexible(
-                child: IconButton(
-                  icon: Text(key, style: const TextStyle(fontSize: 24)),
-                  onPressed: () {
-                    Navigator.pop(sheet);
-                    _react(m, key);
-                  },
-                ),
-              ),
-            Flexible(
-              child: IconButton(
-                tooltip: 'Another emoji',
-                icon: const Icon(Icons.add_circle_outline),
-                onPressed: () {
-                  Navigator.pop(sheet);
-                  _reactWithOther(m);
-                },
-              ),
-            ),
-          ]),
-          if (m.mine && m.status == 'scheduled')
-            ListTile(
-              leading: const Icon(Icons.cancel_schedule_send_outlined),
-              title: const Text('Do not send this'),
-              subtitle: const Text('It is waiting on the server; this takes it back'),
-              onTap: () {
-                Navigator.pop(sheet);
-                attempt(
-                    context,
-                    () => widget.state.engine
-                        .command({'cmd': 'cancel_scheduled', 'room_id': _room, 'event_id': m.id}));
-              },
-            ),
-          ListTile(
-            leading: const Icon(Icons.reply),
-            title: const Text('Reply'),
-            onTap: () {
-              Navigator.pop(sheet);
-              setState(() {
+    Future<void> ask(Map<String, Object?> command) =>
+        attempt(context, () => widget.state.engine.command(command));
+    showChoices(
+      context,
+      at: at,
+      reactions: widget.state.reactionBar,
+      onReact: (key) => _react(m, key),
+      onOtherReaction: () => _reactWithOther(m),
+      [
+        if (m.mine && m.status == 'scheduled')
+          (
+            icon: Icons.cancel_schedule_send_outlined,
+            title: 'Do not send this',
+            subtitle: 'It is waiting on the server; this takes it back',
+            run: () => ask({'cmd': 'cancel_scheduled', 'room_id': _room, 'event_id': m.id}),
+          ),
+        (
+          icon: Icons.reply,
+          title: 'Reply',
+          subtitle: null,
+          run: () => setState(() {
                 _replyingTo = m;
                 _editing = null;
-              });
-            },
+              }),
+        ),
+        // A reply inside a thread can start a thread of its own.
+        if (m.id != _thread)
+          (
+            icon: Icons.forum_outlined,
+            title: _store.threadCount(_room, m) > 0 ? 'Open thread' : 'Start a thread',
+            subtitle: null,
+            run: () => _openThread(m),
           ),
-          // A reply inside a thread can start a thread of its own.
-          if (m.id != _thread)
-            ListTile(
-              leading: const Icon(Icons.forum_outlined),
-              title: Text(_store.threadCount(_room, m) > 0 ? 'Open thread' : 'Start a thread'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _openThread(m);
-              },
-            ),
-
-          ListTile(
-            leading: const Icon(Icons.copy),
-            title: const Text('Copy text'),
-            onTap: () {
-              Navigator.pop(sheet);
-              Clipboard.setData(ClipboardData(text: m.body));
-            },
+        (
+          icon: Icons.copy,
+          title: 'Copy text',
+          subtitle: null,
+          run: () => Clipboard.setData(ClipboardData(text: m.body)),
+        ),
+        if (_thread == null && !m.mine && m.seq != null)
+          (
+            icon: Icons.mark_chat_unread_outlined,
+            title: 'Mark unread from here',
+            subtitle: null,
+            run: () => _markUnreadFrom(m),
           ),
-          if (_thread == null && !m.mine && m.seq != null)
-            ListTile(
-              leading: const Icon(Icons.mark_chat_unread_outlined),
-              title: const Text('Mark unread from here'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _markUnreadFrom(m);
-              },
-            ),
-          if (_mayPin)
-            ListTile(
-              leading: Icon(_isPinned(m) ? Icons.push_pin : Icons.push_pin_outlined),
-              title: Text(_isPinned(m) ? 'Unpin' : 'Pin'),
-              onTap: () {
-                Navigator.pop(sheet);
-                attempt(
-                    context,
-                    () => widget.state.engine.command(
-                        {'cmd': 'pin_event', 'room_id': _room, 'event_id': m.id, 'pinned': !_isPinned(m)}));
-              },
-            ),
-          if (m.mine && !m.isFile && !m.isPoll)
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(sheet);
-                setState(() {
-                  _editing = m;
-                  _replyingTo = null;
-                  _input.text = m.body;
-                });
-              },
-            ),
-          if (m.mine || canManage)
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete'),
-              onTap: () {
-                Navigator.pop(sheet);
-                attempt(
-                    context,
-                    () => widget.state.engine
-                        .command({'cmd': 'delete_event', 'room_id': _room, 'event_id': m.id}));
-              },
-            ),
-        ]),
-      ),
+        if (_mayPin)
+          (
+            icon: _isPinned(m) ? Icons.push_pin : Icons.push_pin_outlined,
+            title: _isPinned(m) ? 'Unpin' : 'Pin',
+            subtitle: null,
+            run: () => ask({'cmd': 'pin_event', 'room_id': _room, 'event_id': m.id, 'pinned': !_isPinned(m)}),
+          ),
+        if (_mayEdit(m)) (icon: Icons.edit_outlined, title: 'Edit', subtitle: null, run: () => _startEdit(m)),
+        if (m.mine || canManage)
+          (
+            icon: Icons.delete_outline,
+            title: 'Delete',
+            subtitle: null,
+            run: () => ask({'cmd': 'delete_event', 'room_id': _room, 'event_id': m.id}),
+          ),
+      ],
     );
+  }
+
+  static bool _mayEdit(Message m) => m.mine && !m.isFile && !m.isPoll;
+
+  void _startEdit(Message m) {
+    setState(() {
+      _editing = m;
+      _replyingTo = null;
+      _input.text = m.body;
+      _input.selection = TextSelection.collapsed(offset: m.body.length);
+    });
+    _inputFocus.requestFocus();
+  }
+
+  // With a keyboard, the Up arrow in an empty message box goes back to the
+  // last thing you wrote, to change it.
+  bool _editLast() {
+    for (final m in _shown.reversed) {
+      if (!_mayEdit(m) || m.isTask || m.status == 'redacted' || m.status == 'scheduled') continue;
+      _startEdit(m);
+      return true;
+    }
+    return false;
+  }
+
+  // Ctrl+V with a picture or files copied: offers to send them. Words are
+  // pasted into the message box as always.
+  Future<void> _pasteFiles() async {
+    final before = _input.value;
+    try {
+      final files = await Pasteboard.files();
+      if (!mounted) return;
+      if (files.isNotEmpty) {
+        final names = [for (final f in files) f.split(RegExp(r'[/\\]')).last];
+        if (!await _confirmSend(
+            files.length == 1 ? 'Send ${names.first}?' : 'Send these ${files.length} files?',
+            files.length == 1 ? null : Text(names.join('\n')))) {
+          return;
+        }
+        _input.value = before; // not the files' names, which were pasted as words
+        await _sendPaths([for (var i = 0; i < files.length; i++) (path: files[i], name: names[i])]);
+        return;
+      }
+      final image = await Pasteboard.image;
+      if (image == null || !mounted) return;
+      if (!await _confirmSend(
+          'Send this picture?',
+          ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 360, maxWidth: 480),
+              child: Image.memory(image)))) {
+        return;
+      }
+      _input.value = before;
+      // The core reads a file from disk; this one is removed once it is sent.
+      final file =
+          File('${(await getTemporaryDirectory()).path}/pasted-${DateTime.now().millisecondsSinceEpoch}.png');
+      await file.writeAsBytes(image);
+      try {
+        await _sendPictureFile(() async => (path: file.path, name: 'pasted.png'));
+      } finally {
+        if (file.existsSync()) file.deleteSync();
+      }
+    } catch (_) {
+      // Nothing on the clipboard this app can send.
+    }
+  }
+
+  Future<bool> _confirmSend(String title, Widget? content) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text(title),
+          content: content,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')),
+            FilledButton(
+                autofocus: true, onPressed: () => Navigator.pop(dialog, true), child: const Text('Send')),
+          ],
+        ),
+      ) ??
+      false;
+
+  bool _dropping = false;
+
+  // With a mouse, files can be dragged onto the conversation to send them.
+  Widget _dropZone(Room? room, Widget child) {
+    if (!isDesktop || room == null || room.archived || !room.canSend) return child;
+    final scheme = Theme.of(context).colorScheme;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dropping = true),
+      onDragExited: (_) => setState(() => _dropping = false),
+      onDragDone: (drop) {
+        setState(() => _dropping = false);
+        _sendPaths([for (final f in drop.files) (path: f.path, name: f.name)]);
+      },
+      child: Stack(children: [
+        child,
+        if (_dropping)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Container(
+                color: scheme.surface.withValues(alpha: 0.85),
+                alignment: Alignment.center,
+                child: Text('Drop to send', style: Theme.of(context).textTheme.headlineSmall),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  static const _pictureEndings = {'jpg', 'jpeg', 'png', 'gif', 'webp'};
+
+  // Files dropped on the chat or pasted into it: pictures go as pictures,
+  // anything else as a file.
+  Future<void> _sendPaths(List<({String path, String name})> files) async {
+    for (final f in files) {
+      if (FileSystemEntity.isDirectorySync(f.path)) continue;
+      final ending = f.name.contains('.') ? f.name.split('.').last.toLowerCase() : '';
+      if (_pictureEndings.contains(ending)) {
+        await _sendPictureFile(() async => f);
+      } else {
+        await _sendPicked(() async => f);
+      }
+    }
   }
 
   static String _time(int ms) {
@@ -1228,7 +1331,7 @@ class _ChatScreenState extends State<ChatScreen> {
             GestureDetector(
               onLongPress: gone ? null : () => _showActions(m),
               // With a mouse: the right button.
-              onSecondaryTap: gone ? null : () => _showActions(m),
+              onSecondaryTapUp: gone ? null : (d) => _showActions(m, at: d.globalPosition),
               // A double click selects a word on a desktop; reacting is in the menu there.
               onDoubleTap: gone || isDesktop ? null : () => _react(m, widget.state.reactionBar.first),
               child: Container(
@@ -1348,7 +1451,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.forum, size: 18, color: scheme.onSecondaryContainer),
+                        Badge(
+                          isLabelVisible: m.threadUnread > 0,
+                          smallSize: 9,
+                          child: Icon(Icons.forum, size: 18, color: scheme.onSecondaryContainer),
+                        ),
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(() {
@@ -1357,12 +1464,15 @@ class _ChatScreenState extends State<ChatScreen> {
                             final last = replies.isEmpty
                                 ? ''
                                 : '  ·  last from ${replies.last.mine ? 'you' : replies.last.sender}';
-                            return '${n == 1 ? 'Thread: 1 reply' : 'Thread: $n replies'}$last';
+                            // Replies that came since the thread was last opened.
+                            final unseen = m.threadUnread > 0 ? '  ·  ${m.threadUnread} new' : '';
+                            return '${n == 1 ? 'Thread: 1 reply' : 'Thread: $n replies'}$unseen$last';
                           }(),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style:
-                                  theme.textTheme.labelLarge?.copyWith(color: scheme.onSecondaryContainer)),
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                  color: scheme.onSecondaryContainer,
+                                  fontWeight: m.threadUnread > 0 ? FontWeight.bold : null)),
                         ),
                         Icon(Icons.chevron_right, size: 20, color: scheme.onSecondaryContainer),
                       ]),
@@ -1481,178 +1591,185 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
         ],
       ),
-      body: SafeArea(
-        child: Column(children: [
-          if (_thread == null && room != null && room.pinned.isNotEmpty)
-            Material(
-              color: theme.colorScheme.surfaceContainerHigh,
-              child: InkWell(
-                onTap: () => _showPinned(room),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(children: [
-                    Icon(Icons.push_pin, size: 16, color: theme.colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(() {
-                        final latest = _store.message(_room, room.pinned.last);
-                        final count = room.pinned.length == 1 ? 'Pinned' : '${room.pinned.length} pinned';
-                        return latest == null ? count : '$count: ${latest.text}';
-                      }(), maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.labelLarge),
-                    ),
-                    const Icon(Icons.expand_more, size: 18),
-                  ]),
-                ),
-              ),
-            ),
-          Expanded(
-            child: messages.isEmpty
-                ? Center(
-                    child: Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
-                : _selectable(ListView.builder(
-                    controller: _scroll,
-                    reverse: true,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: messages.length,
-                    itemBuilder: (context, i) {
-                      final m = messages[messages.length - 1 - i];
-                      final bubble = KeyedSubtree(
-                          key: _keys.putIfAbsent(m.id, GlobalKey.new), child: _bubble(m, messages));
-                      if (m.id != _newFrom) return bubble;
-                      return Column(mainAxisSize: MainAxisSize.min, children: [_newLine(), bubble]);
-                    },
-                  )),
-          ),
-          if (typing.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('${typing.join(', ')} ${typing.length == 1 ? 'is' : 'are'} typing...',
-                    style: theme.textTheme.labelMedium),
-              ),
-            ),
-          if (_mentionChoices(room).isNotEmpty)
-            SizedBox(
-              height: 44,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  for (final name in _mentionChoices(room))
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ActionChip(label: Text('@$name'), onPressed: () => _completeMention(name)),
-                    ),
-                ],
-              ),
-            ),
-          if (_previewLookup != null && _draftPreview == null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Row(children: [
-                const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
-                const SizedBox(width: 8),
-                Text('Looking up the link for a preview...', style: theme.textTheme.labelMedium),
-              ]),
-            ),
-          if (_draftPreview != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: _previewCard(_draftPreview!, theme.colorScheme.onSurface,
-                  onClose: () => setState(() {
-                        _dismissedLink = _draftPreview!.url;
-                        _draftPreview = null;
-                      })),
-            ),
-          if (banner != null)
-            Material(
-              color: theme.colorScheme.secondaryContainer,
-              child: ListTile(
-                dense: true,
-                title: Text(banner, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: IconButton(
-                  icon: const Icon(Icons.close),
-                  tooltip: 'Cancel',
-                  onPressed: () => setState(() {
-                    if (_editing != null) _input.clear();
-                    _editing = null;
-                    _replyingTo = null;
-                  }),
-                ),
-              ),
-            ),
-          if (room?.archived ?? false)
-            Container(
-              width: double.infinity,
-              color: theme.colorScheme.surfaceContainerHigh,
-              padding: const EdgeInsets.all(14),
-              child: Row(children: [
-                Icon(Icons.inventory_2_outlined, size: 18, color: theme.colorScheme.outline),
-                const SizedBox(width: 10),
-                const Expanded(child: Text('This channel is archived. It can be read but not written in.')),
-              ]),
-            )
-          else if (room != null && !room.canSend)
-            // Read-only for this person: say so where the message box would be.
-            Container(
-              width: double.infinity,
-              color: theme.colorScheme.surfaceContainerHigh,
-              padding: const EdgeInsets.all(14),
-              child: Row(children: [
-                Icon(Icons.lock_outline, size: 18, color: theme.colorScheme.outline),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: Text('You can read this channel but not write in it.',
-                        style: TextStyle(color: theme.colorScheme.outline))),
-              ]),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                IconButton(
-                    tooltip: 'Send a photo or start a poll',
-                    icon: _sendingFile
-                        ? const SizedBox(
-                            width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.add_circle_outline),
-                    onPressed: _sendingFile ? null : _showAttach),
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    focusNode: _inputFocus,
-                    autofocus: isDesktop,
-                    minLines: 1,
-                    maxLines: 5,
-                    textCapitalization: TextCapitalization.sentences,
-                    onChanged: (v) {
-                      // The core sends at most one of these every few seconds.
-                      if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
-                      _watchForLink(v);
-                      setState(() {}); // the name suggestions follow what is typed
-                    },
-                    decoration: InputDecoration(
-                      hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      body: _dropZone(
+          room,
+          SafeArea(
+            child: Column(children: [
+              if (_thread == null && room != null && room.pinned.isNotEmpty)
+                Material(
+                  color: theme.colorScheme.surfaceContainerHigh,
+                  child: InkWell(
+                    onTap: () => _showPinned(room),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(children: [
+                        Icon(Icons.push_pin, size: 16, color: theme.colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(() {
+                            final latest = _store.message(_room, room.pinned.last);
+                            final count = room.pinned.length == 1 ? 'Pinned' : '${room.pinned.length} pinned';
+                            return latest == null ? count : '$count: ${latest.text}';
+                          }(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelLarge),
+                        ),
+                        const Icon(Icons.expand_more, size: 18),
+                      ]),
                     ),
                   ),
                 ),
-                // Hold it (or right-click) to send the message later instead.
-                // No tooltip here: a tooltip takes the long press for itself,
-                // and the hold would never reach the button.
-                GestureDetector(
-                  onSecondaryTap: _sendLater,
-                  child: IconButton.filled(
-                      onPressed: () => _send(),
-                      onLongPress: _sendLater,
-                      icon: Icon(_editing != null ? Icons.check : Icons.send)),
+              Expanded(
+                child: messages.isEmpty
+                    ? Center(
+                        child:
+                            Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
+                    : _selectable(ListView.builder(
+                        controller: _scroll,
+                        reverse: true,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: messages.length,
+                        itemBuilder: (context, i) {
+                          final m = messages[messages.length - 1 - i];
+                          final bubble = KeyedSubtree(
+                              key: _keys.putIfAbsent(m.id, GlobalKey.new), child: _bubble(m, messages));
+                          if (m.id != _newFrom) return bubble;
+                          return Column(mainAxisSize: MainAxisSize.min, children: [_newLine(), bubble]);
+                        },
+                      )),
+              ),
+              if (typing.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('${typing.join(', ')} ${typing.length == 1 ? 'is' : 'are'} typing...',
+                        style: theme.textTheme.labelMedium),
+                  ),
                 ),
-              ]),
-            ),
-        ]),
-      ),
+              if (_mentionChoices(room).isNotEmpty)
+                SizedBox(
+                  height: 44,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    children: [
+                      for (final name in _mentionChoices(room))
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: ActionChip(label: Text('@$name'), onPressed: () => _completeMention(name)),
+                        ),
+                    ],
+                  ),
+                ),
+              if (_previewLookup != null && _draftPreview == null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                  child: Row(children: [
+                    const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 8),
+                    Text('Looking up the link for a preview...', style: theme.textTheme.labelMedium),
+                  ]),
+                ),
+              if (_draftPreview != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                  child: _previewCard(_draftPreview!, theme.colorScheme.onSurface,
+                      onClose: () => setState(() {
+                            _dismissedLink = _draftPreview!.url;
+                            _draftPreview = null;
+                          })),
+                ),
+              if (banner != null)
+                Material(
+                  color: theme.colorScheme.secondaryContainer,
+                  child: ListTile(
+                    dense: true,
+                    title: Text(banner, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Cancel',
+                      onPressed: () => setState(() {
+                        if (_editing != null) _input.clear();
+                        _editing = null;
+                        _replyingTo = null;
+                      }),
+                    ),
+                  ),
+                ),
+              if (room?.archived ?? false)
+                Container(
+                  width: double.infinity,
+                  color: theme.colorScheme.surfaceContainerHigh,
+                  padding: const EdgeInsets.all(14),
+                  child: Row(children: [
+                    Icon(Icons.inventory_2_outlined, size: 18, color: theme.colorScheme.outline),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                        child: Text('This channel is archived. It can be read but not written in.')),
+                  ]),
+                )
+              else if (room != null && !room.canSend)
+                // Read-only for this person: say so where the message box would be.
+                Container(
+                  width: double.infinity,
+                  color: theme.colorScheme.surfaceContainerHigh,
+                  padding: const EdgeInsets.all(14),
+                  child: Row(children: [
+                    Icon(Icons.lock_outline, size: 18, color: theme.colorScheme.outline),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: Text('You can read this channel but not write in it.',
+                            style: TextStyle(color: theme.colorScheme.outline))),
+                  ]),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    IconButton(
+                        tooltip: 'Send a photo or start a poll',
+                        icon: _sendingFile
+                            ? const SizedBox(
+                                width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.add_circle_outline),
+                        onPressed: _sendingFile ? null : _showAttach),
+                    Expanded(
+                      child: TextField(
+                        controller: _input,
+                        focusNode: _inputFocus,
+                        autofocus: isDesktop,
+                        minLines: 1,
+                        maxLines: 5,
+                        textCapitalization: TextCapitalization.sentences,
+                        onChanged: (v) {
+                          // The core sends at most one of these every few seconds.
+                          if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
+                          _watchForLink(v);
+                          setState(() {}); // the name suggestions follow what is typed
+                        },
+                        decoration: InputDecoration(
+                          hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        ),
+                      ),
+                    ),
+                    // Hold it (or right-click) to send the message later instead.
+                    // No tooltip here: a tooltip takes the long press for itself,
+                    // and the hold would never reach the button.
+                    GestureDetector(
+                      onSecondaryTap: _sendLater,
+                      child: IconButton.filled(
+                          onPressed: () => _send(),
+                          onLongPress: _sendLater,
+                          icon: Icon(_editing != null ? Icons.check : Icons.send)),
+                    ),
+                  ]),
+                ),
+            ]),
+          )),
     );
   }
 }

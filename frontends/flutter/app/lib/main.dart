@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 import 'platform.dart';
 import 'app_state.dart';
@@ -11,6 +12,7 @@ import 'screens/add_server.dart';
 import 'screens/catch_up.dart';
 import 'screens/chat.dart';
 import 'screens/home.dart';
+import 'screens/quick_switch.dart';
 import 'screens/settings.dart';
 import 'screens/unlock.dart';
 import 'screens/welcome.dart';
@@ -36,8 +38,28 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
 
   // On a desktop window wide enough, the chats stay listed on the left and
   // the open one fills the rest, instead of one screen covering the other.
+  // What opens from the chat on the right (a thread, a search) and from the
+  // list on the left (settings, the members) stays on the right, in a stack
+  // of pages of its own.
   bool _wide = false;
-  String? _paneRoom;
+  final _paneRoom = ValueNotifier<String?>(null);
+  final _pane = GlobalKey<NavigatorState>();
+
+  // Ctrl+K anywhere: jump to a chat by typing part of its name.
+  bool _switching = false;
+
+  bool _keys(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyK ||
+        !HardwareKeyboard.instance.isControlPressed) {
+      return false;
+    }
+    final context = _navigator.currentContext;
+    if (context == null || _switching || !state.ready || state.store.vaultState != 'unlocked') return false;
+    _switching = true;
+    showQuickSwitch(context, state).whenComplete(() => _switching = false);
+    return true;
+  }
 
   // For checking the look of the app where no one can see its window: with
   // CORDED_SCREENSHOT=/some/file.png set, the app saves a picture of itself
@@ -61,16 +83,17 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (isDesktop) HardwareKeyboard.instance.addHandler(_keys);
+    state.paneNavigator = () => _wide ? _pane.currentState : null;
     // A message somewhere else shows as a banner at the top for a few seconds.
     state.onBanner = _showBanner;
     // A tapped notification leads to its chat, and into its thread if it has one.
     state.onDevScreen = (screen) {
-      if (screen == 'settings') {
-        _navigator.currentState?.push(MaterialPageRoute(builder: (_) => SettingsScreen(state: state)));
-      }
-      if (screen == 'catchup') {
-        _navigator.currentState?.push(MaterialPageRoute(builder: (_) => CatchUpScreen(state: state)));
-      }
+      final context = _navigator.currentContext;
+      if (context == null) return;
+      if (screen == 'settings') state.openPage(context, (_) => SettingsScreen(state: state));
+      if (screen == 'catchup') state.openPage(context, (_) => CatchUpScreen(state: state));
+      if (screen == 'switch') showQuickSwitch(context, state);
     };
     final shot = Platform.environment['CORDED_SCREENSHOT'];
     if (shot != null && shot.isNotEmpty) {
@@ -80,13 +103,15 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       final navigator = _navigator.currentState;
       if (navigator == null) return;
       navigator.popUntil((route) => route.isFirst);
-      if (_wide) {
-        setState(() => _paneRoom = roomId);
+      final beside = _wide ? _pane.currentState : null;
+      if (beside != null) {
+        beside.popUntil((route) => route.isFirst);
+        _paneRoom.value = roomId;
       } else {
         navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
       }
       if (threadRoot != null) {
-        navigator.push(MaterialPageRoute(
+        (beside ?? navigator).push(MaterialPageRoute(
             builder: (_) => ChatScreen(state: state, roomId: roomId, threadRoot: threadRoot)));
       }
     };
@@ -95,6 +120,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (isDesktop) HardwareKeyboard.instance.removeHandler(_keys);
     _camera?.cancel();
     super.dispose();
   }
@@ -208,14 +234,24 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
         return LayoutBuilder(builder: (context, box) {
           _wide = isDesktop && box.maxWidth >= 840;
           if (!_wide) return HomeScreen(state: state);
-          final open = _paneRoom != null && state.store.rooms.containsKey(_paneRoom) ? _paneRoom : null;
           return Row(children: [
             SizedBox(width: 340, child: HomeScreen(state: state)),
             const VerticalDivider(width: 1),
             Expanded(
-              child: open == null
-                  ? const Scaffold(body: Center(child: Text('Choose a chat on the left.')))
-                  : ChatScreen(key: ValueKey(open), state: state, roomId: open),
+              child: Navigator(
+                key: _pane,
+                onGenerateRoute: (_) => MaterialPageRoute(
+                  builder: (_) => ListenableBuilder(
+                    listenable: Listenable.merge([state, _paneRoom]),
+                    builder: (context, _) {
+                      final open = state.store.rooms.containsKey(_paneRoom.value) ? _paneRoom.value : null;
+                      return open == null
+                          ? const Scaffold(body: Center(child: Text('Choose a chat on the left.')))
+                          : ChatScreen(key: ValueKey(open), state: state, roomId: open);
+                    },
+                  ),
+                ),
+              ),
             ),
           ]);
         });

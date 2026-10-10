@@ -150,7 +150,8 @@ jobs:
           apt-get install -y --no-install-recommends gh || true
           tag="${GITHUB_REF#refs/tags/}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
-            --notes "Pre-alpha build. Not security audited. See the README for how to run it."
+            --notes "Pre-alpha build. Not security audited. See the README for how to run it." \
+            || gh release view "$tag" >/dev/null  # another job made it in the same moment
           gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz" \
             "${{ steps.package.outputs.name }}.tar.gz.sha256" --clobber
           if [ -f "${{ steps.package.outputs.name }}.tar.gz.sig" ]; then
@@ -243,7 +244,8 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
-            --notes "Pre-alpha build. Not security audited. See the README for how to run it."
+            --notes "Pre-alpha build. Not security audited. See the README for how to run it." \
+            || gh release view "$tag" >/dev/null  # another job made it in the same moment
           gh release upload "$tag" corded-android-arm64.apk --clobber
           if [ -f corded-android-arm64.apk.sig ]; then gh release upload "$tag" corded-android-arm64.apk.sig --clobber; fi
 
@@ -350,7 +352,8 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
-            --notes "Pre-alpha build. Not security audited. See the README for how to run it."
+            --notes "Pre-alpha build. Not security audited. See the README for how to run it." \
+            || gh release view "$tag" >/dev/null  # another job made it in the same moment
           gh release upload "$tag" "${{ steps.package.outputs.name }}.zip" --clobber
           gh release upload "$tag" "${{ steps.app.outputs.name }}.zip" --clobber
           if [ -f "${{ steps.app.outputs.name }}.zip.sig" ]; then gh release upload "$tag" "${{ steps.app.outputs.name }}.zip.sig" --clobber; fi

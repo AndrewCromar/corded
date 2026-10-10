@@ -71,57 +71,32 @@ class _TasksViewState extends State<TasksView> {
       MaterialPageRoute(
           builder: (_) => ChatScreen(state: widget.state, roomId: widget.room.id, threadRoot: task.id)));
 
-  void _actions(Message task) {
+  void _actions(Message task, {Offset? at}) {
     final canManage = widget.state.server?.permissions.contains('manage_messages') ?? false;
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheet) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            for (final key in widget.state.reactionBar)
-              Flexible(
-                child: IconButton(
-                  icon: Text(key, style: const TextStyle(fontSize: 24)),
-                  onPressed: () {
-                    Navigator.pop(sheet);
-                    _react(task, key);
-                  },
-                ),
-              ),
-          ]),
-          ListTile(
-            leading: const Icon(Icons.forum_outlined),
-            title: Text(
-                _store.threadCount(widget.room.id, task) > 0 ? 'Open the discussion' : 'Discuss this task'),
-            onTap: () {
-              Navigator.pop(sheet);
-              _discuss(task);
-            },
+    showChoices(
+      context,
+      at: at,
+      reactions: widget.state.reactionBar,
+      onReact: (key) => _react(task, key),
+      [
+        (
+          icon: Icons.forum_outlined,
+          title: _store.threadCount(widget.room.id, task) > 0 ? 'Open the discussion' : 'Discuss this task',
+          subtitle: null,
+          run: () => _discuss(task),
+        ),
+        if (task.mine) (icon: Icons.edit_outlined, title: 'Reword', subtitle: null, run: () => _reword(task)),
+        if (task.mine || canManage)
+          (
+            icon: Icons.delete_outline,
+            title: 'Delete',
+            subtitle: null,
+            run: () => attempt(
+                context,
+                () => widget.state.engine
+                    .command({'cmd': 'delete_event', 'room_id': widget.room.id, 'event_id': task.id})),
           ),
-          if (task.mine)
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Reword'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _reword(task);
-              },
-            ),
-          if (task.mine || canManage)
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete'),
-              onTap: () {
-                Navigator.pop(sheet);
-                attempt(
-                    context,
-                    () => widget.state.engine
-                        .command({'cmd': 'delete_event', 'room_id': widget.room.id, 'event_id': task.id}));
-              },
-            ),
-        ]),
-      ),
+      ],
     );
   }
 
@@ -134,7 +109,7 @@ class _TasksViewState extends State<TasksView> {
     final replies = _store.threadCount(widget.room.id, task);
     return InkWell(
       onLongPress: () => _actions(task),
-      onSecondaryTap: () => _actions(task),
+      onSecondaryTapUp: (d) => _actions(task, at: d.globalPosition),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [

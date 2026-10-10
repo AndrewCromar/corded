@@ -30,6 +30,8 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
   void initState() {
     super.initState();
     _look();
+    widget.state.addListener(_changed);
+    widget.state.refreshUnreadThreads();
     _sub = _store.changes.listen((_) {
       _look();
       if (mounted) setState(() {});
@@ -39,7 +41,25 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
   @override
   void dispose() {
     _sub?.cancel();
+    widget.state.removeListener(_changed);
     super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  // Threads with replies not seen yet, in this server. One that a chat above
+  // already leads into is not listed twice.
+  List<Map<String, dynamic>> get _threads {
+    final server = widget.state.server;
+    return [
+      for (final t in widget.state.unreadThreads)
+        if (_store.rooms[t['room_id']] != null &&
+            (server == null || _store.rooms[t['room_id']]!.serverId == server.id) &&
+            _starts[t['room_id']]?.thread != t['root_id'])
+          t
+    ];
   }
 
   List<Room> get _unread {
@@ -96,6 +116,13 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
   }
 
   Future<void> _readAll() async {
+    for (final roomId in {for (final t in _threads) '${t['room_id']}'}) {
+      try {
+        await widget.state.engine.command({'cmd': 'mark_thread_read', 'room_id': roomId});
+      } on CordedError {
+        // Left as it is.
+      }
+    }
     for (final room in _unread) {
       final newest = _starts[room.id]?.newestId;
       if (newest == null) continue;
@@ -111,19 +138,28 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final rooms = _unread;
+    final threads = _threads;
+    String words(Object? event) {
+      if (event is! Map) return '';
+      final m = Message.fromJson(event.cast<String, dynamic>());
+      return m.text.split('\n').first;
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Catch up'),
         actions: [
-          if (rooms.isNotEmpty)
+          if (rooms.isNotEmpty || threads.isNotEmpty)
             TextButton(
               onPressed: () async {
                 final sure = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
                     title: const Text('Mark everything as read?'),
-                    content:
-                        Text('${rooms.length} chat${rooms.length == 1 ? '' : 's'} with unread messages.'),
+                    content: Text('${[
+                      if (rooms.isNotEmpty) '${rooms.length} chat${rooms.length == 1 ? '' : 's'}',
+                      if (threads.isNotEmpty) '${threads.length} thread${threads.length == 1 ? '' : 's'}',
+                    ].join(' and ')} with unread messages.'),
                     actions: [
                       TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
                       FilledButton(
@@ -137,7 +173,7 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
             ),
         ],
       ),
-      body: rooms.isEmpty
+      body: rooms.isEmpty && threads.isEmpty
           ? const Center(child: Text('You are all caught up.'))
           : ListView(children: [
               for (final room in rooms)
@@ -171,6 +207,33 @@ class _CatchUpScreenState extends State<CatchUpScreen> {
                       overflow: TextOverflow.ellipsis),
                   trailing: Badge(label: Text('${room.unread}')),
                   onTap: () => _open(room),
+                ),
+              for (final t in threads)
+                ListTile(
+                  leading: const Icon(Icons.forum_outlined),
+                  title: Row(children: [
+                    Flexible(
+                        child: Text(_store.rooms[t['room_id']]!.title.replaceFirst('#', ''),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold))),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text('thread',
+                          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+                    ),
+                  ]),
+                  subtitle: Text(
+                      _store.rooms[t['room_id']]!.nsfw
+                          ? 'New replies'
+                          : '${words(t['root'])}\n${(t['first'] as Map?)?['sender_name'] ?? ''}: ${words(t['first'])}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                  trailing: Badge(label: Text('${t['count']}')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    widget.state.onOpenChat?.call('${t['room_id']}', '${t['root_id']}');
+                  },
                 ),
             ]),
     );

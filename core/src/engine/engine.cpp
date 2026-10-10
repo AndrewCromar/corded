@@ -425,6 +425,12 @@ Session::json Session::event_json(const EventRow& e) {
     j["shared_history"] = !e.shared_by.empty();
     // How many messages hang off this one as a thread.
     j["thread_count"] = vault_.related_count(e.room_id, e.event_id, "thread");
+    // Of those, the ones from others that arrived since the thread was last opened.
+    if (j["thread_count"] != 0) {
+        auto unseen = vault_.thread_unread(e.room_id, e.event_id, to_bytes(vault_.identity().user.pk));
+        j["thread_unread"] = unseen.count;
+        j["thread_first_unread"] = b64(unseen.first);
+    }
     if (!e.fallback_text.empty()) j["fallback_text"] = e.fallback_text;
     if (e.status == "scheduled")
         j["scheduled_for"] = std::strtoull(vault_.meta("sched:" + b64(e.event_id)).value_or("0").c_str(), nullptr, 10);
@@ -1033,6 +1039,34 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             vault_.rewind_receipt(room_id, me, *from);
             if (auto room = vault_.room(room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
             ok(req);
+        } else if (name == "mark_thread_read") {
+            // A thread was opened: its replies so far have been seen. Without
+            // `event_id`, every thread of the room. Kept on this device; nobody is told.
+            Bytes room_id = need_b64(cmd, "room_id", 16);
+            std::vector<Bytes> roots;
+            if (cmd.contains("event_id")) {
+                roots.push_back(need_b64(cmd, "event_id", 16));
+            } else {
+                for (const auto& t : vault_.unread_threads(to_bytes(vault_.identity().user.pk)))
+                    if (t.room_id == room_id) roots.push_back(t.root_id);
+            }
+            for (const auto& root_id : roots) {
+                vault_.see_thread(room_id, root_id);
+                if (auto root = vault_.event(room_id, root_id))
+                    emit({{"event", "event_updated"}, {"room_id", b64(room_id)}, {"data", event_json(*root)}});
+            }
+            ok(req);
+        } else if (name == "unread_threads") {
+            // Every thread holding replies not seen yet, with the message that
+            // started it and the first new reply.
+            json out = json::array();
+            for (const auto& t : vault_.unread_threads(to_bytes(vault_.identity().user.pk))) {
+                json row = {{"room_id", b64(t.room_id)}, {"root_id", b64(t.root_id)}, {"count", t.count}};
+                if (auto root = vault_.event(t.room_id, t.root_id)) row["root"] = event_json(*root);
+                if (auto first = vault_.event(t.room_id, t.first)) row["first"] = event_json(*first);
+                out.push_back(std::move(row));
+            }
+            ok(req, {{"threads", std::move(out)}});
         } else if (name == "fetch_receipts") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
             ok(req, {{"room_id", b64(room_id)}, {"receipts", receipts_json(room_id)}});
