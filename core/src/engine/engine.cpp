@@ -2381,6 +2381,42 @@ void Session::on_history_wanted(const wire::HistoryWantedT& wanted) {
         tx.commit();
         batch = json::array();
     };
+    // A device of this same person also gets the profiles held here for the
+    // people in the room (its own person's among them), a few at a time so a
+    // handful of pictures never makes one message too large.
+    if (own_device) {
+        json profiles = json::array();
+        auto send_profiles = [&] {
+            if (profiles.empty()) return;
+            EventRow e;
+            e.room_id = room->room_id;
+            e.event_id = new_event_id();
+            e.type = "m.history.share";
+            e.sender_user = to_bytes(me);
+            e.sender_device = to_bytes(vault_.identity().device.pk);
+            e.origin_ts = now_ms();
+            e.content = json{{"profiles", std::move(profiles)}}.dump();
+            e.status = "pending";
+            e.expires_at = e.origin_ts + 3600 * 1000;
+            db::Transaction tx(vault_.db());
+            vault_.insert_event(e);
+            vault_.outbox_push(e.room_id, e.event_id, wanted.requester);
+            tx.commit();
+            profiles = json::array();
+        };
+        for (const auto& m : room->members) {
+            auto held = vault_.profile(m.user_id);
+            json profile = held ? json::parse(*held, nullptr, false) : json();
+            if (m.user_id.size() == 32 && std::equal(me.begin(), me.end(), m.user_id.begin())) {
+                json mine = engine_.own_profile();
+                if (mine.contains("version")) profile = mine;
+            }
+            if (!profile.is_object() || !profile.contains("version")) continue;
+            profiles.push_back({{"user_id", b64(m.user_id)}, {"profile", std::move(profile)}});
+            if (profiles.size() >= 4) send_profiles();
+        }
+        send_profiles();
+    }
     uint32_t limit = std::min<uint32_t>(wanted.limit ? wanted.limit : 200, 200);
     for (const auto& e : vault_.timeline(room->room_id, limit)) {
         // Never disappearing messages, deleted ones, unsent ones, or history
@@ -2421,7 +2457,29 @@ void Session::accept_history(const EventRow& share) {
         if (m.user_id == share.sender_user) from_member = true;
     if (!from_member) return;
     json content = json::parse(share.content, nullptr, false);
-    if (!content.is_object() || !content.value("events", json()).is_array()) return;
+    if (!content.is_object()) return;
+    // From another device of this same person: the profiles it holds, which
+    // were sent before this device existed. Nobody else's word is taken for
+    // what a third person says about themselves.
+    const Key32& self = vault_.identity().user.pk;
+    if (content.value("profiles", json()).is_array() && share.sender_user.size() == 32 &&
+        std::equal(self.begin(), self.end(), share.sender_user.begin())) {
+        for (const auto& item : content["profiles"]) {
+            auto who = item.is_object() ? unb64(item.value("user_id", "")) : std::nullopt;
+            json profile = item.is_object() ? item.value("profile", json()) : json();
+            if (!who || who->size() != 32 || !profile.is_object() ||
+                !profile.value("version", json()).is_number_unsigned() || profile.dump().size() > 64 * 1024)
+                continue;
+            uint64_t version = profile["version"].get<uint64_t>();
+            if (!vault_.set_profile(*who, version, profile.dump())) continue;
+            if (std::equal(self.begin(), self.end(), who->begin()) &&
+                engine_.own_profile().value("version", uint64_t{0}) < version)
+                vault_.set_meta("profile", profile.dump());
+            emit({{"event", "profile_updated"}, {"user_id", b64(*who)}, {"profile", profile}});
+        }
+        emit({{"event", "room_updated"}, {"room", room_json(*room)}});
+    }
+    if (!content.value("events", json()).is_array()) return;
 
     std::vector<EventRow> added;
     {

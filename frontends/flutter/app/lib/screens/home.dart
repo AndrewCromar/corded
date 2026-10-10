@@ -91,7 +91,34 @@ class HomeScreen extends StatelessWidget {
       return other == null ? null : state.store.presence(r.serverId, other.userId);
     }
 
-    Widget tile(Room r) => ListTile(
+    // What can be done to a chat without opening it: hold it, or right-click.
+    void actions(Room r) => showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          builder: (sheet) => SafeArea(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                leading: const Icon(Icons.mark_chat_unread_outlined),
+                title: const Text('Mark as unread'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  attempt(context, () => state.engine.command({'cmd': 'mark_unread', 'room_id': r.id}));
+                },
+              ),
+              ListTile(
+                leading: Icon(state.isMuted(r.id)
+                    ? Icons.notifications_active_outlined
+                    : Icons.notifications_off_outlined),
+                title: Text(state.isMuted(r.id) ? 'Turn notifications back on' : 'Mute notifications'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  state.setMuted(r.id, !state.isMuted(r.id));
+                },
+              ),
+            ]),
+          ),
+        );
+    Widget plainTile(Room r) => ListTile(
           leading: r.kind == 'direct'
               ? PresenceAvatar(
                   name: r.title,
@@ -134,33 +161,9 @@ class HomeScreen extends StatelessWidget {
           selected: r.id == state.viewingRoom,
           onTap: () => _open(context, r.id),
           // Hold a chat for what can be done without opening it.
-          onLongPress: () => showModalBottomSheet<void>(
-            context: context,
-            showDragHandle: true,
-            builder: (sheet) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                ListTile(
-                  leading: const Icon(Icons.mark_chat_unread_outlined),
-                  title: const Text('Mark as unread'),
-                  onTap: () {
-                    Navigator.pop(sheet);
-                    attempt(context, () => state.engine.command({'cmd': 'mark_unread', 'room_id': r.id}));
-                  },
-                ),
-                ListTile(
-                  leading: Icon(state.isMuted(r.id)
-                      ? Icons.notifications_active_outlined
-                      : Icons.notifications_off_outlined),
-                  title: Text(state.isMuted(r.id) ? 'Turn notifications back on' : 'Mute notifications'),
-                  onTap: () {
-                    Navigator.pop(sheet);
-                    state.setMuted(r.id, !state.isMuted(r.id));
-                  },
-                ),
-              ]),
-            ),
-          ),
+          onLongPress: () => actions(r),
         );
+    Widget tile(Room r) => GestureDetector(onSecondaryTap: () => actions(r), child: plainTile(r));
     Widget heading(String text) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
           child: Text(text, style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.primary)),
@@ -241,8 +244,17 @@ class HomeScreen extends StatelessWidget {
             ...others.map(tile),
             if (others.isEmpty)
               const ListTile(dense: true, title: Text('None yet. Use the button below to message someone.')),
-            if (nsfw.isNotEmpty) heading('NSFW'),
-            for (final r in nsfw) tile(r),
+            // Out of sight until asked for.
+            if (nsfw.isNotEmpty)
+              ExpansionTile(
+                key: const PageStorageKey('hidden-channels'),
+                title: Text('Hidden channels',
+                    style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                shape: const Border(),
+                collapsedShape: const Border(),
+                children: [for (final r in nsfw) tile(r)],
+              ),
             if (archived.isNotEmpty) heading('Archived'),
             for (final r in archived) Opacity(opacity: 0.55, child: tile(r)),
             const SizedBox(height: 80),

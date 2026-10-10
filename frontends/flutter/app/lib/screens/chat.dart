@@ -55,6 +55,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // With a keyboard, Enter sends and Shift+Enter starts a new line.
   late final _inputFocus = FocusNode(onKeyEvent: (node, event) {
     if (!isDesktop || event is! KeyDownEvent) return KeyEventResult.ignored;
+    // Esc backs out of a reply or an edit.
+    if (event.logicalKey == LogicalKeyboardKey.escape && (_replyingTo != null || _editing != null)) {
+      setState(() {
+        if (_editing != null) _input.clear();
+        _editing = null;
+        _replyingTo = null;
+      });
+      return KeyEventResult.handled;
+    }
     final enter =
         event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
@@ -702,6 +711,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // On a desktop the words in the conversation can be selected with the
+  // mouse and copied with Ctrl+C. The right button stays the message's own
+  // menu, so the selection brings up none of its own.
+  Widget _selectable(Widget list) => isDesktop
+      ? SelectionArea(contextMenuBuilder: (context, state) => const SizedBox.shrink(), child: list)
+      : list;
+
   // What the + button offers.
   void _showAttach() {
     showModalBottomSheet<void>(
@@ -1088,7 +1104,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _bubble(Message m, List<Message> all) {
     final gone = m.status == 'redacted' || m.status == 'undecryptable';
     return SwipeToReply(
-      enabled: !gone,
+      // With a mouse, dragging across a message selects its text instead.
+      enabled: !gone && !isDesktop,
       onReply: () => setState(() {
         _replyingTo = m;
         _editing = null;
@@ -1157,7 +1174,8 @@ class _ChatScreenState extends State<ChatScreen> {
               onLongPress: gone ? null : () => _showActions(m),
               // With a mouse: the right button.
               onSecondaryTap: gone ? null : () => _showActions(m),
-              onDoubleTap: gone ? null : () => _react(m, widget.state.reactionBar.first),
+              // A double click selects a word on a desktop; reacting is in the menu there.
+              onDoubleTap: gone || isDesktop ? null : () => _react(m, widget.state.reactionBar.first),
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1436,7 +1454,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: messages.isEmpty
                 ? Center(
                     child: Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
-                : ListView.builder(
+                : _selectable(ListView.builder(
                     controller: _scroll,
                     reverse: true,
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1448,7 +1466,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       if (m.id != _newFrom) return bubble;
                       return Column(mainAxisSize: MainAxisSize.min, children: [_newLine(), bubble]);
                     },
-                  ),
+                  )),
           ),
           if (typing.isNotEmpty)
             Padding(

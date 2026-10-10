@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
+import '../platform.dart';
 import '../app_state.dart';
 import 'chat.dart';
 import 'common.dart';
@@ -239,7 +240,13 @@ class _MembersScreenState extends State<MembersScreen> {
   Widget build(BuildContext context) {
     final members = _members;
     return Scaffold(
-      appBar: AppBar(title: Text(members == null ? 'Members' : 'Members (${members.length})')),
+      appBar: AppBar(
+        title: Text(members == null ? 'Members' : 'Members (${members.length})'),
+        // A phone pulls the list down to refresh it; a mouse gets a button.
+        actions: [
+          if (isDesktop) IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _load)
+        ],
+      ),
       body: _error != null
           ? Center(
               child: Padding(

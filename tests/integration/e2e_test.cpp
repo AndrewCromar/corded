@@ -2338,6 +2338,29 @@ TEST_CASE("a new device is sent the profiles it was not there for, its own perso
     json mine = laptop.cmd({{"cmd", "get_profile"}})["data"]["profile"];
     REQUIRE(mine.value("display_name", "") == "Alice A.");
     REQUIRE(mine.value("bio", "") == "runs this place");
+
+    // Someone who is not around when a device is added: their profile still
+    // reaches it, handed over by the person's own other device.
+    Client carol((tmp.path / "carol").string());
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.have("live", live);
+    REQUIRE(carol.cmd({{"cmd", "set_profile"}, {"display_name", "Caz"}})["ok"] == true);
+    std::string carol_room = carol.have("#general", [](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+    })["room"]["room_id"];
+    REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", carol_room}, {"body", "carol was here"}})["ok"] == true);
+    pc.wait_message("carol was here");
+    std::string carol_id = carol.cmd({{"cmd", "status"}})["data"]["user_id"];
+    carol.close();  // gone before the tablet exists
+
+    Client tablet((tmp.path / "alice-tablet").string());
+    REQUIRE(tablet.restore("alice", key, "a third passphrase")["ok"] == true);
+    REQUIRE(tablet.cmd(connect)["ok"] == true);
+    tablet.have("live", live);
+    tablet.wait("carol's profile, from the pc", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["user_id"] == carol_id && e["profile"].value("display_name", "") == "Caz";
+    }, 20000);
 }
 
 TEST_CASE("a server that only this computer may reach stays that way after a restart") {
