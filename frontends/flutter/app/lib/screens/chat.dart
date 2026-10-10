@@ -799,6 +799,20 @@ class _ChatScreenState extends State<ChatScreen> {
               _createPoll();
             },
           ),
+          ListTile(
+            leading: const Icon(Icons.schedule_send_outlined),
+            title: const Text('Send what I typed later'),
+            subtitle: const Text('Pick a day and time; the server sends it then'),
+            onTap: () {
+              Navigator.pop(sheet);
+              if (_input.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Type the message first, then choose this.')));
+              } else {
+                _sendLater();
+              }
+            },
+          ),
         ]),
       ),
     );
@@ -1612,12 +1626,13 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 // Hold it (or right-click) to send the message later instead.
+                // No tooltip here: a tooltip takes the long press for itself,
+                // and the hold would never reach the button.
                 GestureDetector(
-                  onLongPress: _sendLater,
                   onSecondaryTap: _sendLater,
                   child: IconButton.filled(
                       onPressed: () => _send(),
-                      tooltip: 'Send (hold to send later)',
+                      onLongPress: _sendLater,
                       icon: Icon(_editing != null ? Icons.check : Icons.send)),
                 ),
               ]),
