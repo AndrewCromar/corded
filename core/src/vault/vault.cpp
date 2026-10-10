@@ -699,6 +699,17 @@ Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
     return st.step() ? st.blob(0) : Bytes{};
 }
 
+std::optional<uint64_t> Vault::last_from_others(ByteView room_id, ByteView user_id) {
+    auto st = db_.prepare(
+        "SELECT seq FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote') "
+        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq DESC LIMIT 1");
+    st.bind(1, room_id).bind(2, user_id);
+    if (!st.step()) return std::nullopt;
+    return st.u64(0);
+}
+
 uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
     // Only what a person would call a message counts: not reactions, edits,
     // membership changes or history handed over by someone else.

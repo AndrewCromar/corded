@@ -1674,6 +1674,12 @@ TEST_CASE("unread counts and loading older messages a page at a time") {
     REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[6]}})["ok"] == true);
     REQUIRE(unread(bob) == 0);
 
+    // Marking the chat as a whole: its newest message is unread again.
+    REQUIRE(bob.cmd({{"cmd", "mark_unread"}, {"room_id", general}})["ok"] == true);
+    REQUIRE(unread(bob) == 1);
+    REQUIRE(bob.cmd({{"cmd", "mark_read"}, {"room_id", general}, {"event_id", ids[6]}})["ok"] == true);
+    REQUIRE(unread(bob) == 0);
+
     // Pages of three, newest first, walking back to the start.
     auto bodies = [](const json& page) {
         std::vector<std::string> out;

@@ -161,6 +161,8 @@ public:
     void rewind_receipt(ByteView room_id, ByteView user_id, uint64_t before_seq);
     // The first message from someone else after this person's marker; empty if none.
     Bytes first_unread(ByteView room_id, ByteView user_id);
+    // Where the newest message from someone else sits, if there is one.
+    std::optional<uint64_t> last_from_others(ByteView room_id, ByteView user_id);
     // Messages from others that arrived after this person's read marker.
     uint32_t unread(ByteView room_id, ByteView user_id);
     std::vector<OutboxRow> outbox();

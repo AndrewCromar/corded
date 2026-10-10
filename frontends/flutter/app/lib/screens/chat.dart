@@ -73,11 +73,14 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.state.viewingThread = _thread;
     if (_thread == null) _newFrom = _store.rooms[_room]?.firstUnread ?? '';
     final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
-    if (widget.jumpTo != null) {
+    // With a lot unread, start where the unread messages begin, not at the end.
+    final startAt =
+        widget.jumpTo ?? ((_store.rooms[_room]?.unread ?? 0) > 6 && _newFrom.isNotEmpty ? _newFrom : null);
+    if (startAt != null) {
       opened.then((_) {
         // Once the list has been laid out.
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _jumpTo(widget.jumpTo!);
+          if (mounted) _jumpTo(startAt);
         });
       });
     }

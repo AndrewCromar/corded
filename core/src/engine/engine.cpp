@@ -912,14 +912,22 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
         } else if (name == "mark_unread") {
             // "Unread from this message on": this person's own place moves
             // back. Nobody else is told; what they saw as read stays read.
+            // Without a message, the newest one from someone else: the chat
+            // as a whole is marked, from its list.
             Bytes room_id = need_b64(cmd, "room_id", 16);
-            Bytes event_id = need_b64(cmd, "event_id", 16);
-            auto target = vault_.event(room_id, event_id);
-            if (!target || !target->seq) {
-                fail(req, "not_found", "unknown message");
+            Bytes me = to_bytes(vault_.identity().user.pk);
+            std::optional<uint64_t> from;
+            if (cmd.contains("event_id")) {
+                auto target = vault_.event(room_id, need_b64(cmd, "event_id", 16));
+                if (target) from = target->seq;
+            } else {
+                from = vault_.last_from_others(room_id, me);
+            }
+            if (!from) {
+                fail(req, "not_found", cmd.contains("event_id") ? "unknown message" : "nobody else has written here yet");
                 return;
             }
-            vault_.rewind_receipt(room_id, to_bytes(vault_.identity().user.pk), *target->seq);
+            vault_.rewind_receipt(room_id, me, *from);
             if (auto room = vault_.room(room_id)) emit({{"event", "room_updated"}, {"room", room_json(*room)}});
             ok(req);
         } else if (name == "fetch_receipts") {

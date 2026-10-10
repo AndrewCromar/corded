@@ -119,6 +119,33 @@ class HomeScreen extends StatelessWidget {
             if (r.unread > 0) Badge(label: Text('${r.unread}')),
           ]),
           onTap: () => _open(context, r.id),
+          // Hold a chat for what can be done without opening it.
+          onLongPress: () => showModalBottomSheet<void>(
+            context: context,
+            showDragHandle: true,
+            builder: (sheet) => SafeArea(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                ListTile(
+                  leading: const Icon(Icons.mark_chat_unread_outlined),
+                  title: const Text('Mark as unread'),
+                  onTap: () {
+                    Navigator.pop(sheet);
+                    attempt(context, () => state.engine.command({'cmd': 'mark_unread', 'room_id': r.id}));
+                  },
+                ),
+                ListTile(
+                  leading: Icon(state.isMuted(r.id)
+                      ? Icons.notifications_active_outlined
+                      : Icons.notifications_off_outlined),
+                  title: Text(state.isMuted(r.id) ? 'Turn notifications back on' : 'Mute notifications'),
+                  onTap: () {
+                    Navigator.pop(sheet);
+                    state.setMuted(r.id, !state.isMuted(r.id));
+                  },
+                ),
+              ]),
+            ),
+          ),
         );
     Widget heading(String text) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
