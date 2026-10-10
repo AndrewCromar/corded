@@ -769,6 +769,42 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
         }
     }
 
+    // Display names: anyone sets their own; changing someone else's takes the
+    // permission and a higher rank.
+    {
+        REQUIRE(carol.cmd({{"cmd", "set_nickname"}, {"nickname", "Carol the Great"}})["ok"] == true);
+        auto shows = [&](Client& c, const std::string& username, const std::string& display) {
+            json members = c.cmd({{"cmd", "member_list"}})["data"]["members"];
+            for (const auto& m : members)
+                if (m["username"] == username) return m["display_name"] == display;
+            return false;
+        };
+        auto eventually = [](const std::function<bool()>& check) {
+            for (int i = 0; i < 100; ++i) {
+                if (check()) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            return false;
+        };
+        REQUIRE(eventually([&] { return shows(alice, "carol", "Carol the Great"); }));
+        // Messages show the display name, and still carry the fixed username.
+        REQUIRE(carol.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "new name, same me"}})["ok"] == true);
+        json seen = alice.wait_message("new name, same me");
+        REQUIRE(seen["data"]["sender_name"] == "Carol the Great");
+        REQUIRE(seen["data"]["sender_username"] == "carol");
+        // Carol cannot rename others; the owner can; nobody renames the owner.
+        REQUIRE(refused(carol.cmd({{"cmd", "set_nickname"}, {"username", "bob"}, {"nickname", "Bobby"}})));
+        REQUIRE(alice.cmd({{"cmd", "set_nickname"}, {"username", "bob"}, {"nickname", "Bobby"}})["ok"] == true);
+        REQUIRE(eventually([&] { return shows(carol, "bob", "Bobby"); }));
+        REQUIRE(refused(bob.cmd({{"cmd", "set_nickname"}, {"username", "alice"}, {"nickname", "Boss"}})));
+        REQUIRE(refused(carol.cmd({{"cmd", "set_nickname"}, {"nickname", std::string(40, 'x')}})));
+        // An empty name clears it.
+        REQUIRE(carol.cmd({{"cmd", "set_nickname"}, {"nickname", ""}})["ok"] == true);
+        REQUIRE(eventually([&] { return shows(alice, "carol", "carol"); }));
+        REQUIRE(alice.cmd({{"cmd", "set_nickname"}, {"username", "bob"}, {"nickname", ""}})["ok"] == true);
+        REQUIRE(eventually([&] { return shows(alice, "bob", "bob"); }));
+    }
+
     // Moderation: Bob's role carries manage_messages, Carol has no such role.
     {
         json s = carol.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "something against the rules"}});

@@ -442,6 +442,7 @@ public:
                 case wire::FrameBody_BanUser: on_ban_user(*c, rid, *f.body.AsBanUser()); break;
                 case wire::FrameBody_Kick: on_kick(*c, rid, *f.body.AsKick()); break;
                 case wire::FrameBody_RemoveAccount: on_remove_account(*c, rid, *f.body.AsRemoveAccount()); break;
+                case wire::FrameBody_SetNickname: on_set_nickname(*c, rid, *f.body.AsSetNickname()); break;
                 case wire::FrameBody_GetMembers: on_get_members(*c, rid); break;
                 case wire::FrameBody_NewRole: on_create_role(*c, rid, *f.body.AsNewRole()); break;
                 case wire::FrameBody_EditRole: on_update_role(*c, rid, *f.body.AsEditRole()); break;
@@ -1062,6 +1063,27 @@ private:
         if (!outranks(c, rid, q.user_id)) return;
         storage_.kick(q.user_id);
         drop_connection_of(q.user_id, "you were removed from this server");
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Anyone may set their own display name. Setting someone else's needs
+    // manage_nicknames and a higher rank than theirs.
+    void on_set_nickname(Conn& c, uint32_t rid, const wire::SetNicknameT& q) {
+        Bytes target = q.user_id.empty() ? c.user_id : q.user_id;
+        if (target != c.user_id) {
+            if (!require(c, rid, perm::ManageNicknames)) return;
+            if (!storage_.user_exists(target) || storage_.access_level(target) < 0) {
+                c.fail(rid, err::NotFound, "that person is not a member of this server");
+                return;
+            }
+            if (!outranks(c, rid, target)) return;
+        }
+        if (!q.nickname.empty() && !valid_name(q.nickname, 32)) {
+            c.fail(rid, err::Malformed, "a display name is up to 32 characters");
+            return;
+        }
+        storage_.set_nickname(target, q.nickname);
         broadcast_state();
         c.reply(rid, wire::OkT{});
     }

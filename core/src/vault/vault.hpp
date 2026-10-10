@@ -29,6 +29,9 @@ struct MemberRow {
     bool is_admin = false;  // the owner, or holds the administrator permission
     bool is_owner = false;
     std::vector<uint32_t> roles;  // role ids, not counting @everyone
+    std::string nickname;  // display name on this server, if they set one
+    // What to show for this person.
+    const std::string& display() const { return nickname.empty() ? username : nickname; }
 };
 
 struct RoomRow {

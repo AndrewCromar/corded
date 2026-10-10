@@ -253,6 +253,8 @@ Session::json Session::member_json(const MemberRow& m) {
             if (r.id == id) roles.push_back(r.name);
     return {{"user_id", b64(m.user_id)},
             {"username", m.username},
+            {"nickname", m.nickname},
+            {"display_name", m.display()},
             {"me", me},
             {"is_owner", m.is_owner},
             {"is_admin", m.is_admin},
@@ -265,7 +267,7 @@ Session::json Session::room_json(const RoomRow& room) {
     std::string title;
     for (const auto& m : room.members) {
         json j = member_json(m);
-        if (!j["me"].get<bool>()) title += (title.empty() ? "" : ", ") + m.username;
+        if (!j["me"].get<bool>()) title += (title.empty() ? "" : ", ") + m.display();
         members.push_back(std::move(j));
     }
     static const char* kinds[] = {"channel", "direct", "group"};
@@ -331,7 +333,10 @@ Session::json Session::event_json(const EventRow& e) {
     }
     if (auto room = vault_.room(e.room_id))
         for (const auto& m : room->members)
-            if (m.user_id == e.sender_user) j["sender_name"] = m.username;
+            if (m.user_id == e.sender_user) {
+                j["sender_name"] = m.display();
+                j["sender_username"] = m.username;
+            }
     return j;
 }
 
@@ -618,7 +623,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "kick" || name == "ban_user" ||
-                   name == "remove_account" ||
+                   name == "remove_account" || name == "set_nickname" ||
                    name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
                    name == "set_setting" || name == "restart_server" || name == "server_status") {
             community_command(req, name, cmd);
@@ -809,7 +814,9 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
             }
             json members = json::array();
             for (const auto& m : list->members)
-                if (m) members.push_back(member_json({m->user_id, m->username, m->is_admin, m->is_owner, m->roles}));
+                if (m)
+                    members.push_back(
+                        member_json({m->user_id, m->username, m->is_admin, m->is_owner, m->roles, m->nickname}));
             ok(req, {{"members", std::move(members)}});
         });
     } else if (name == "create_role") {
@@ -930,6 +937,21 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
             q.user_id = user_id;
             simple_request(req, std::move(q));
         });
+    } else if (name == "set_nickname") {
+        // Your own display name, or with "username" someone else's.
+        std::string nickname = cmd.value("nickname", std::string{});
+        if (!cmd.contains("username")) {
+            wire::SetNicknameT q;
+            q.nickname = nickname;
+            simple_request(req, std::move(q));
+        } else {
+            admin_action(req, cmd.at("username").get<std::string>(), [this, req, nickname](const Bytes& user_id) {
+                wire::SetNicknameT q;
+                q.user_id = user_id;
+                q.nickname = nickname;
+                simple_request(req, std::move(q));
+            });
+        }
     } else if (name == "remove_account") {
         admin_action(req, cmd.at("username").get<std::string>(), [this, req](const Bytes& user_id) {
             wire::RemoveAccountT q;
@@ -1652,7 +1674,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
     std::vector<MemberRow> members;
     for (const auto& m : info.members)
         if (m && m->user_id.size() == 32)
-            members.push_back({m->user_id, m->username, m->is_admin, m->is_owner, m->roles});
+            members.push_back({m->user_id, m->username, m->is_admin, m->is_owner, m->roles, m->nickname});
     // A member list without us means we were removed from the room.
     const Key32& me = vault_.identity().user.pk;
     bool still_in = false;

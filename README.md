@@ -145,7 +145,8 @@ Talking:
 | `/history` | Asks members again for earlier messages in the open chat |
 | `/share-history on` or `off` | Whether your client shares earlier messages with newcomers who ask |
 | `/recovery-key` | Shows the key for setting up another device as you |
-| `/members`, `/roles` | Lists the server's members and roles |
+| `/nick <name>` | Sets your display name on this server (`/nick` alone clears it). Your username stays your fixed handle |
+| `/members`, `/roles` | Lists the server's members and roles. The last row of the chat list, `-- members --`, opens the same list as a page with the commands for managing people |
 | `/help` | Shows the command list |
 | `/exit` or `/quit` | Leaves |
 | Tab | Switches between the chat list and the message box |
@@ -168,6 +169,8 @@ the matching permission:
 | `/settings`, `/set <name> <value>` | Shows or changes the server's settings (needs `manage_server`; scope is owner only) |
 | `/status` | Version, uptime, members, storage used |
 | `/reboot` | Restarts the server program; everyone reconnects by themselves |
+| `/setnick <user> <name>` | Changes someone else's display name (needs `manage_nicknames`) |
+| `/remove-account <user>` | Deletes an account for good and frees its name |
 | `/kick <user>` | Removes someone from the server; they can rejoin |
 | `/ban <user>`, `/unban <user>` | Blocks or restores someone's access |
 

@@ -216,6 +216,23 @@ def main():
         alice.expect("[mods]")
         print("ok  owner creates a channel and a role, and gives the role to a member")
 
+        # The Members page, and display names.
+        bob.type("/nick Bobby Tables\r")
+        alice.type("\t")                 # focus the chat list
+        for _ in range(12):
+            alice.type("\x1b[B")         # down to the last row, the Members page
+        alice.expect("Members of ")
+        alice.expect("Bobby Tables")
+        alice.expect("(bob)")
+        alice.expect("/remove-account <user>")
+        alice.type("\t")                 # back to typing
+        alice.type("/setnick bob Robert\r")
+        alice.expect("Robert")
+        alice.type("/setnick bob\r")
+        alice.type("/open dev\r")
+        alice.expect("first post in dev")
+        print("ok  members page lists everyone; display names can be set and changed by the owner")
+
         # Running the server from the client.
         alice.type("/settings\r")
         alice.expect("Server settings")

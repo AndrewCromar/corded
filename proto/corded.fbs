@@ -4,7 +4,12 @@ namespace corded.wire;
 
 table KeyEntry { id: uint32; key: [ubyte]; }
 // is_admin: the owner, or anyone holding the administrator permission.
-table Member { user_id: [ubyte]; username: string; is_admin: bool; is_owner: bool; roles: [uint32]; }
+// nickname: an optional display name on this server; the username stays the
+// person's fixed handle.
+table Member {
+  user_id: [ubyte]; username: string; is_admin: bool; is_owner: bool; roles: [uint32];
+  nickname: string;
+}
 table Role { role_id: uint32; name: string; position: int32; permissions: uint64; is_everyone: bool; }
 table Recipient { device_id: [ubyte]; ciphertext: [ubyte]; }
 table Cursor { room_id: [ubyte]; seq: uint64; }
@@ -97,6 +102,9 @@ table Invite { code: string; max_uses: uint32; expires_at: uint64; }
 table RevokeInvite { code: string; }
 table Kick { user_id: [ubyte]; }                      // remove from the server; may rejoin
 table BanUser { user_id: [ubyte]; banned: bool; }     // a banned user cannot sign in
+// Sets a display name. An empty user_id means your own; changing someone
+// else's needs manage_nicknames. An empty nickname clears it.
+table SetNickname { user_id: [ubyte]; nickname: string; }
 // Deletes an account and everything the server holds for it, freeing its name.
 table RemoveAccount { user_id: [ubyte]; }
 table ListRooms {}
@@ -128,7 +136,7 @@ union FrameBody {
   HistoryRequest, HistoryWanted,
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
   ListDevices, DeviceList, DevicesChanged,
-  RemoveAccount
+  RemoveAccount, SetNickname
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

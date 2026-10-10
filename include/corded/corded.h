@@ -51,6 +51,8 @@
  *   {"cmd":"kick","username":"dave"}
  *   {"cmd":"ban_user","username":"dave","banned":true}
  *   {"cmd":"remove_account","username":"dave"}    deletes the account and frees its name
+ *   {"cmd":"set_nickname","nickname":"Dave the Brave"}             your own display name
+ *   {"cmd":"set_nickname","username":"dave","nickname":"Davey"}    someone else's (manage_nicknames)
  *  Permission names: view_channel, send_messages, add_reactions, attach_files,
  *  mention_everyone, manage_messages, manage_channels, manage_roles,
  *  manage_nicknames, kick_members, ban_members, create_invite, manage_server,

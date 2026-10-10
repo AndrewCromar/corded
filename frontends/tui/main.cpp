@@ -214,6 +214,7 @@ private:
                 room.server_id = r.value("server_id", int64_t{0});
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
             }
+            if (members_selected()) command({{"cmd", "member_list"}});
             refresh_titles();  // re-sorts, so look the room up again
             Room& room = room_for(id);
             if (!room.loaded) {
@@ -380,11 +381,15 @@ private:
             return;
         }
         if (ok && ev["data"].contains("members")) {
+            member_list_ = ev["data"]["members"];
+            if (members_selected()) return;  // the page itself shows them
             Elements rows = {text("Members of " + (server_name_.empty() ? std::string("this server") : server_name_)) | bold};
             for (const auto& m : ev["data"]["members"]) {
                 std::string roles;
                 for (const auto& r : m.value("roles", json::array())) roles += " [" + r.get<std::string>() + "]";
-                rows.push_back(hbox({text(m.value("username", "?")) | bold,
+                std::string shown = m.value("display_name", m.value("username", "?"));
+                if (shown != m.value("username", "")) shown += " (" + m.value("username", "") + ")";
+                rows.push_back(hbox({text(shown) | bold,
                                      text(m.value("is_owner", false) ? "  owner" : "") | color(Color::Magenta),
                                      text(roles) | color(Color::Cyan)}));
             }
@@ -482,10 +487,12 @@ private:
     }
     // The chat on screen: one of the current server's chats.
     Room* current() {
-        if (visible_.empty()) return nullptr;
-        selected_ = std::clamp(selected_, 0, static_cast<int>(visible_.size()) - 1);
+        // The row after the last chat is the Members page.
+        selected_ = std::clamp(selected_, 0, static_cast<int>(visible_.size()));
+        if (members_selected()) return nullptr;
         return &rooms_[visible_[static_cast<size_t>(selected_)]];
     }
+    bool members_selected() const { return selected_ == static_cast<int>(visible_.size()); }
     std::string current_id() {
         Room* r = current();
         return r ? r->id : std::string();
@@ -526,6 +533,8 @@ private:
             visible_.push_back(i);
             titles_.push_back(r.title + (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
         }
+        titles_.push_back("-- members --");
+        if (open.empty() && was_on_members_) selected_ = static_cast<int>(visible_.size());
     }
     void select_room(const std::string& id) {
         for (const auto& r : rooms_)
@@ -535,6 +544,8 @@ private:
         on_room_selected();
     }
     void on_room_selected() {
+        was_on_members_ = members_selected();
+        if (was_on_members_) command({{"cmd", "member_list"}});  // refresh the page
         if (Room* r = current(); r && r->unread > 0) {
             r->unread = 0;
             refresh_titles();
@@ -770,6 +781,15 @@ private:
                 json c = {{"cmd", "create_invite"}};
                 if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
                 command(c);
+            } else if (cmd == "/nick") {
+                // Your own display name on this server; no name clears it.
+                command({{"cmd", "set_nickname"}, {"nickname", arg}});
+                if (members_selected()) command({{"cmd", "member_list"}});
+            } else if (cmd == "/setnick" && !arg.empty()) {
+                auto sp = arg.find(' ');
+                command({{"cmd", "set_nickname"}, {"username", arg.substr(0, sp)},
+                         {"nickname", sp == std::string::npos ? "" : arg.substr(sp + 1)}});
+                if (members_selected()) command({{"cmd", "member_list"}});
             } else if (cmd == "/username" && !arg.empty()) {
                 command({{"cmd", "set_username"}, {"username", arg}});
             } else if (cmd == "/recovery-key") {
@@ -892,7 +912,8 @@ private:
             return;
         }
         if (!room) {
-            notice_ = "start a chat first: /chat <username>";
+            notice_ = members_selected() ? "this is the members page; open a chat to type (/open <name>)"
+                                         : "start a chat first: /chat <username>";
             return;
         }
         command({{"cmd", "send_text"}, {"room_id", room->id}, {"body", line}});
@@ -942,6 +963,7 @@ private:
                               text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
+                              text("/nick <name>       set your display name on this server"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
@@ -949,14 +971,49 @@ private:
                               text("running the server (needs the permission): /channel new|rename|delete|private|readonly|open"),
                               text("   /role new|delete|give|take      /kick <user>   /ban <user>   /unban <user>"),
                               text("   /settings   /set <name> <value>   /status   /reboot (restarts the server program)"),
+                              text("   /setnick <user> <name>   change someone's display name"),
                               text("   /remove-account <user>   delete an account for good and free its name"),
                               text("   /invite [uses]   make an invite link for someone to join"),
                               text("   /remove   delete the last message someone else posted in this channel"),
                           }) | yframe | flex;
     }
 
+    // Everyone on this server, with what can be done about them.
+    Element members_view() {
+        Elements rows;
+        for (const auto& m : member_list_) {
+            std::string username = m.value("username", "?");
+            std::string shown = m.value("display_name", username);
+            std::string roles;
+            for (const auto& r : m.value("roles", json::array())) roles += " [" + r.get<std::string>() + "]";
+            rows.push_back(hbox({
+                text(shown) | bold | color(m.value("me", false) ? Color::Cyan : Color::Green),
+                text(shown != username ? "  (" + username + ")" : "") | dim,
+                text(m.value("is_owner", false) ? "  owner" : m.value("is_admin", false) ? "  admin" : "") |
+                    color(Color::Magenta),
+                text(roles) | color(Color::Cyan),
+                text(m.value("verified", false) ? "  (checked)" : "") | color(Color::Green),
+            }));
+        }
+        if (rows.empty()) rows.push_back(text("Loading...") | dim);
+        rows.push_back(text(""));
+        rows.push_back(text("Use the name in brackets (the username) in these commands:") | dim);
+        rows.push_back(text("  /nick <name>               set your own display name    (/nick alone clears it)") | dim);
+        rows.push_back(text("  /chat <user>               message someone") | dim);
+        if (is_owner_ || !permissions_.empty()) {
+            rows.push_back(text("If your role allows it:") | dim);
+            rows.push_back(text("  /setnick <user> <name>     change someone's display name") | dim);
+            rows.push_back(text("  /role give <user> <role>   /role take <user> <role>") | dim);
+            rows.push_back(text("  /kick <user>               remove them; they can rejoin") | dim);
+            rows.push_back(text("  /ban <user>   /unban <user>") | dim);
+            rows.push_back(text("  /remove-account <user>     delete the account and free its name") | dim);
+        }
+        return vbox(std::move(rows)) | yframe | flex;
+    }
+
     Element messages_view() {
         if (show_help_) return help_view();
+        if (members_selected()) return members_view();
         Room* room = current();
         if (!room) {
             return vbox({text(""), text("No conversations yet.") | center,
@@ -1028,10 +1085,12 @@ private:
         });
         Room* room = current();
         Element left = vbox({text(server_name_.empty() ? "Chats" : server_name_) | bold, separator(),
-                             rooms_.empty() ? text("(none)") | dim : room_menu_->Render() | yframe | flex}) |
+                             room_menu_->Render() | yframe | flex}) |
                        size(WIDTH, EQUAL, 24);
         Element right = vbox({
-            hbox({text(show_help_ ? "Commands   (/help again to close)" : room ? room->title : "") | bold,
+            hbox({text(show_help_ ? "Commands   (/help again to close)"
+                                  : members_selected() ? "Members of " + (server_name_.empty() ? std::string("this server") : server_name_)
+                                  : room ? room->title : "") | bold,
                   text(room && room->disappear_after
                            ? "   messages disappear after " + describe_duration(room->disappear_after)
                            : "") | color(Color::Yellow)}),
@@ -1111,6 +1170,8 @@ private:
     int64_t current_server_ = 0;
     std::map<int64_t, std::string> open_by_server_;
     std::vector<size_t> visible_;  // positions in rooms_ of the chats listed on screen
+    json member_list_ = json::array();
+    bool was_on_members_ = false;
 
     // main
     int phase_ = 0;

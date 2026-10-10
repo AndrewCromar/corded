@@ -261,6 +261,11 @@ CREATE TABLE IF NOT EXISTS outbox (
     db_.exec("INSERT OR IGNORE INTO device_sessions (peer_device, peer_user, state) "
              "SELECT peer_device, peer_user, state FROM sessions");
     db_.exec("DELETE FROM sessions");
+    try {
+        db_.exec("SELECT nickname FROM members LIMIT 0");
+    } catch (const db::Error&) {
+        db_.exec("ALTER TABLE members ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+    }
     // Added after the first prototype: rooms can carry a name.
     try {
         db_.exec("SELECT name FROM rooms LIMIT 0");
@@ -389,9 +394,9 @@ void Vault::upsert_room(ByteView room_id, const std::vector<MemberRow>& members,
         std::string roles;
         for (uint32_t r : m.roles) roles += (roles.empty() ? "" : ",") + std::to_string(r);
         auto ins = db_.prepare("INSERT OR REPLACE INTO members (room_id, user_id, username, is_admin, "
-                               "is_owner, roles) VALUES (?,?,?,?,?,?)");
+                               "is_owner, roles, nickname) VALUES (?,?,?,?,?,?,?)");
         ins.bind(1, room_id).bind(2, m.user_id).bind(3, m.username).bind(4, m.is_admin ? 1 : 0)
-            .bind(5, m.is_owner ? 1 : 0).bind(6, roles).exec();
+            .bind(5, m.is_owner ? 1 : 0).bind(6, roles).bind(7, m.nickname).exec();
     }
 }
 
@@ -410,11 +415,11 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
         r.ttl_s = st.u64(4);
         r.server_id = st.i64(5);
     }
-    auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles FROM members "
+    auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles, nickname FROM members "
                           "WHERE room_id = ? ORDER BY username");
     st.bind(1, room_id);
     while (st.step()) {
-        MemberRow m{st.blob(0), st.text(1), st.i64(2) != 0, st.i64(3) != 0, {}};
+        MemberRow m{st.blob(0), st.text(1), st.i64(2) != 0, st.i64(3) != 0, {}, st.text(5)};
         std::string roles = st.text(4);
         for (size_t pos = 0; pos < roles.size();) {
             size_t end = roles.find(',', pos);

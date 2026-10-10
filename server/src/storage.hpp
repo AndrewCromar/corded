@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         }
         db_.exec("CREATE INDEX IF NOT EXISTS room_events_expiry ON room_events(expires_at) "
                  "WHERE expires_at IS NOT NULL");
+        try {
+            db_.exec("SELECT nickname FROM users LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+        }
         // A community always has the @everyone role and at least one channel.
         {
             auto st = db_.prepare("SELECT 1 FROM roles WHERE is_everyone = 1");
@@ -261,6 +266,11 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
     void set_access_level(ByteView user_id, int level) {
         auto st = db_.prepare("UPDATE users SET access_level = ? WHERE user_id = ?");
         st.bind(1, level).bind(2, user_id).exec();
+    }
+
+    void set_nickname(ByteView user_id, const std::string& nickname) {
+        auto st = db_.prepare("UPDATE users SET nickname = ? WHERE user_id = ?");
+        st.bind(1, nickname).bind(2, user_id).exec();
     }
 
     // Deletes an account outright: its devices, keys, memberships, roles and
@@ -465,12 +475,13 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         return out;
     }
     std::unique_ptr<wire::MemberT> member(ByteView user_id) {
-        auto st = db_.prepare("SELECT username FROM users WHERE user_id = ?");
+        auto st = db_.prepare("SELECT username, nickname FROM users WHERE user_id = ?");
         st.bind(1, user_id);
         if (!st.step()) return nullptr;
         auto m = std::make_unique<wire::MemberT>();
         m->user_id = to_bytes(user_id);
         m->username = st.text(0);
+        m->nickname = st.text(1);
         m->is_owner = is_owner(user_id);
         m->is_admin = (permissions(user_id) & perm::Administrator) != 0;
         for (const auto& r : roles_of(user_id))
