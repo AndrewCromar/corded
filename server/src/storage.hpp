@@ -75,7 +75,16 @@ CREATE TABLE IF NOT EXISTS room_events (
     PRIMARY KEY (room_id, seq, recipient_device)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
+CREATE TABLE IF NOT EXISTS event_payloads (
+    room_id BLOB NOT NULL, seq INTEGER NOT NULL, shared BLOB NOT NULL,
+    PRIMARY KEY (room_id, seq)
+) WITHOUT ROWID;
 )sql");
+        try {
+            db_.exec("SELECT caps FROM devices LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE devices ADD COLUMN caps INTEGER NOT NULL DEFAULT 0");
+        }
         try {
             db_.exec("SELECT access_level FROM users LIMIT 0");
         } catch (const db::Error&) {
@@ -199,6 +208,17 @@ CREATE TABLE IF NOT EXISTS blobs (
             st.bind(1, device_id).exec();
         }
         tx.commit();
+    }
+
+    // What a device's client said it understands when it last signed in.
+    void set_device_caps(ByteView device_id, uint32_t caps) {
+        auto st = db_.prepare("UPDATE devices SET caps = ? WHERE device_id = ?");
+        st.bind(1, static_cast<int64_t>(caps)).bind(2, device_id).exec();
+    }
+    uint32_t device_caps(ByteView device_id) {
+        auto st = db_.prepare("SELECT caps FROM devices WHERE device_id = ?");
+        st.bind(1, device_id);
+        return st.step() ? static_cast<uint32_t>(st.i64(0)) : 0;
     }
 
     std::vector<DeviceRow> devices_of_user(ByteView user_id) {
@@ -752,6 +772,11 @@ CREATE TABLE IF NOT EXISTS blobs (
             else ins.bind_null(9);
             ins.exec();
         }
+        // The part everyone shares is kept once, not once per device.
+        if (!ev.shared.empty() && !ev.recipients.empty()) {
+            auto ins = db_.prepare("INSERT INTO event_payloads (room_id, seq, shared) VALUES (?,?,?)");
+            ins.bind(1, ev.room_id).bind(2, out.seq).bind(3, ev.shared).exec();
+        }
         tx.commit();
         return out;
     }
@@ -813,6 +838,7 @@ CREATE TABLE IF NOT EXISTS blobs (
             st.bind(1, now_ms() - static_cast<uint64_t>(retention_days) * 24 * 3600 * 1000).exec();
         }
         sweep_expired();
+        drop_unused_payloads();
         db_.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;");
         set_info("last_housekeeping", to_bytes(std::to_string(now_ms())));
     }
@@ -823,17 +849,26 @@ CREATE TABLE IF NOT EXISTS blobs (
     }
 
     // Drops stored copies of disappearing messages whose time has come.
+    // A shared part is kept for as long as some device still has its copy to collect.
+    void drop_unused_payloads() {
+        db_.exec("DELETE FROM event_payloads WHERE NOT EXISTS (SELECT 1 FROM room_events e "
+                 "WHERE e.room_id = event_payloads.room_id AND e.seq = event_payloads.seq)");
+    }
+
     int sweep_expired() {
         auto st = db_.prepare("DELETE FROM room_events WHERE expires_at IS NOT NULL AND expires_at <= ?");
         st.bind(1, now_ms()).exec();
-        return db_.changes();
+        int gone = db_.changes();
+        if (gone > 0) drop_unused_payloads();
+        return gone;
     }
 
     std::vector<wire::RoomEventT> events_after(ByteView room_id, ByteView device_id, uint64_t seq) {
         std::vector<wire::RoomEventT> out;
-        auto st = db_.prepare("SELECT seq, event_id, sender_user, sender_device, server_ts, "
-                              "ciphertext FROM room_events WHERE room_id = ? AND "
-                              "recipient_device = ? AND seq > ? ORDER BY seq");
+        auto st = db_.prepare(
+            "SELECT e.seq, e.event_id, e.sender_user, e.sender_device, e.server_ts, e.ciphertext, p.shared "
+            "FROM room_events e LEFT JOIN event_payloads p ON p.room_id = e.room_id AND p.seq = e.seq "
+            "WHERE e.room_id = ? AND e.recipient_device = ? AND e.seq > ? ORDER BY e.seq");
         st.bind(1, room_id).bind(2, device_id).bind(3, seq);
         while (st.step()) {
             wire::RoomEventT e;
@@ -844,6 +879,7 @@ CREATE TABLE IF NOT EXISTS blobs (
             e.sender_device = st.blob(3);
             e.server_ts = st.u64(4);
             e.ciphertext = st.blob(5);
+            e.shared = st.blob(6);  // empty when the event was sent whole to each device
             out.push_back(std::move(e));
         }
         return out;

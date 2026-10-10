@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <random>
 #include <thread>
 
 using nlohmann::json;
@@ -2413,4 +2414,60 @@ TEST_CASE("a channel pinned to the top is pinned for everyone") {
     bob.wait("pinned", pinned_is(true));
     REQUIRE(alice.cmd({{"cmd", "set_channel_featured"}, {"room_id", general}, {"featured", false}})["ok"] == true);
     bob.wait("unpinned", pinned_is(false));
+}
+
+TEST_CASE("a message to several devices is uploaded and stored once, and everyone reads it") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string()),
+        carol((tmp.path / "carol").string()), dave((tmp.path / "dave").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}, {&carol, "carol"}, {&dave, "dave"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("four members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 4;
+    });
+    // A first small message sets up the sessions, so only the big one is measured.
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "warming up"}})["ok"] == true);
+    for (Client* c : {&bob, &carol, &dave}) c->wait_message("warming up");
+    auto stored = [&] {
+        return alice.cmd({{"cmd", "server_status"}})["data"]["status"].value("stored_bytes", uint64_t{0});
+    };
+    uint64_t before = stored();
+
+    // Words that do not squeeze down, so the size on disk is honest.
+    std::string body;
+    std::mt19937 rng(7);
+    while (body.size() < 150 * 1024) body += static_cast<char>('a' + rng() % 26);
+    REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", body}})["ok"] == true);
+    for (Client* c : {&bob, &carol, &dave}) {
+        json got = c->wait("the long message", [](const json& e) {
+            return e["event"] == "event_received" && e["data"]["content"].value("body", "").size() > 100000;
+        });
+        REQUIRE(got["data"]["content"]["body"] == body);
+        REQUIRE(got["data"]["status"] == "ok");
+        REQUIRE(got["data"]["sender_username"] == "alice");
+    }
+    // Three recipients: sent whole to each it would be three copies and more.
+    uint64_t grew = stored() - before;
+    INFO("the server's data grew by " << grew << " bytes for a " << body.size() << " byte message");
+    REQUIRE(grew < 2 * body.size());
+
+    // Replies still flow, and someone who was away gets the shared message on return.
+    dave.close();
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "read it all, promise"}})["ok"] == true);
+    alice.wait_message("read it all, promise");
+    carol.wait_message("read it all, promise");
+    dave.open();
+    REQUIRE(dave.unlock()["ok"] == true);
+    dave.wait_message("read it all, promise");
 }

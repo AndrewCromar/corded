@@ -204,6 +204,7 @@ private:
     bool history_sharing_ = true;  // what the server allows
     // Each person's devices as the server last listed them, for this connection.
     std::map<Bytes, std::vector<Bytes>> devices_;
+    std::map<Bytes, uint32_t> device_caps_;  // device -> what its client understands
     std::set<Bytes> devices_requested_;
     std::set<Bytes> unreachable_;  // devices with no keys to start a session from
     std::map<Bytes, uint64_t> history_asked_;  // room -> when we asked, in ms

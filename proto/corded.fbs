@@ -24,8 +24,9 @@ table Register {
   cert: [ubyte];         // user identity signature over (device_id, dh_key)
   signature: [ubyte];    // device signature over the challenge
   invite: string;        // required when the server is invite-only
+  caps: uint32;          // what this client understands (see kCap... in frame.hpp)
 }
-table Authenticate { device_id: [ubyte]; signature: [ubyte]; }
+table Authenticate { device_id: [ubyte]; signature: [ubyte]; caps: uint32; }
 table AuthOk { user_id: [ubyte]; username: string; server_ts: uint64; is_admin: bool; }
 table Error { code: uint16; message: string; }
 table Ok {}
@@ -35,7 +36,7 @@ table PublishPrekeys { spk_id: uint32; spk: [ubyte]; spk_sig: [ubyte]; otks: [Ke
 // With device_id, the bundle for that device; without, for the person's first device.
 table FetchBundle { user_id: [ubyte]; device_id: [ubyte]; }
 // One person may use several devices. Senders encrypt to each of them.
-table DeviceRef { device_id: [ubyte]; created_at: uint64; }
+table DeviceRef { device_id: [ubyte]; created_at: uint64; caps: uint32; }
 // A person signs one of their own devices out for good.
 table RemoveDevice { device_id: [ubyte]; }
 table ListDevices { user_id: [ubyte]; }
@@ -145,12 +146,19 @@ table RoomList { rooms: [RoomInfo]; }
 // ---- events ----
 // expires_at (ms since epoch, 0 = never) is the one thing about a disappearing
 // message the server is told, so that it can drop its stored copy on time.
-table SendRoomEvent { room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; expires_at: uint64; }
+// With `shared`, the event itself is encrypted once, under a key made for it
+// alone, and each recipient's ciphertext carries only that key. Without it,
+// each recipient's ciphertext is the whole event (how every message used to go).
+table SendRoomEvent {
+  room_id: [ubyte]; event_id: [ubyte]; recipients: [Recipient]; expires_at: uint64;
+  shared: [ubyte];
+}
 table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
 table RoomEvent {
   room_id: [ubyte]; seq: uint64; event_id: [ubyte];
   sender_user: [ubyte]; sender_device: [ubyte]; server_ts: uint64;
   ciphertext: [ubyte];
+  shared: [ubyte];   // the event encrypted once for everyone; see SendRoomEvent
 }
 table Sync { cursors: [Cursor]; }
 table SyncComplete {}

@@ -43,6 +43,36 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
     return c;
 }
 
+// The note each device's ratchet carries when an event is sent in the shared
+// form: a mark, the key and nonce the event was encrypted under, and a
+// fingerprint of the encrypted event. The fingerprint is what stops anyone
+// who holds the key (every recipient does) from swapping in different words
+// under the sender's name.
+constexpr char kSharedMark[4] = {'C', 'S', 'K', '1'};
+
+Bytes shared_key_note(ByteView key, ByteView nonce, ByteView shared) {
+    Bytes note(kSharedMark, kSharedMark + 4);
+    append(note, key);
+    append(note, nonce);
+    Bytes print(crypto_generichash_BYTES);
+    crypto_generichash(print.data(), print.size(), shared.data(), shared.size(), nullptr, 0);
+    append(note, print);
+    return note;
+}
+
+std::optional<Bytes> open_shared(ByteView note, ByteView shared, ByteView context) {
+    if (note.size() != 4 + 32 + 24 + crypto_generichash_BYTES || !std::equal(kSharedMark, kSharedMark + 4, note.begin()))
+        return std::nullopt;
+    Bytes print(crypto_generichash_BYTES);
+    crypto_generichash(print.data(), print.size(), shared.data(), shared.size(), nullptr, 0);
+    if (sodium_memcmp(print.data(), note.data() + 60, print.size()) != 0) return std::nullopt;
+    Key32 key{};
+    std::copy(note.begin() + 4, note.begin() + 36, key.begin());
+    auto plain = crypto::aead_decrypt(key, note.subspan(36, 24), shared, context);
+    sodium_memzero(key.data(), key.size());
+    return plain;
+}
+
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
@@ -2095,6 +2125,7 @@ void Session::on_hello(const wire::HelloT& hello) {
     wire::AuthenticateT auth;
     auth.device_id = to_bytes(vault_.identity().device.pk);
     auth.signature = sign(vault_.identity().device.sk, challenge_auth_msg_);
+    auth.caps = kCapSharedPayload;
     request(std::move(auth), [this](wire::FrameT& f) {
         auto* e = f.body.AsError();
         if (!e || e->code == kDisconnected) return;
@@ -2127,6 +2158,7 @@ void Session::send_register() {
     reg.cert = id.cert;
     reg.signature = sign(id.device.sk, challenge_auth_msg_);
     reg.invite = meta("invite").value_or("");
+    reg.caps = kCapSharedPayload;
     request(std::move(reg), [this](wire::FrameT& f) {
         auto* e = f.body.AsError();
         if (!e || e->code == kDisconnected) return;
@@ -2624,6 +2656,10 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
         if (same_device)
             plain = crypto::decrypt(vault_.identity(), vault_, peer,
                                     context_of(ev.room_id, ev.event_id), ev.ciphertext);
+        // Sent in the shared form: what the ratchet carried is the key to the
+        // part everyone got, and a fingerprint that part must match.
+        if (plain && !ev.shared.empty())
+            plain = open_shared(*plain, ev.shared, context_of(ev.room_id, ev.event_id));
         if (plain) {
             flatbuffers::Verifier verifier(plain->data(), plain->size());
             const wire::Event* inner =
@@ -2762,7 +2798,10 @@ void Session::pump_outbox() {
                 if (!list) return;  // retried on the next attempt to send
                 std::vector<Bytes> ids;
                 for (const auto& d : list->devices)
-                    if (d && d->device_id.size() == 32) ids.push_back(d->device_id);
+                    if (d && d->device_id.size() == 32) {
+                        ids.push_back(d->device_id);
+                        device_caps_[d->device_id] = d->caps;
+                    }
                 devices_[user] = std::move(ids);
                 pump_outbox();
             });
@@ -2860,11 +2899,32 @@ void Session::pump_outbox() {
         // process, so a crash can never reuse a message key.
         db::Transaction tx(vault_.db());
         Bytes context = context_of(row.room_id, row.event_id);
+        // To several devices that all understand it, the event is encrypted
+        // once under a key of its own, and each device's ratchet carries only
+        // that key and a fingerprint of the result. Every device still gets
+        // its own ratchet step, so nothing about who can read what changes;
+        // what changes is that a message with a picture in it is uploaded and
+        // stored once instead of once per device.
+        bool share = targets.size() >= 2 &&
+                     std::all_of(targets.begin(), targets.end(), [&](const Bytes& d) {
+                         auto caps = device_caps_.find(d);
+                         return caps != device_caps_.end() && (caps->second & kCapSharedPayload);
+                     });
+        Bytes key_note;
+        if (share) {
+            Bytes key_bytes = random_bytes(32), nonce = random_bytes(24);
+            Key32 key{};
+            std::copy(key_bytes.begin(), key_bytes.end(), key.begin());
+            send.shared = crypto::aead_encrypt(key, nonce, plaintext, context);
+            key_note = shared_key_note(key_bytes, nonce, send.shared);
+            sodium_memzero(key.data(), key.size());
+            sodium_memzero(key_bytes.data(), key_bytes.size());
+        }
         for (const auto& device : targets) {
             auto peer = vault_.load_sessions(device);
             auto r = std::make_unique<wire::RecipientT>();
             r->device_id = to_bytes(peer->device_id);
-            r->ciphertext = crypto::encrypt(vault_.identity(), *peer, context, plaintext);
+            r->ciphertext = crypto::encrypt(vault_.identity(), *peer, context, share ? ByteView(key_note) : plaintext);
             vault_.save_sessions(*peer);
             send.recipients.push_back(std::move(r));
         }

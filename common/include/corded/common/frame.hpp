@@ -11,6 +11,11 @@ namespace corded {
 
 inline constexpr uint32_t kMaxFrameBytes = 1024 * 1024;
 inline constexpr uint16_t kProtocolVersion = 1;
+// What a client tells the server it understands, so that others know how they
+// may send to it. A sender uses a newer form only when every device that is
+// to receive the message has said it can read it.
+inline constexpr uint32_t kCapSharedPayload = 1;  // SendRoomEvent.shared
+
 // A file travels in pieces of this size, each well inside one frame.
 inline constexpr uint32_t kBlobChunkBytes = 256 * 1024;
 

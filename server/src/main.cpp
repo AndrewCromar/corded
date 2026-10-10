@@ -639,6 +639,7 @@ private:
             return;
         }
         if (used_invite) storage_.use_invite(r.invite);
+        storage_.set_device_caps(r.device_id, r.caps);
         auto dev = storage_.find_device(r.device_id);
         if (!dev || dev->user_id != r.user_id) {
             c->fail(rid, err::Forbidden, "device belongs to another user");
@@ -678,6 +679,7 @@ private:
             c->fail(rid, err::Kicked, "you were removed from this server");
             return;
         }
+        storage_.set_device_caps(a.device_id, a.caps);
         mark_online(c, *dev);
     }
 
@@ -712,6 +714,7 @@ private:
                 auto ref = std::make_unique<wire::DeviceRefT>();
                 ref->device_id = d.device_id;
                 ref->created_at = storage_.device_created_at(d.device_id);
+                ref->caps = storage_.device_caps(d.device_id);
                 list.devices.push_back(std::move(ref));
             }
         c.reply(rid, std::move(list));
@@ -1504,6 +1507,7 @@ private:
         accepted.room_id = ev.room_id;
         accepted.event_id = ev.event_id;
         accepted.expires_at = ev.expires_at;
+        accepted.shared = ev.shared;
         for (const auto& r : ev.recipients) {
             auto dev = r ? storage_.find_device(r->device_id) : std::nullopt;
             if (!dev || !storage_.is_member(ev.room_id, dev->user_id) || r->ciphertext.empty()) continue;
@@ -1520,6 +1524,7 @@ private:
                 out.sender_device = c.device_id;
                 out.server_ts = stored.server_ts;
                 out.ciphertext = r->ciphertext;
+                out.shared = ev.shared;
                 push(r->device_id, out);
             }
         }
