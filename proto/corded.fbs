@@ -54,6 +54,7 @@ table CreateRoom { members: [Member]; }   // only user_id is read
 table RoomInfo {
   room_id: [ubyte]; members: [Member]; created_at: uint64; is_direct: bool;
   kind: ubyte; name: string;
+  nsfw: bool;   // channels only: clients warn before showing it
 }
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
@@ -101,6 +102,7 @@ table SetOverride { room_id: [ubyte]; role_id: uint32; allow: uint64; deny: uint
 // The exceptions a channel has, for those who manage channels.
 table Override { role_id: uint32; allow: uint64; deny: uint64; }
 table GetOverrides { room_id: [ubyte]; }
+table SetChannelNsfw { room_id: [ubyte]; nsfw: bool; }
 table Overrides { room_id: [ubyte]; entries: [Override]; }
 // Invites: a code that lets someone create an account on an invite-only server.
 // max_uses 0 means unlimited; expires_in_s 0 means it never expires.
@@ -144,7 +146,7 @@ union FrameBody {
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
   ListDevices, DeviceList, DevicesChanged,
   RemoveAccount, SetNickname, Ephemeral,
-  GetOverrides, Overrides
+  GetOverrides, Overrides, SetChannelNsfw
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

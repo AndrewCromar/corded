@@ -458,6 +458,7 @@ public:
                 case wire::FrameBody_DeleteChannel: on_delete_channel(*c, rid, *f.body.AsDeleteChannel()); break;
                 case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
                 case wire::FrameBody_GetOverrides: on_get_overrides(*c, rid, *f.body.AsGetOverrides()); break;
+                case wire::FrameBody_SetChannelNsfw: on_set_channel_nsfw(*c, rid, *f.body.AsSetChannelNsfw()); break;
                 case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
                 case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
                 case wire::FrameBody_HistoryRequest: on_history_request(*c, rid, *f.body.AsHistoryRequest()); break;
@@ -909,6 +910,13 @@ private:
             return;
         }
         storage_.rename_channel(q.room_id, q.name);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_set_channel_nsfw(Conn& c, uint32_t rid, const wire::SetChannelNsfwT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        storage_.set_channel_nsfw(q.room_id, q.nsfw);
         broadcast_state();
         c.reply(rid, wire::OkT{});
     }

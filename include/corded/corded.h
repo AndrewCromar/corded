@@ -46,6 +46,8 @@
  *   {"cmd":"delete_channel","room_id":"..."}
  *   {"cmd":"set_channel_access","room_id":"...","role":"@everyone",
  *    "allow":[],"deny":["view_channel"]}
+ *   {"cmd":"set_channel_nsfw","room_id":"...","nsfw":true}   every room carries "nsfw"; clients
+ *       warn before showing such a channel and keep its text out of notifications
  *   {"cmd":"channel_access","room_id":"..."}     the channel's exceptions: [{role, allow[], deny[]}]
  *   {"cmd":"create_role","name":"moderator","permissions":["kick_members","manage_messages"]}
  *   {"cmd":"edit_role","role":"moderator","permissions":["kick_members"]}

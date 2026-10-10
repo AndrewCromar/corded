@@ -838,6 +838,19 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "@everyone"}, {"deny", {"view_channel"}}})["ok"] == true);
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "staff"}, {"allow", {"view_channel"}}})["ok"] == true);
     carol.have("staff-room hidden", room_gone(staff_room));
+    // A channel can be marked NSFW by those who manage channels; everyone's copy says so.
+    {
+        auto nsfw_is = [&](bool want) {
+            return [&, want](const json& e) {
+                return e["event"] == "room_updated" && e["room"]["room_id"] == staff_room && e["room"]["nsfw"] == want;
+            };
+        };
+        REQUIRE(carol.cmd({{"cmd", "set_channel_nsfw"}, {"room_id", staff_room}, {"nsfw", true}})["ok"] == false);
+        REQUIRE(alice.cmd({{"cmd", "set_channel_nsfw"}, {"room_id", staff_room}, {"nsfw", true}})["ok"] == true);
+        bob.wait("marked", nsfw_is(true));
+        REQUIRE(alice.cmd({{"cmd", "set_channel_nsfw"}, {"room_id", staff_room}, {"nsfw", false}})["ok"] == true);
+        bob.wait("unmarked", nsfw_is(false));
+    }
     // Those who manage channels can read back what a channel's rules are.
     {
         json access = alice.cmd({{"cmd", "channel_access"}, {"room_id", staff_room}});

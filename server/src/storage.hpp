@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
             db_.exec("UPDATE rooms SET kind = 1 WHERE is_direct = 1");
         }
         try {
+            db_.exec("SELECT nsfw FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0");
+        }
+        try {
             db_.exec("SELECT expires_at FROM room_events LIMIT 0");
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE room_events ADD COLUMN expires_at INTEGER");
@@ -519,6 +524,10 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         st.bind(1, room_id).bind(2, now_ms()).bind(3, name).exec();
         return room_id;
     }
+    void set_channel_nsfw(ByteView room_id, bool nsfw) {
+        auto st = db_.prepare("UPDATE rooms SET nsfw = ? WHERE room_id = ? AND kind = 0");
+        st.bind(1, static_cast<int64_t>(nsfw ? 1 : 0)).bind(2, room_id).exec();
+    }
     void rename_channel(ByteView room_id, const std::string& name) {
         auto st = db_.prepare("UPDATE rooms SET name = ? WHERE room_id = ? AND kind = 0");
         st.bind(1, name).bind(2, room_id).exec();
@@ -575,13 +584,14 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         wire::RoomInfoT info;
         info.room_id = to_bytes(room_id);
         {
-            auto st = db_.prepare("SELECT created_at, kind, name FROM rooms WHERE room_id = ?");
+            auto st = db_.prepare("SELECT created_at, kind, name, nsfw FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
                 info.kind = static_cast<uint8_t>(st.i64(1));
                 info.is_direct = info.kind == kDirect;
                 info.name = st.text(2);
+                info.nsfw = st.i64(3) != 0;
             }
         }
         if (info.kind == kChannel) {

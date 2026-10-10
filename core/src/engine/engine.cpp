@@ -296,6 +296,7 @@ Session::json Session::room_json(const RoomRow& room) {
             {"is_group", room.kind == 2},
             {"disappear_after", room.ttl_s},
             {"pinned", pins(room.room_id)},
+            {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
             {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
             {"members", std::move(members)}};
 }
@@ -693,7 +694,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
         } else if (name == "server_info" || name == "member_list" || name == "create_role" ||
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
-                   name == "set_channel_access" || name == "channel_access" || name == "kick" ||
+                   name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
+                   name == "kick" ||
                    name == "ban_user" ||
                    name == "remove_account" || name == "set_nickname" ||
                    name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
@@ -1027,6 +1029,12 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         q.role_id = role_id(cmd.at("role").get<std::string>());
         q.allow = permission_bits(cmd.value("allow", json::array()));
         q.deny = permission_bits(cmd.value("deny", json::array()));
+        simple_request(req, std::move(q));
+    } else if (name == "set_channel_nsfw") {
+        // Marks a channel so that clients warn before showing it.
+        wire::SetChannelNsfwT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.nsfw = cmd.value("nsfw", true);
         simple_request(req, std::move(q));
     } else if (name == "channel_access") {
         // The exceptions a channel has, role by role.
@@ -1977,6 +1985,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
     {
         db::Transaction tx(vault_.db());
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
+        vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
         tx.commit();
     }
     // New to this room: ask whether anyone will share what was said before.
