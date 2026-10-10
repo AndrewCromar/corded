@@ -2190,12 +2190,49 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
     // The second time it is already on the device.
     REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["data"]["cached"] == true);
 
+    // What the device keeps is the encrypted form; the readable copy is only for looking at.
+    auto kept = tmp.path / "bob" / "files";
+    size_t kept_files = 0;
+    for (const auto& f : std::filesystem::directory_iterator(kept)) {
+        ++kept_files;
+        REQUIRE(f.path().extension() == ".enc");
+        std::ifstream in(f.path(), std::ios::binary);
+        std::string held((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        REQUIRE(held.size() > body.size());
+        REQUIRE(held.find("SECRET-MARKER") == std::string::npos);
+    }
+    REQUIRE(kept_files == 1);
+    REQUIRE(std::filesystem::exists(path));
+    REQUIRE(bob.cmd({{"cmd", "wipe_views"}})["ok"] == true);
+    REQUIRE_FALSE(std::filesystem::exists(path));
+    // Opening it again needs no server: it is opened from what was kept. Locking wipes it once more.
+    std::string again = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["data"]["path"];
+    REQUIRE(std::filesystem::exists(again));
+    REQUIRE(bob.cmd({{"cmd", "lock"}})["ok"] == true);
+    REQUIRE_FALSE(std::filesystem::exists(again));
+    REQUIRE(bob.unlock()["ok"] == true);
+    bob.wait("live again", live, 20000);
+    // A copy someone asks to keep goes where they say and is left alone.
+    std::string saved = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]},
+                                 {"dir", (tmp.path / "saved").string()}})["data"]["path"];
+    REQUIRE(bob.cmd({{"cmd", "wipe_views"}})["ok"] == true);
+    REQUIRE(std::filesystem::exists(saved));
+    // A kept copy that was cut short or altered is noticed, thrown away and fetched afresh.
+    for (const auto& f : std::filesystem::directory_iterator(kept)) {
+        std::fstream damage(f.path(), std::ios::binary | std::ios::in | std::ios::out);
+        damage.seekp(300000);
+        damage.put('X');
+    }
+    REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["error"]["code"] == "bad_file");
+    REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["data"]["cached"] == false);
+
     // Bytes tampered with on the server are noticed.
     {
         std::fstream f(stored[0], std::ios::binary | std::ios::in | std::ios::out);
         f.seekp(1000);
         f.put('X');
     }
+    std::filesystem::remove_all(kept);  // so it has to come from the server again
     json bad = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]},
                         {"dir", (tmp.path / "elsewhere").string()}});
     REQUIRE(bad["ok"] == false);
@@ -2213,6 +2250,28 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
     REQUIRE(full["ok"] == false);
     REQUIRE(full["error"]["message"].get<std::string>().find("no room") != std::string::npos);
     REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "storage_limit_mb"}, {"value", "0"}})["ok"] == true);
+
+    // Sizes on either side of a piece's edge go through whole, byte for byte.
+    {
+        const size_t piece = 256 * 1024 - 16;
+        for (size_t size : {size_t{1}, piece - 1, piece, piece + 1, 2 * piece}) {
+            std::string bytes(size, '\0');
+            for (size_t i = 0; i < size; ++i) bytes[i] = static_cast<char>((i * 131 + size) % 251);
+            auto edge = tmp.path / ("edge-" + std::to_string(size) + ".bin");
+            std::ofstream(edge, std::ios::binary) << bytes;
+            json out = alice.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", edge.string()}});
+            REQUIRE(out["ok"] == true);
+            bob.wait("that file's message", [&](const json& e) {
+                return e["event"] == "event_received" && e["data"]["event_id"] == out["data"]["event_id"];
+            });
+            json opened = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", out["data"]["event_id"]}});
+            REQUIRE(opened["ok"] == true);
+            std::ifstream in(opened["data"]["path"].get<std::string>(), std::ios::binary);
+            std::string read((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            REQUIRE(read == bytes);
+            REQUIRE(alice.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", out["data"]["event_id"]}})["ok"] == true);
+        }
+    }
 
     // The owner's limit is kept.
     REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "max_file_mb"}, {"value", "1"}})["ok"] == true);

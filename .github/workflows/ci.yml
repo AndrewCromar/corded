@@ -190,6 +190,35 @@ jobs:
           if (-not $exe) { throw "the installer did not produce corded-tui.exe" }
           & $exe.FullName --help
 
+      # The step that puts an app update in place on Windows, run for real:
+      # a program that is running (so its file is locked) is replaced once it
+      # ends, by the same script the app starts, under the Windows PowerShell
+      # that every Windows has.
+      - name: Check the app's update script
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'update-check'
+          $target = Join-Path $work 'app folder'      # a space, as in real paths
+          $source = Join-Path $work 'new'
+          New-Item -ItemType Directory -Force $target, $source, (Join-Path $source 'data') | Out-Null
+          Copy-Item C:\Windows\System32\ping.exe (Join-Path $target 'corded_app.exe')
+          Set-Content (Join-Path $target 'old.txt') 'old'
+          Copy-Item C:\Windows\System32\whoami.exe (Join-Path $source 'corded_app.exe')
+          Set-Content (Join-Path $source 'data\new.txt') 'new'
+          $running = Start-Process -FilePath (Join-Path $target 'corded_app.exe') -ArgumentList '-n','6','127.0.0.1' -PassThru -WindowStyle Hidden
+          $log = Join-Path $work 'update.log'
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden `
+            -File frontends\flutter\app\assets\apply-update.ps1 `
+            -ProcessId $running.Id -Source $source -Target $target -Start (Join-Path $target 'corded_app.exe') -Log $log
+          Get-Content $log
+          if ($LASTEXITCODE -ne 0) { throw 'the update script reported a failure' }
+          if (-not (Select-String -Path $log -Pattern 'OK' -Quiet)) { throw 'the log does not end in OK' }
+          $new = (Get-FileHash (Join-Path $source 'corded_app.exe')).Hash
+          $now = (Get-FileHash (Join-Path $target 'corded_app.exe')).Hash
+          if ($new -ne $now) { throw 'the program was not replaced' }
+          if (-not (Test-Path (Join-Path $target 'data\new.txt'))) { throw 'a new file in a folder did not arrive' }
+          if (-not (Test-Path (Join-Path $target 'old.txt'))) { throw 'a file the update does not carry was removed' }
+
       - name: Package
         shell: pwsh
         run: |

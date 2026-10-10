@@ -14,6 +14,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -89,19 +90,26 @@ private:
     void cmd_send_event(uint64_t req, const json& cmd);
     // Files: encrypted here, uploaded in pieces, announced by an m.file message.
     struct Upload {
-        Bytes blob_id, cipher;
-        size_t sent = 0;
+        std::ifstream in;       // read a piece at a time; the file is never held whole
+        Bytes blob_id, key, nonce;
+        uint64_t size = 0, index = 0;
         json event;
     };
     struct Download {
-        Bytes blob_id, key, nonce, cipher;
-        uint64_t size = 0;
-        std::string path, name, mime;
+        Bytes blob_id, key, nonce;
+        uint64_t size = 0;      // of the file itself
+        uint64_t piece = 0;     // plain bytes per sealed piece; 0 for the older whole-file form
+        uint64_t sealed = 0;    // of the encrypted form the server holds
+        uint64_t received = 0;
+        std::ofstream out;      // the encrypted form, as it arrives
+        std::string kept;       // where the encrypted form stays on this device
+        std::string path, name, mime;  // where it is opened to, readable
     };
     void cmd_send_file(uint64_t req, const json& cmd);
     void upload_next(uint64_t req, std::shared_ptr<Upload> up);
     void cmd_download_file(uint64_t req, const json& cmd);
     void download_next(uint64_t req, std::shared_ptr<Download> down);
+    void open_file(uint64_t req, std::shared_ptr<Download> down, bool cached);
 
     // network
     void start_connect();
@@ -251,6 +259,7 @@ private:
     void run_command(uint64_t req, const std::string& text);
     void cmd_connect(uint64_t req, const json& cmd);
     void after_unlock();
+    void wipe_views();
     void close_sessions();
     void sweep_expired();
     void schedule_sweep();

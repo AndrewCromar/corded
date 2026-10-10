@@ -1231,16 +1231,21 @@ private:
                 if (!target || target->status != "scheduled") notice_ = "give the number of a message that is still scheduled";
                 else command({{"cmd", "cancel_scheduled"}, {"room_id", room->id}, {"event_id", target->event_id}});
             } else if (room && cmd == "/save") {
-                // /save <number> [folder]; without a folder it goes beside your vault.
+                // /save <number> [folder]; without a folder it goes to Downloads.
                 std::string rest = arg;
                 const Message* target = take_target(*room, rest);
                 if (!target || target->type != "m.file") notice_ = "give the number of a file message, like /save 12";
                 else {
                     json fetch = {{"cmd", "download_file"}, {"room_id", room->id}, {"event_id", target->event_id}};
-                    if (!rest.empty()) {
-                        if (rest.rfind("~/", 0) == 0 && std::getenv("HOME")) rest = std::string(std::getenv("HOME")) + rest.substr(1);
-                        fetch["dir"] = rest;
+                    // Saving is asking for a readable copy to keep: it goes to the
+                    // folder named, or to Downloads, and stays there.
+                    if (rest.empty()) rest = "~/Downloads";
+                    if (rest.rfind("~/", 0) == 0) {
+                        const char* home = std::getenv("HOME");
+                        if (!home) home = std::getenv("USERPROFILE");
+                        rest = std::string(home ? home : ".") + rest.substr(1);
                     }
+                    fetch["dir"] = rest;
                     command(fetch);
                     notice_ = "fetching ...";
                 }

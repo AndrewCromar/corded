@@ -526,7 +526,19 @@ void Engine::schedule_sweep() {
     });
 }
 
+// Readable copies of files exist only while someone is looking at them. The
+// view folder is emptied whenever the vault is locked or unlocked, and so is
+// anything readable left in the kept-files folder by versions that stored
+// fetched files decrypted.
+void Engine::wipe_views() {
+    std::error_code ec;
+    std::filesystem::remove_all(config_.vault_dir + "/view", ec);
+    for (const auto& entry : std::filesystem::directory_iterator(config_.vault_dir + "/files", ec))
+        if (entry.is_regular_file(ec) && entry.path().extension() != ".enc") std::filesystem::remove(entry.path(), ec);
+}
+
 void Engine::after_unlock() {
+    wipe_views();
     emit_vault_state();
     sweep_expired();  // anything that came due while the vault was locked
     schedule_sweep();
@@ -601,7 +613,14 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             cmd_connect(req, cmd);
             return;
         }
+        if (name == "wipe_views") {
+            // A frontend closed what it was showing; nothing readable need stay.
+            wipe_views();
+            ok(req);
+            return;
+        }
         if (name == "lock") {
+            wipe_views();
             close_sessions();
             sweep_timer_.cancel();
             vault_.lock();
@@ -1792,10 +1811,54 @@ void Session::cmd_send_event(uint64_t req, const json& cmd) {
 }
 
 // ---------------------------------------------------------------- files
+//
+// A file is encrypted on the sender's device under a key made for it alone
+// and announced by an m.file message that carries the key. It is encrypted in
+// pieces, each sealed separately, so a file of any size passes through without
+// ever being held whole in memory:
+//
+//   piece i = seal(key, nonce with i mixed in, bytes, blob id | i | "last?")
+//
+// The piece's number and whether it is the last are part of what is sealed, so
+// pieces cannot be reordered, dropped from the middle or cut off at the end
+// without the check failing. A sealed piece is exactly as large as one upload
+// frame, so the server's pieces and the file's pieces line up.
+//
+// On the receiving device the file is kept only in this encrypted form. It is
+// opened into a "view" folder when someone looks at it, and that folder is
+// emptied when the vault is locked or unlocked.
+
+namespace {
+
+constexpr size_t kSealBytes = crypto_aead_xchacha20poly1305_ietf_ABYTES;
+constexpr size_t kFilePiece = kBlobChunkBytes - kSealBytes;  // plain bytes per piece
+
+Bytes piece_nonce(ByteView base, uint64_t index) {
+    Bytes n = to_bytes(base);
+    for (int b = 0; b < 8; ++b) n[16 + static_cast<size_t>(b)] ^= static_cast<uint8_t>(index >> (8 * b));
+    return n;
+}
+
+Bytes piece_label(ByteView blob_id, uint64_t index, bool last) {
+    Bytes ad = to_bytes(blob_id);
+    for (int b = 0; b < 8; ++b) ad.push_back(static_cast<uint8_t>(index >> (8 * b)));
+    ad.push_back(last ? 1 : 0);
+    return ad;
+}
+
+uint64_t pieces_in(uint64_t size) { return (size + kFilePiece - 1) / kFilePiece; }
+uint64_t sealed_size(uint64_t size) { return size + pieces_in(size) * kSealBytes; }
+
+Key32 as_key(const Bytes& bytes) {
+    Key32 key{};
+    std::copy(bytes.begin(), bytes.end(), key.begin());
+    return key;
+}
+
+}  // namespace
 
 // send_file: {room_id, path, name?, mime?, caption?, thumbnail?, width?, height?,
-// reply_to?, thread?}. The file is encrypted under a key made for it alone and
-// uploaded; then an m.file message carries the key to the people in the room.
+// reply_to?, thread?}.
 void Session::cmd_send_file(uint64_t req, const json& cmd) {
     Bytes room_id = need_b64(cmd, "room_id", 16);
     if (!vault_.room(room_id)) {
@@ -1809,31 +1872,16 @@ void Session::cmd_send_file(uint64_t req, const json& cmd) {
     std::string path = cmd.at("path").get<std::string>();
     std::error_code ec;
     uint64_t size = std::filesystem::file_size(path, ec);
-    if (ec || size == 0) {
+    auto up = std::make_shared<Upload>();
+    up->in.open(path, std::ios::binary);
+    if (ec || size == 0 || !up->in) {
         fail(req, "invalid_argument", "that file could not be read, or is empty");
         return;
     }
-    if (size > kMaxFileBytes) {
-        fail(req, "invalid_argument", "that file is too large to send");
-        return;
-    }
-    Bytes plain(static_cast<size_t>(size));
-    {
-        std::ifstream in(path, std::ios::binary);
-        in.read(reinterpret_cast<char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
-        if (static_cast<uint64_t>(in.gcount()) != size) {
-            fail(req, "invalid_argument", "that file could not be read");
-            return;
-        }
-    }
-    auto up = std::make_shared<Upload>();
+    up->size = size;
     up->blob_id = random_bytes(16);
-    Bytes key_bytes = random_bytes(32), nonce = random_bytes(24);
-    Key32 key{};
-    std::copy(key_bytes.begin(), key_bytes.end(), key.begin());
-    // Bound to its id, so the server cannot hand back a different file's bytes.
-    up->cipher = crypto::aead_encrypt(key, nonce, plain, up->blob_id);
-    sodium_memzero(plain.data(), plain.size());
+    up->key = random_bytes(32);
+    up->nonce = random_bytes(24);
 
     std::string name = cmd.value("name", std::filesystem::path(path).filename().string());
     json content = {{"body", cmd.value("caption", std::string{})},
@@ -1841,12 +1889,13 @@ void Session::cmd_send_file(uint64_t req, const json& cmd) {
                     {"mime", cmd.value("mime", std::string{"application/octet-stream"})},
                     {"size", size},
                     {"blob_id", b64(up->blob_id)},
-                    {"key", b64(key_bytes)},
-                    {"nonce", b64(nonce)}};
+                    {"key", b64(up->key)},
+                    {"nonce", b64(up->nonce)},
+                    // Sealed in pieces of this many bytes; a client that only
+                    // knows the older whole-file form will say it cannot open it.
+                    {"piece", kFilePiece}};
     for (const char* extra : {"thumbnail", "width", "height"})
         if (cmd.contains(extra)) content[extra] = cmd.at(extra);
-    sodium_memzero(key_bytes.data(), key_bytes.size());
-    sodium_memzero(key.data(), key.size());
     up->event = {{"room_id", cmd.at("room_id")},
                  {"type", "m.file"},
                  {"content", std::move(content)},
@@ -1860,34 +1909,45 @@ void Session::cmd_send_file(uint64_t req, const json& cmd) {
 }
 
 void Session::upload_next(uint64_t req, std::shared_ptr<Upload> up) {
-    if (up->sent >= up->cipher.size()) {
+    uint64_t done = up->index * kFilePiece;
+    if (done >= up->size) {
+        sodium_memzero(up->key.data(), up->key.size());
         share_profile(need_b64(up->event, "room_id", 16), false);
         cmd_send_event(req, up->event);
         return;
     }
-    size_t n = std::min<size_t>(kBlobChunkBytes, up->cipher.size() - up->sent);
+    Bytes plain(static_cast<size_t>(std::min<uint64_t>(kFilePiece, up->size - done)));
+    up->in.read(reinterpret_cast<char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
+    if (static_cast<size_t>(up->in.gcount()) != plain.size()) {
+        fail(req, "invalid_argument", "that file changed or could not be read while it was being sent");
+        return;
+    }
+    bool last = done + plain.size() >= up->size;
     wire::PutBlobT q;
     q.blob_id = up->blob_id;
-    q.offset = up->sent;
-    q.total = up->cipher.size();
-    q.data.assign(up->cipher.begin() + static_cast<std::ptrdiff_t>(up->sent),
-                  up->cipher.begin() + static_cast<std::ptrdiff_t>(up->sent + n));
-    request(std::move(q), [this, req, up, n](wire::FrameT& r) {
+    q.offset = up->index * kBlobChunkBytes;
+    q.total = sealed_size(up->size);
+    q.data = crypto::aead_encrypt(as_key(up->key), piece_nonce(up->nonce, up->index), plain,
+                                  piece_label(up->blob_id, up->index, last));
+    sodium_memzero(plain.data(), plain.size());
+    uint64_t after = done + plain.size();
+    request(std::move(q), [this, req, up, after](wire::FrameT& r) {
         if (r.body.type != wire::FrameBody_Ok) {
             auto* e = r.body.AsError();
             fail(req, "refused", e ? e->message : "the server refused the file");
             return;
         }
-        up->sent += n;
-        emit({{"event", "file_progress"}, {"request_id", req}, {"done", up->sent}, {"total", up->cipher.size()}});
+        ++up->index;
+        emit({{"event", "file_progress"}, {"request_id", req}, {"done", after}, {"total", up->size}});
         upload_next(req, up);
     });
 }
 
-// download_file: {room_id, event_id, dir?}. Fetches the file a message
-// announced, checks and decrypts it, and writes it under `dir` (by default a
-// "files" folder beside the vault). Answers with the path; a file fetched
-// before is not fetched again.
+// download_file: {room_id, event_id, dir?}. Makes sure the file's encrypted
+// form is on this device (fetching it if it is not), then opens it into `dir`
+// (by default the vault's "view" folder) and answers with that path. A file
+// someone asks to keep goes wherever `dir` says and stays there; what is in
+// the view folder is gone at the next lock or unlock.
 void Session::cmd_download_file(uint64_t req, const json& cmd) {
     Bytes room_id = need_b64(cmd, "room_id", 16);
     Bytes event_id = need_b64(cmd, "event_id", 16);
@@ -1906,75 +1966,140 @@ void Session::cmd_download_file(uint64_t req, const json& cmd) {
     down->key = *key;
     down->nonce = *nonce;
     down->size = content.value("size", uint64_t{0});
+    down->piece = content.value("piece", uint64_t{0});
     down->name = content.value("name", std::string{"file"});
     down->mime = content.value("mime", std::string{});
-    std::string dir = cmd.value("dir", engine_.config_.vault_dir + "/files");
-    down->path = dir + "/" + hex_of(event_id).substr(12) + "-" + safe_file_name(down->name);
-    std::error_code ec;
-    if (std::filesystem::file_size(down->path, ec) == down->size && !ec) {
-        ok(req, {{"path", down->path}, {"name", down->name}, {"mime", down->mime}, {"cached", true}});
+    if (down->piece != 0 && down->piece != kFilePiece) {
+        fail(req, "bad_file", "this file was sent in a form this version cannot open; update Corded");
         return;
     }
-    if (down->size > kMaxFileBytes) {
+    // The older form is one sealed piece and has to fit in memory to be checked.
+    if (down->piece == 0 && down->size > kMaxFileBytes) {
         fail(req, "invalid_argument", "that file is too large to fetch");
+        return;
+    }
+    down->sealed = down->piece == 0 ? down->size + kSealBytes : sealed_size(down->size);
+    std::string stem = hex_of(event_id).substr(12);
+    std::string kept_dir = engine_.config_.vault_dir + "/files";
+    down->kept = kept_dir + "/" + stem + ".enc";
+    std::string dir = cmd.value("dir", engine_.config_.vault_dir + "/view");
+    down->path = dir + "/" + stem + "-" + safe_file_name(down->name);
+    std::error_code ec;
+    std::filesystem::create_directories(kept_dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    if (std::filesystem::file_size(down->kept, ec) == down->sealed && !ec) {
+        open_file(req, down, true);
         return;
     }
     if (conn_ != Conn::Live) {
         fail(req, "offline", "a file can only be fetched while connected");
         return;
     }
-    std::filesystem::create_directories(dir, ec);
+    down->out.open(down->kept + ".part", std::ios::binary | std::ios::trunc);
+    if (!down->out) {
+        fail(req, "io_error", "the file could not be saved on this device");
+        return;
+    }
     download_next(req, std::move(down));
 }
 
 void Session::download_next(uint64_t req, std::shared_ptr<Download> down) {
     wire::GetBlobT q;
     q.blob_id = down->blob_id;
-    q.offset = down->cipher.size();
+    q.offset = down->received;
     request(std::move(q), [this, req, down](wire::FrameT& r) {
         auto* piece = r.body.AsBlob();
         // What the server says about the size is checked against what the
         // sender said inside the encrypted message.
-        if (!piece || piece->data.empty() || piece->offset != down->cipher.size() ||
-            piece->total > down->size + 1024 || down->cipher.size() + piece->data.size() > piece->total) {
+        if (!piece || piece->data.empty() || piece->offset != down->received || piece->total != down->sealed ||
+            down->received + piece->data.size() > down->sealed) {
             auto* e = r.body.AsError();
-            fail(req, e && e->code == kDisconnected ? "offline" : "not_found",
+            down->out.close();
+            std::error_code ec;
+            std::filesystem::remove(down->kept + ".part", ec);
+            fail(req, e && e->code == kDisconnected ? "offline" : e ? "not_found" : "bad_file",
                  e ? e->message : "the server sent something that is not this file");
             return;
         }
-        down->cipher.insert(down->cipher.end(), piece->data.begin(), piece->data.end());
-        emit({{"event", "file_progress"}, {"request_id", req}, {"done", down->cipher.size()}, {"total", piece->total}});
-        if (down->cipher.size() < piece->total) {
+        down->out.write(reinterpret_cast<const char*>(piece->data.data()),
+                        static_cast<std::streamsize>(piece->data.size()));
+        down->received += piece->data.size();
+        emit({{"event", "file_progress"}, {"request_id", req}, {"done", down->received}, {"total", down->sealed}});
+        if (down->received < down->sealed) {
             download_next(req, down);
             return;
         }
-        Key32 key{};
-        std::copy(down->key.begin(), down->key.end(), key.begin());
-        auto plain = crypto::aead_decrypt(key, down->nonce, down->cipher, down->blob_id);
-        sodium_memzero(key.data(), key.size());
-        if (!plain || plain->size() != down->size) {
-            fail(req, "bad_file", "the file did not pass its check; it was damaged or swapped");
-            return;
-        }
-        // Written beside its final place and moved, so a half-written file is never taken for whole.
-        std::string partial = down->path + ".part";
-        {
-            std::ofstream out(partial, std::ios::binary | std::ios::trunc);
-            out.write(reinterpret_cast<const char*>(plain->data()), static_cast<std::streamsize>(plain->size()));
-            out.close();
-            if (!out) {
-                fail(req, "io_error", "the file could not be saved on this device");
-                return;
-            }
-        }
+        down->out.close();
         std::error_code ec;
-        std::filesystem::rename(partial, down->path, ec);
-        if (ec) {
+        std::filesystem::rename(down->kept + ".part", down->kept, ec);
+        if (!down->out || ec) {
             fail(req, "io_error", "the file could not be saved on this device");
             return;
         }
-        ok(req, {{"path", down->path}, {"name", down->name}, {"mime", down->mime}, {"cached", false}});
+        open_file(req, down, false);
     });
+}
+
+// Checks the kept, encrypted file piece by piece and writes it out readable.
+// Anything that does not pass is thrown away, kept copy included, so the next
+// try fetches it afresh.
+void Session::open_file(uint64_t req, std::shared_ptr<Download> down, bool cached) {
+    auto spoiled = [&](const char* why) {
+        std::error_code ec;
+        std::filesystem::remove(down->kept, ec);
+        std::filesystem::remove(down->path + ".part", ec);
+        fail(req, "bad_file", why);
+    };
+    std::ifstream in(down->kept, std::ios::binary);
+    std::ofstream out(down->path + ".part", std::ios::binary | std::ios::trunc);
+    if (!in || !out) {
+        fail(req, "io_error", "the file could not be opened on this device");
+        return;
+    }
+    Key32 key = as_key(down->key);
+    uint64_t written = 0;
+    if (down->piece == 0) {
+        // The older form: the whole file sealed as one.
+        Bytes sealed((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        auto plain = crypto::aead_decrypt(key, down->nonce, sealed, down->blob_id);
+        if (!plain || plain->size() != down->size) {
+            sodium_memzero(key.data(), key.size());
+            spoiled("the file did not pass its check; it was damaged or swapped");
+            return;
+        }
+        out.write(reinterpret_cast<const char*>(plain->data()), static_cast<std::streamsize>(plain->size()));
+        written = plain->size();
+        sodium_memzero(plain->data(), plain->size());
+    } else {
+        Bytes sealed(kBlobChunkBytes);
+        for (uint64_t index = 0; written < down->size; ++index) {
+            size_t want = static_cast<size_t>(std::min<uint64_t>(kFilePiece, down->size - written)) + kSealBytes;
+            in.read(reinterpret_cast<char*>(sealed.data()), static_cast<std::streamsize>(want));
+            bool last = written + (want - kSealBytes) >= down->size;
+            auto plain = static_cast<size_t>(in.gcount()) == want
+                             ? crypto::aead_decrypt(key, piece_nonce(down->nonce, index), ByteView(sealed.data(), want),
+                                                    piece_label(down->blob_id, index, last))
+                             : std::nullopt;
+            if (!plain) {
+                sodium_memzero(key.data(), key.size());
+                out.close();
+                spoiled("the file did not pass its check; it was damaged, cut short or swapped");
+                return;
+            }
+            out.write(reinterpret_cast<const char*>(plain->data()), static_cast<std::streamsize>(plain->size()));
+            written += plain->size();
+            sodium_memzero(plain->data(), plain->size());
+        }
+    }
+    sodium_memzero(key.data(), key.size());
+    out.close();
+    std::error_code ec;
+    std::filesystem::rename(down->path + ".part", down->path, ec);
+    if (!out || ec) {
+        fail(req, "io_error", "the file could not be opened on this device");
+        return;
+    }
+    ok(req, {{"path", down->path}, {"name", down->name}, {"mime", down->mime}, {"cached", cached}});
 }
 
 // ---------------------------------------------------------------- network

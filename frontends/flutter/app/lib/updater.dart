@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:corded_dart/corded_dart.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -135,6 +136,23 @@ Future<String> downloadUpdate(CordedEngine engine, Update update,
   return file.path;
 }
 
+/// Where the Windows update script writes what it did.
+String updateLogPath() => '${Directory.systemTemp.path}${Platform.pathSeparator}corded-update.log';
+
+/// What went wrong the last time an update was put in place, or null if
+/// nothing did (or nothing was tried). Read once, at start.
+String? lastUpdateFailure() {
+  try {
+    final log = File(updateLogPath());
+    if (!log.existsSync()) return null;
+    final text = log.readAsStringSync();
+    log.deleteSync();
+    return RegExp(r'FAILED: (.*)').firstMatch(text)?.group(1)?.trim();
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Puts a checked download in place. On a phone this opens Android's own
 /// installer and returns. On a desktop it replaces the app's files, starts the
 /// new app and ends this one, so it does not return.
@@ -178,27 +196,40 @@ Future<void> installUpdate(String path) async {
     exit(0);
   }
   if (Platform.isWindows) {
+    // Unpacked and swapped by PowerShell, run without a window.
+    const quiet = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden'];
+    String quoted(String text) => "'${text.replaceAll("'", "''")}'";
     final expand = await Process.run('powershell', [
-      '-NoProfile',
+      ...quiet,
       '-Command',
-      "Expand-Archive -LiteralPath '${path.replaceAll("'", "''")}' -DestinationPath '${unpacked.path.replaceAll("'", "''")}' -Force"
+      'Expand-Archive -LiteralPath ${quoted(path)} -DestinationPath ${quoted(unpacked.path)} -Force'
     ]);
     final fresh = unpacked.listSync().whereType<Directory>().firstOrNull;
     if (expand.exitCode != 0 || fresh == null || !File('${fresh.path}\\corded_app.exe').existsSync()) {
-      throw CordedError('update', 'The update could not be unpacked.');
+      throw CordedError('update', 'The update could not be unpacked. ${'${expand.stderr}'.trim()}'.trim());
     }
-    // Windows will not replace a program while it runs: a small script waits
-    // for this app to end, copies the new files over the old, and starts it.
-    final script = File('${unpacked.path}\\apply-update.cmd');
-    script.writeAsStringSync([
-      '@echo off',
-      ':wait',
-      'tasklist /FI "PID eq $pid" 2>nul | find "$pid" >nul && (ping -n 2 127.0.0.1 >nul & goto wait)',
-      'robocopy "${fresh.path}" "${home.path}" /E /NFL /NDL /NJH /NJS /NP >nul',
-      'start "" "${program.path}"',
-      '',
-    ].join('\r\n'));
-    await Process.start('cmd', ['/c', script.path], mode: ProcessStartMode.detached);
+    // Windows will not replace a program while it runs: a script waits for
+    // this app to end, copies the new files over the old, and starts it again.
+    final script = File('${File(path).parent.path}\\apply-update.ps1');
+    script.writeAsStringSync(await rootBundle.loadString('assets/apply-update.ps1'));
+    await Process.start(
+        'powershell',
+        [
+          ...quiet,
+          '-File',
+          script.path,
+          '-ProcessId',
+          '$pid',
+          '-Source',
+          fresh.path,
+          '-Target',
+          home.path,
+          '-Start',
+          program.path,
+          '-Log',
+          updateLogPath(),
+        ],
+        mode: ProcessStartMode.detached);
     exit(0);
   }
   throw CordedError('update', 'This kind of device cannot update itself yet.');

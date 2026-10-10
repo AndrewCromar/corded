@@ -319,7 +319,22 @@ class AppState extends ChangeNotifier {
 
   /// Tells the background task whether someone is looking at the app, and the
   /// core too, so that others see this person as online or away.
+  /// Readable copies of files exist only while they are being looked at.
+  /// This removes the ones handed to other apps (a video player, a PDF
+  /// reader) and has the core empty its own view folder.
+  Future<void> wipeOpenedFiles() async {
+    try {
+      final handed = Directory('${(await getTemporaryDirectory()).path}/files');
+      if (handed.existsSync()) handed.deleteSync(recursive: true);
+    } catch (_) {
+      // Nothing there, or still held open by the app showing it.
+    }
+    if (ready) engine.command({'cmd': 'wipe_views'}).catchError((_) => <String, dynamic>{});
+  }
+
   void setOnScreen(bool onScreen) {
+    // Back from whatever app a file was opened in: its readable copy can go.
+    if (onScreen && !_onScreen) wipeOpenedFiles();
     _onScreen = onScreen;
     Background.tell(onScreen ? 'on_screen' : 'off_screen');
     if (ready && store.vaultState == 'unlocked') {
@@ -439,8 +454,17 @@ class AppState extends ChangeNotifier {
       if (serviceRunning) {
         Future<void>.delayed(const Duration(seconds: 1), _shareNotificationOptions);
       }
+      unawaited(wipeOpenedFiles()); // anything readable left by an earlier run
       if (_devBuild) unawaited(_devDrive());
       unawaited(_lookForUpdate(prefs));
+      // An update that did not go in last time says so now, in plain words.
+      final failure = lastUpdateFailure();
+      if (failure != null) {
+        Future<void>.delayed(const Duration(seconds: 3), () {
+          onBanner?.call('The update was not installed',
+              '$failure. Corded is unchanged; try again from Settings.', '', null);
+        });
+      }
       fingerprintAvailable = await Fingerprint.available();
       fingerprintUnlock = fingerprintAvailable && (prefs.getBool('fingerprint_unlock') ?? false);
       // Chosen earlier, but the service is gone (the phone restarted, say):
@@ -470,6 +494,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> lock() async {
+    await wipeOpenedFiles();
     await engine.command({'cmd': 'lock'});
     store.rooms.clear();
     store.servers.clear();

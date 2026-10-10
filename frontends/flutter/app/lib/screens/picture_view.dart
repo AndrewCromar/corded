@@ -19,10 +19,27 @@ class PictureScreen extends StatefulWidget {
 class _PictureScreenState extends State<PictureScreen> {
   late final Future<String> _path = _fetch();
 
+  String? _opened;
+
+  // The photo is kept on this device only in its encrypted form. Looking at
+  // it makes a readable copy, which goes again when this screen closes.
   Future<String> _fetch() async {
     final r = await widget.state.engine
         .command({'cmd': 'download_file', 'room_id': widget.message.roomId, 'event_id': widget.message.id});
-    return r['path'] as String;
+    return _opened = r['path'] as String;
+  }
+
+  @override
+  void dispose() {
+    final path = _opened;
+    if (path != null) {
+      try {
+        File(path).deleteSync();
+      } catch (_) {
+        // Already gone; the core clears the folder on lock in any case.
+      }
+    }
+    super.dispose();
   }
 
   @override
