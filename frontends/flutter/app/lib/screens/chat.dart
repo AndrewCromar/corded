@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import 'common.dart';
 import 'linked_text.dart';
+import 'swipe_to_reply.dart';
 
 /// One conversation: its messages and the box for writing a new one. With
 /// [threadRoot] it shows one thread instead: the message that started it and
@@ -239,9 +240,20 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _bubble(Message m, List<Message> all) {
+    final gone = m.status == 'redacted' || m.status == 'undecryptable';
+    return SwipeToReply(
+      enabled: !gone && _thread == null,
+      onReply: () => setState(() {
+        _replyingTo = m;
+        _editing = null;
+      }),
+      child: _bubbleBody(m, all, gone),
+    );
+  }
+
+  Widget _bubbleBody(Message m, List<Message> all, bool gone) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final gone = m.status == 'redacted' || m.status == 'undecryptable';
     final quoted = m.replyTo == null ? null : all.where((o) => o.id == m.replyTo).firstOrNull;
     final reactions = _store.reactions(_room, m.id);
     final readers = _store.readBy(_room, m.id);
@@ -252,7 +264,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (m.mine && m.status == 'pending') 'sending',
       if (m.mine && m.status == 'failed') 'not sent',
     ].join(' · ');
-
     return Align(
       alignment: m.mine ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -263,18 +274,6 @@ class _ChatScreenState extends State<ChatScreen> {
             GestureDetector(
               onLongPress: gone ? null : () => _showActions(m),
               onDoubleTap: gone ? null : () => _react(m, widget.state.reactionBar.first),
-              // A flick to the right starts a reply.
-              onHorizontalDragEnd: gone || _thread != null
-                  ? null
-                  : (d) {
-                      if ((d.primaryVelocity ?? 0) > 250) {
-                        setState(() {
-                          _replyingTo = m;
-                          _editing = null;
-                        });
-                      }
-                    },
-              onSecondaryTap: gone ? null : () => _showActions(m),
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
