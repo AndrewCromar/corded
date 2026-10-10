@@ -686,11 +686,11 @@ TEST_CASE("people can be added to a group and can leave it") {
     for (const auto& e : carol.seen)
         if (e["event"] == "event_received") REQUIRE(e["data"]["content"].value("body", "") != "after carol left");
 
-    // Two-person chats cannot gain members or be left.
+    // A two-person chat cannot gain members. Either person can close it.
     json dm = alice.cmd({{"cmd", "start_chat"}, {"username", "bob"}});
     std::string dm_room = dm["data"]["room"]["room_id"];
     REQUIRE(alice.cmd({{"cmd", "add_member"}, {"room_id", dm_room}, {"username", "dave"}})["ok"] == false);
-    REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", dm_room}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "leave_room"}, {"room_id", dm_room}})["ok"] == true);
 }
 
 TEST_CASE("a server is one community with an owner and roles and channels") {
