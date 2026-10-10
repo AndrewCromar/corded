@@ -838,6 +838,18 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "@everyone"}, {"deny", {"view_channel"}}})["ok"] == true);
     REQUIRE(alice.cmd({{"cmd", "set_channel_access"}, {"room_id", staff_room}, {"role", "staff"}, {"allow", {"view_channel"}}})["ok"] == true);
     carol.have("staff-room hidden", room_gone(staff_room));
+    // Those who manage channels can read back what a channel's rules are.
+    {
+        json access = alice.cmd({{"cmd", "channel_access"}, {"room_id", staff_room}});
+        REQUIRE(access["ok"] == true);
+        std::map<std::string, json> by_role;
+        for (const auto& entry : access["data"]["access"]) by_role[entry["role"]] = entry;
+        REQUIRE(by_role.size() == 2);
+        REQUIRE(by_role["@everyone"]["deny"] == json::array({"view_channel"}));
+        REQUIRE(by_role["@everyone"]["allow"].empty());
+        REQUIRE(by_role["staff"]["allow"] == json::array({"view_channel"}));
+        REQUIRE(carol.cmd({{"cmd", "channel_access"}, {"room_id", staff_room}})["ok"] == false);
+    }
     // Bob loses it for a moment between the two changes, then gets it back.
     auto eventually = [](const std::function<bool()>& check) {
         for (int i = 0; i < 100; ++i) {

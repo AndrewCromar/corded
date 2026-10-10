@@ -423,6 +423,18 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         }
         return (bits & ~deny) | allow;
     }
+    struct OverrideRow {
+        uint32_t role_id = 0;
+        uint64_t allow = 0, deny = 0;
+    };
+    std::vector<OverrideRow> overrides(ByteView room_id) {
+        std::vector<OverrideRow> out;
+        auto st = db_.prepare("SELECT role_id, allow, deny FROM channel_overrides WHERE room_id = ?");
+        st.bind(1, room_id);
+        while (st.step()) out.push_back({static_cast<uint32_t>(st.u64(0)), st.u64(1), st.u64(2)});
+        return out;
+    }
+
     void set_override(ByteView room_id, uint32_t role_id, uint64_t allow, uint64_t deny) {
         if (allow == 0 && deny == 0) {
             auto st = db_.prepare("DELETE FROM channel_overrides WHERE room_id = ? AND role_id = ?");

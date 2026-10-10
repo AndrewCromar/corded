@@ -456,6 +456,7 @@ public:
                 case wire::FrameBody_UpdateChannel: on_update_channel(*c, rid, *f.body.AsUpdateChannel()); break;
                 case wire::FrameBody_DeleteChannel: on_delete_channel(*c, rid, *f.body.AsDeleteChannel()); break;
                 case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
+                case wire::FrameBody_GetOverrides: on_get_overrides(*c, rid, *f.body.AsGetOverrides()); break;
                 case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
                 case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
                 case wire::FrameBody_HistoryRequest: on_history_request(*c, rid, *f.body.AsHistoryRequest()); break;
@@ -931,6 +932,20 @@ private:
         storage_.set_override(q.room_id, q.role_id, q.allow, q.deny);
         broadcast_state();
         c.reply(rid, wire::OkT{});
+    }
+
+    void on_get_overrides(Conn& c, uint32_t rid, const wire::GetOverridesT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        wire::OverridesT out;
+        out.room_id = q.room_id;
+        for (const auto& row : storage_.overrides(q.room_id)) {
+            auto entry = std::make_unique<wire::OverrideT>();
+            entry->role_id = row.role_id;
+            entry->allow = row.allow;
+            entry->deny = row.deny;
+            out.entries.push_back(std::move(entry));
+        }
+        c.reply(rid, std::move(out));
     }
 
     void on_create_invite(Conn& c, uint32_t rid, const wire::NewInviteT& q) {

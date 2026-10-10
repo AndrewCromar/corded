@@ -98,6 +98,10 @@ table DeleteChannel { room_id: [ubyte]; }
 // Per-channel exception for one role: bits in `allow` are granted there, bits in
 // `deny` are taken away. Both zero removes the exception.
 table SetOverride { room_id: [ubyte]; role_id: uint32; allow: uint64; deny: uint64; }
+// The exceptions a channel has, for those who manage channels.
+table Override { role_id: uint32; allow: uint64; deny: uint64; }
+table GetOverrides { room_id: [ubyte]; }
+table Overrides { room_id: [ubyte]; entries: [Override]; }
 // Invites: a code that lets someone create an account on an invite-only server.
 // max_uses 0 means unlimited; expires_in_s 0 means it never expires.
 table NewInvite { max_uses: uint32; expires_in_s: uint64; }
@@ -139,7 +143,8 @@ union FrameBody {
   HistoryRequest, HistoryWanted,
   GetSettings, Settings, SetSetting, Restart, GetStatus, Status, Notice,
   ListDevices, DeviceList, DevicesChanged,
-  RemoveAccount, SetNickname, Ephemeral
+  RemoveAccount, SetNickname, Ephemeral,
+  GetOverrides, Overrides
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

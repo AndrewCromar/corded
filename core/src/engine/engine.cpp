@@ -693,7 +693,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
         } else if (name == "server_info" || name == "member_list" || name == "create_role" ||
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
-                   name == "set_channel_access" || name == "kick" || name == "ban_user" ||
+                   name == "set_channel_access" || name == "channel_access" || name == "kick" ||
+                   name == "ban_user" ||
                    name == "remove_account" || name == "set_nickname" ||
                    name == "create_invite" || name == "revoke_invite" || name == "get_settings" ||
                    name == "set_setting" || name == "restart_server" || name == "server_status") {
@@ -1027,6 +1028,34 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         q.allow = permission_bits(cmd.value("allow", json::array()));
         q.deny = permission_bits(cmd.value("deny", json::array()));
         simple_request(req, std::move(q));
+    } else if (name == "channel_access") {
+        // The exceptions a channel has, role by role.
+        wire::GetOverridesT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        Bytes room_id = q.room_id;
+        request(std::move(q), [this, req, room_id](wire::FrameT& r) {
+            auto* list = r.body.AsOverrides();
+            if (!list) {
+                auto* e = r.body.AsError();
+                // A server from before this existed answers "unexpected frame".
+                fail(req, "refused",
+                     e && e->message != "unexpected frame" ? e->message
+                                                           : "this server is too old to list channel access; update it");
+                return;
+            }
+            json access = json::array();
+            for (const auto& entry : list->entries) {
+                if (!entry) continue;
+                std::string role_name;
+                for (const auto& role : roles_)
+                    if (role.id == entry->role_id) role_name = role.name;
+                if (role_name.empty()) continue;
+                access.push_back({{"role", role_name},
+                                  {"allow", perm::to_names(entry->allow)},
+                                  {"deny", perm::to_names(entry->deny)}});
+            }
+            ok(req, {{"room_id", b64(room_id)}, {"access", std::move(access)}});
+        });
     } else if (name == "create_invite") {
         wire::NewInviteT q;
         q.max_uses = cmd.value("max_uses", 0u);
