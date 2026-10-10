@@ -230,6 +230,11 @@ Future<void> installUpdate(String path) async {
           updateLogPath(),
         ],
         mode: ProcessStartMode.detached);
+    // The app has to be gone for its files to be replaced. On Windows an
+    // ordinary exit can leave the window standing (the first version of this
+    // did, and the update waited on an app that never left), so the process
+    // is ended outright; the vault is a database that is safe to stop this way.
+    Process.killPid(pid, ProcessSignal.sigkill);
     exit(0);
   }
   throw CordedError('update', 'This kind of device cannot update itself yet.');
