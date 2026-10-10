@@ -88,7 +88,7 @@ class _EventReader extends TaskHandler {
     _engine = await FlutterForegroundTask.getData<int>(key: _engineKey) ?? 0;
     try {
       await _notifications.initialize(
-          const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+          const InitializationSettings(android: AndroidInitializationSettings('@drawable/ic_stat_corded')));
       _ready = true;
     } catch (_) {
       // Without it the connection is still kept; only the notices are missing.
@@ -280,7 +280,7 @@ class Background {
     try {
       final plugin = FlutterLocalNotificationsPlugin();
       await plugin.initialize(
-        const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+        const InitializationSettings(android: AndroidInitializationSettings('@drawable/ic_stat_corded')),
         onDidReceiveNotificationResponse: (response) => handle(response.payload),
       );
       final launch = await plugin.getNotificationAppLaunchDetails();

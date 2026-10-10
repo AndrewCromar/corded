@@ -167,6 +167,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {});
   }
 
+  static const _iconChannel = MethodChannel('org.corded.app/icon');
+  static const _iconColours = {
+    'indigo': Color(0xFF384379),
+    'forest': Color(0xFF1E3B2A),
+    'black': Color(0xFF151518),
+    'plum': Color(0xFF5B2A5E),
+    'teal': Color(0xFF124E55),
+  };
+
+  // The app carries one launcher entry per colour; this switches which is on.
+  Future<void> _chooseIcon() async {
+    final messenger = ScaffoldMessenger.of(context);
+    String current = 'indigo';
+    try {
+      current = await _iconChannel.invokeMethod<String>('get') ?? current;
+    } catch (_) {
+      // Only Android can change its icon; elsewhere there is nothing to pick.
+      messenger.showSnackBar(const SnackBar(content: Text('The icon cannot be changed on this device.')));
+      return;
+    }
+    if (!mounted) return;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(title: const Text('App icon'), children: [
+        for (final e in _iconColours.entries)
+          ListTile(
+            leading: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: e.value, borderRadius: BorderRadius.circular(9)),
+            ),
+            title: Text(e.key[0].toUpperCase() + e.key.substring(1)),
+            trailing: e.key == current ? const Icon(Icons.check) : null,
+            onTap: () => Navigator.pop(context, e.key),
+          ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
+          child: Text('Your home screen may take a moment to show the change, and a shortcut you placed '
+              'there yourself may need to be put back.'),
+        ),
+      ]),
+    );
+    if (chosen == null || chosen == current) return;
+    try {
+      await _iconChannel.invokeMethod<String>('set', chosen);
+      messenger.showSnackBar(const SnackBar(content: Text('App icon changed.')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The icon could not be changed.')));
+    }
+  }
+
   Future<void> _reactionBar() async {
     final controller = TextEditingController(text: widget.state.reactionBar.join(' '));
     final text = await showDialog<String>(
@@ -311,6 +362,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (mounted) setState(() {});
             },
           ),
+        ListTile(
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('App icon'),
+          subtitle: const Text('The colour of the icon on your home screen'),
+          onTap: _chooseIcon,
+        ),
         ListTile(
           leading: const Icon(Icons.add_reaction_outlined),
           title: const Text('Quick reactions'),
