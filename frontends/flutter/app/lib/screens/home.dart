@@ -204,30 +204,6 @@ class HomeScreen extends StatelessWidget {
                   state.selectServer(s.id);
                   Navigator.pop(context);
                 },
-                trailing: IconButton(
-                  tooltip: 'Leave this server',
-                  icon: const Icon(Icons.logout),
-                  onPressed: () async {
-                    final leave = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: Text('Leave ${s.name.isEmpty ? s.address : s.name}?'),
-                        content: const Text('The server and its chats are removed from this device. '
-                            'Your account stays on the server, so you can join again later as the same person.'),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                          FilledButton(
-                              onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
-                        ],
-                      ),
-                    );
-                    if (leave != true || !context.mounted) return;
-                    Navigator.pop(context);
-                    await attempt(
-                        context, () => state.engine.command({'cmd': 'forget_server', 'server_id': s.id}));
-                  },
-                ),
               ),
             const Divider(),
             ListTile(

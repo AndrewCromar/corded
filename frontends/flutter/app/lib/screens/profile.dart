@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
-import '../picture.dart';
 import 'chat.dart';
+import 'crop.dart';
 import 'common.dart';
 import 'linked_text.dart';
 import 'presence.dart';
@@ -188,8 +188,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final file =
           await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, maxHeight: 1024);
       if (file == null) return;
-      final small = shrinkToProfilePicture(await file.readAsBytes());
-      if (small == null) {
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      final small = await cropPicture(context, bytes);
+      if (small == null) return;
+      if (small.isEmpty) {
         messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
         return;
       }

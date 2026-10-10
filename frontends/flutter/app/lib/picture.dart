@@ -7,10 +7,24 @@ import 'package:image/image.dart' as img;
 
 /// A square JPEG, 128 pixels a side, as base64. Null if the bytes are not a
 /// picture this app can read.
-String? shrinkToProfilePicture(Uint8List bytes) {
-  final decoded = img.decodeImage(bytes);
+String? shrinkToProfilePicture(Uint8List bytes) =>
+    cropToProfilePicture((bytes: bytes, left: 0, top: 0, side: 0));
+
+/// The same, from the square the person chose: [left] and [top] are where it
+/// starts and [side] how wide it is, each as a share of the picture's width
+/// (top as a share of its height). A side of 0 means the middle of the picture.
+String? cropToProfilePicture(({Uint8List bytes, double left, double top, double side}) job) {
+  final decoded = img.decodeImage(job.bytes);
   if (decoded == null) return null;
-  final upright = img.bakeOrientation(decoded);
+  var upright = img.bakeOrientation(decoded);
+  if (job.side > 0) {
+    final side = (job.side * upright.width)
+        .round()
+        .clamp(1, upright.width < upright.height ? upright.width : upright.height);
+    final x = (job.left * upright.width).round().clamp(0, upright.width - side);
+    final y = (job.top * upright.height).round().clamp(0, upright.height - side);
+    upright = img.copyCrop(upright, x: x, y: y, width: side, height: side);
+  }
   final square = img.copyResizeCropSquare(upright, size: 128);
   // Lower the quality until it is comfortably small.
   for (final quality in [85, 70, 55, 40]) {

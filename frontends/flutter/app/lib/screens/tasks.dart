@@ -2,6 +2,7 @@ import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import 'chat.dart';
 import 'common.dart';
 
 /// A task-list channel: rows to tick off. Anyone who may write in the channel
@@ -59,14 +60,45 @@ class _TasksViewState extends State<TasksView> {
             .command({'cmd': 'edit_event', 'room_id': widget.room.id, 'event_id': task.id, 'body': text}));
   }
 
+  CordedStore get _store => widget.state.store;
+
+  Future<void> _react(Message task, String key) =>
+      attempt(context, () => _store.toggleReaction(widget.room.id, task.id, key));
+
+  // A task is talked over in a thread that hangs off it.
+  void _discuss(Message task) => Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => ChatScreen(state: widget.state, roomId: widget.room.id, threadRoot: task.id)));
+
   void _actions(Message task) {
     final canManage = widget.state.server?.permissions.contains('manage_messages') ?? false;
-    if (!task.mine && !canManage) return;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            for (final key in widget.state.reactionBar)
+              Flexible(
+                child: IconButton(
+                  icon: Text(key, style: const TextStyle(fontSize: 24)),
+                  onPressed: () {
+                    Navigator.pop(sheet);
+                    _react(task, key);
+                  },
+                ),
+              ),
+          ]),
+          ListTile(
+            leading: const Icon(Icons.forum_outlined),
+            title: Text(
+                _store.threadCount(widget.room.id, task) > 0 ? 'Open the discussion' : 'Discuss this task'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _discuss(task);
+            },
+          ),
           if (task.mine)
             ListTile(
               leading: const Icon(Icons.edit_outlined),
@@ -76,17 +108,18 @@ class _TasksViewState extends State<TasksView> {
                 _reword(task);
               },
             ),
-          ListTile(
-            leading: const Icon(Icons.delete_outline),
-            title: const Text('Delete'),
-            onTap: () {
-              Navigator.pop(sheet);
-              attempt(
-                  context,
-                  () => widget.state.engine
-                      .command({'cmd': 'delete_event', 'room_id': widget.room.id, 'event_id': task.id}));
-            },
-          ),
+          if (task.mine || canManage)
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete'),
+              onTap: () {
+                Navigator.pop(sheet);
+                attempt(
+                    context,
+                    () => widget.state.engine
+                        .command({'cmd': 'delete_event', 'room_id': widget.room.id, 'event_id': task.id}));
+              },
+            ),
         ]),
       ),
     );
@@ -97,18 +130,45 @@ class _TasksViewState extends State<TasksView> {
     final note = task.taskDone
         ? (task.taskDoneBy.isEmpty ? 'Done' : 'Done by ${task.taskDoneBy}')
         : 'Added by ${task.mine ? 'you' : task.sender}';
+    final reactions = _store.reactions(widget.room.id, task.id);
+    final replies = _store.threadCount(widget.room.id, task);
     return InkWell(
       onLongPress: () => _actions(task),
-      child: CheckboxListTile(
-        value: task.taskDone,
-        controlAffinity: ListTileControlAffinity.leading,
-        enabled: !widget.room.archived,
-        onChanged: (v) => _tick(task, v ?? false),
-        title: Text(task.body,
-            style: task.taskDone
-                ? TextStyle(decoration: TextDecoration.lineThrough, color: theme.colorScheme.outline)
-                : null),
-        subtitle: Text(note, style: theme.textTheme.labelSmall),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Checkbox(
+              value: task.taskDone, onChanged: widget.room.archived ? null : (v) => _tick(task, v ?? false)),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 6),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(task.body,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                        decoration: task.taskDone ? TextDecoration.lineThrough : null,
+                        color: task.taskDone ? theme.colorScheme.outline : null)),
+                Text(note, style: theme.textTheme.labelSmall),
+                if (reactions.isNotEmpty)
+                  Wrap(spacing: 4, children: [
+                    for (final e in reactions.entries)
+                      FilterChip(
+                        visualDensity: VisualDensity.compact,
+                        showCheckmark: false,
+                        selected: _store.myReaction(widget.room.id, task.id, e.key) != null,
+                        label: Text('${e.key} ${e.value}'),
+                        onSelected: (_) => _react(task, e.key),
+                      ),
+                  ]),
+              ]),
+            ),
+          ),
+          // The discussion under a task, with how many messages it holds.
+          TextButton.icon(
+            onPressed: () => _discuss(task),
+            icon: Icon(replies > 0 ? Icons.forum : Icons.forum_outlined, size: 18),
+            label: Text(replies > 0 ? '$replies' : ''),
+          ),
+        ]),
       ),
     );
   }

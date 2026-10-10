@@ -4,9 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
-import '../picture.dart';
 import 'channel_access.dart';
 import 'common.dart';
+import 'crop.dart';
 import 'home.dart';
 import 'roles.dart';
 import 'scan.dart';
@@ -271,12 +271,15 @@ class _ServerScreenState extends State<ServerScreen> {
       final file =
           await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, maxHeight: 1024);
       if (file == null) return;
-      small = shrinkToProfilePicture(await file.readAsBytes());
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      small = await cropPicture(context, bytes);
+      if (small == null) return;
     } catch (_) {
       messenger.showSnackBar(const SnackBar(content: Text('The picture could not be opened.')));
       return;
     }
-    if (small == null) {
+    if (small.isEmpty) {
       messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
       return;
     }
