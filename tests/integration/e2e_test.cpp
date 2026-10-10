@@ -1622,6 +1622,62 @@ TEST_CASE("unread counts and loading older messages a page at a time") {
     REQUIRE(bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"before", general}})["ok"] == false);
 }
 
+TEST_CASE("presence shows who is online or away or not to be disturbed") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+    }
+    std::string bob_id = bob.cmd({{"cmd", "status"}})["data"]["user_id"];
+    auto bob_is = [&](const std::string& status) {
+        return [&, status](const json& e) {
+            return e["event"] == "presence" && e["user_id"] == bob_id && e["status"] == status;
+        };
+    };
+    // Connected and in use: online. Alice is told without asking.
+    alice.have("bob online", bob_is("online"));
+    // Nobody at Bob's screen: away. Back again: online.
+    REQUIRE(bob.cmd({{"cmd", "set_active"}, {"active", false}})["ok"] == true);
+    alice.wait("bob away", bob_is("away"));
+    REQUIRE(bob.cmd({{"cmd", "set_active"}, {"active", true}})["ok"] == true);
+    alice.wait("bob online again", bob_is("online"));
+    // Do not disturb holds whether or not he is at the screen.
+    REQUIRE(bob.cmd({{"cmd", "set_presence"}, {"status", "dnd"}})["ok"] == true);
+    alice.wait("bob dnd", bob_is("dnd"));
+    REQUIRE(bob.cmd({{"cmd", "client_settings"}})["data"]["client_settings"]["presence"] == "dnd");
+    REQUIRE(bob.cmd({{"cmd", "set_active"}, {"active", false}})["ok"] == true);
+    // Invisible looks exactly like being gone.
+    REQUIRE(bob.cmd({{"cmd", "set_presence"}, {"status", "invisible"}})["ok"] == true);
+    alice.wait("bob offline", bob_is("offline"));
+    REQUIRE(bob.cmd({{"cmd", "set_presence"}, {"status", "nonsense"}})["ok"] == false);
+    // The member list carries it too.
+    auto status_of_bob = [&] {
+        json rooms = alice.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"])
+            for (const auto& m : r["members"])
+                if (m["username"] == "bob") return m["status"].get<std::string>();
+        return std::string("?");
+    };
+    REQUIRE(status_of_bob() == "offline");
+    REQUIRE(bob.cmd({{"cmd", "set_presence"}, {"status", "auto"}})["ok"] == true);
+    alice.wait("bob away, being idle", bob_is("away"));
+    REQUIRE(status_of_bob() == "away");
+    // Someone who joins later is told where everyone stands.
+    Client carol((tmp.path / "carol").string());
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.have("bob away, for carol", bob_is("away"));
+    // Dropping the connection is offline.
+    REQUIRE(bob.cmd({{"cmd", "disconnect"}})["ok"] == true);
+    alice.wait("bob gone", bob_is("offline"));
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();

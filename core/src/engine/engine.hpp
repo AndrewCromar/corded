@@ -52,6 +52,7 @@ public:
 
     void connect(uint64_t req, const json& cmd);  // applies invite, pin and starts
     void resume();                                 // reconnect after unlock
+    void send_presence();                          // tell the server how present this device is
     void disconnect(const std::string& reason);
     void run_command(uint64_t req, const std::string& name, const json& cmd);
     void emit_rooms();
@@ -184,6 +185,7 @@ private:
     std::set<Bytes> unreachable_;  // devices with no keys to start a session from
     std::map<Bytes, uint64_t> history_asked_;  // room -> when we asked, in ms
     std::map<Bytes, uint64_t> typing_sent_;    // room -> when we last said "typing"
+    std::map<Bytes, std::string> presence_;    // person -> online, away or dnd; absent means offline
 };
 
 class Engine {
@@ -229,6 +231,10 @@ private:
     Session* session(int64_t id);
     Session* session_for_room(ByteView room_id);
     Session* default_session();
+    // What this device tells servers: the person's choice (dnd, invisible), or
+    // with "auto" whether the frontend says someone is using it.
+    std::string effective_presence();
+    bool active_ = true;
 
     EngineConfig config_;
     asio::io_context io_;

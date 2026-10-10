@@ -119,6 +119,8 @@ public:
     Bytes tls_exporter;  // binds the sign-in signature to this TLS session
     Bytes device_id, user_id;
     std::string username;
+    std::string presence = "online";  // what this device says: online, away, dnd or invisible
+    bool presence_known = false;      // it has said so itself (older clients never do)
 
 private:
     void write_next() {
@@ -412,6 +414,7 @@ public:
         auto it = online_.find(c.device_id);
         if (it != online_.end() && it->second.lock().get() == &c) online_.erase(it);
         spdlog::info("{} disconnected", c.username);
+        announce_presence(c.user_id);
     }
 
     void handle(const std::shared_ptr<Conn>& c, wire::FrameT& f) {
@@ -1069,7 +1072,54 @@ private:
     }
 
     // Relayed to members who are online right now; nothing is written to disk.
+    // What others are told about a person: the most present of their
+    // connected devices. Invisible and not connected both read as offline.
+    std::string presence_of(const Bytes& user_id) {
+        int best = 0;  // 0 offline, 1 away, 2 online, 3 dnd
+        for (auto& [device, weak] : online_)
+            if (auto conn = weak.lock(); conn && conn->user_id == user_id) {
+                int rank = conn->presence == "dnd" ? 3 : conn->presence == "online" ? 2 : conn->presence == "away" ? 1 : 0;
+                best = std::max(best, rank);
+            }
+        static const char* names[] = {"offline", "away", "online", "dnd"};
+        return names[best];
+    }
+
+    // Tells everyone connected when a person's presence changed.
+    void announce_presence(const Bytes& user_id) {
+        std::string now = presence_of(user_id);
+        auto known = announced_.find(user_id);
+        if (known != announced_.end() ? known->second == now : now == "offline") return;
+        if (now == "offline") announced_.erase(user_id);
+        else announced_[user_id] = now;
+        wire::EphemeralT out;
+        out.kind = "presence:" + now;
+        out.sender_user = user_id;
+        for (auto& [device, weak] : online_)
+            if (auto conn = weak.lock()) conn->reply(0, wire::EphemeralT(out));
+    }
+
+    void on_presence(Conn& c, const std::string& status) {
+        if (status != "online" && status != "away" && status != "dnd" && status != "invisible") return;
+        c.presence = status;
+        if (!c.presence_known) {
+            // First word from this device: tell it where everyone else stands.
+            c.presence_known = true;
+            for (const auto& [user, state] : announced_) {
+                wire::EphemeralT out;
+                out.kind = "presence:" + state;
+                out.sender_user = user;
+                c.reply(0, std::move(out));
+            }
+        }
+        announce_presence(c.user_id);
+    }
+
     void on_ephemeral(Conn& c, const wire::EphemeralT& q) {
+        if (q.kind.rfind("presence:", 0) == 0) {
+            on_presence(c, q.kind.substr(9));
+            return;
+        }
         if (q.kind.empty() || q.kind.size() > 32 || !storage_.is_member(q.room_id, c.user_id)) return;
         wire::EphemeralT out;
         out.room_id = q.room_id;
@@ -1237,6 +1287,7 @@ private:
     bool restart_pending_ = false, restart_ = false;
     uint64_t started_at_ = now_ms();
     std::map<Bytes, std::weak_ptr<Conn>> online_;
+    std::map<Bytes, std::string> announced_;  // person -> the presence others were last told
 };
 
 asio::awaitable<void> Conn::run() {

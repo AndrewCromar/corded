@@ -22,6 +22,12 @@
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}
+ *   {"cmd":"set_presence","status":"auto"}   auto (online while in use, away when not), dnd
+ *       or invisible (others see you as offline). Kept across restarts.
+ *   {"cmd":"set_active","active":false}      the frontend says nobody is using it right now
+ *       Others' presence arrives as "presence" events {server_id, user_id, status} with
+ *       status online, away, dnd or offline; every member also carries "status".
+ *       "presence_reset" means everyone's is unknown again (a reconnect).
  *   {"cmd":"forget_server","server_id":2}   leave a server on this device: its chats are
  *       deleted here; the account on the server stays
  *   {"cmd":"disconnect"}

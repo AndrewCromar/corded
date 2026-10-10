@@ -152,6 +152,12 @@ Engine::json Engine::load_servers() {
 
 void Engine::save_servers(const json& list) { vault_.set_meta("servers", list.dump()); }
 
+std::string Engine::effective_presence() {
+    std::string choice = vault_.unlocked() ? vault_.meta("presence").value_or("auto") : "auto";
+    if (choice == "dnd" || choice == "invisible") return choice;
+    return active_ ? "online" : "away";
+}
+
 Session* Engine::session(int64_t id) {
     auto it = sessions_.find(id);
     return it == sessions_.end() ? nullptr : it->second.get();
@@ -235,6 +241,13 @@ void Session::connect(uint64_t req, const json& cmd) {
     ok(req, {{"server_id", id_}});
 }
 
+void Session::send_presence() {
+    if (conn_ != Conn::Live) return;
+    wire::EphemeralT eph;
+    eph.kind = "presence:" + engine_.effective_presence();
+    send_frame(make_frame(0, std::move(eph)));
+}
+
 void Session::set_conn(Conn c, const std::string& detail) {
     conn_ = c;
     json j = {{"event", "connection_state"}, {"state", corded::conn_name(static_cast<int>(c))}};
@@ -257,6 +270,7 @@ Session::json Session::member_json(const MemberRow& m) {
             {"nickname", m.nickname},
             {"display_name", m.display()},
             {"me", me},
+            {"status", presence_.count(m.user_id) ? presence_[m.user_id] : std::string("offline")},
             {"is_owner", m.is_owner},
             {"is_admin", m.is_admin},
             {"roles", std::move(roles)},
@@ -522,6 +536,28 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             ok(req, {{"rooms", std::move(rooms)}});
             return;
         }
+        if (name == "set_presence") {
+            // auto (online while in use, away otherwise), dnd or invisible.
+            std::string status = cmd.at("status").get<std::string>();
+            if (status != "auto" && status != "dnd" && status != "invisible") {
+                fail(req, "invalid_argument", "status is auto, dnd or invisible");
+                return;
+            }
+            vault_.set_meta("presence", status);
+            for (auto& [id, s] : sessions_) s->send_presence();
+            ok(req);
+            return;
+        }
+        if (name == "set_active") {
+            // The frontend says whether someone is using it right now.
+            bool active = cmd.value("active", true);
+            if (active != active_) {
+                active_ = active;
+                for (auto& [id, s] : sessions_) s->send_presence();
+            }
+            ok(req);
+            return;
+        }
         if (name == "forget_server") {
             // Leaves a server as far as this device is concerned: the
             // connection, the server's entry and its chats all go. The account
@@ -749,7 +785,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                       {{"username", vault_.username()},
                        {"user_id", b64(vault_.identity().user.pk)},
                        {"share_history", vault_.meta("share_history").value_or("1") != "0"},
-                       {"send_read_receipts", vault_.meta("send_receipts").value_or("1") != "0"}}}});
+                       {"send_read_receipts", vault_.meta("send_receipts").value_or("1") != "0"},
+                       {"presence", vault_.meta("presence").value_or("auto")}}}});
         } else if (name == "get_recovery_key") {
             // The secret that lets this person set up another device. Whoever
             // has it can become them, so frontends should show it with care.
@@ -1483,6 +1520,13 @@ void Session::on_frame(wire::FrameT& f) {
             break;
         case wire::FrameBody_Ephemeral: {
             const auto* eph = f.body.AsEphemeral();
+            if (eph->kind.rfind("presence:", 0) == 0) {
+                std::string status = eph->kind.substr(9);
+                if (status == "offline") presence_.erase(eph->sender_user);
+                else presence_[eph->sender_user] = status;
+                emit({{"event", "presence"}, {"user_id", b64(eph->sender_user)}, {"status", status}});
+                break;
+            }
             if (eph->kind != "typing") break;
             auto room = vault_.room(eph->room_id);
             if (!room || room->server_id != id_) break;
@@ -1582,6 +1626,10 @@ void Session::on_auth_ok(const wire::AuthOkT& auth) {
         request(std::move(sync), [this](wire::FrameT& done) {
             if (done.body.type != wire::FrameBody_SyncComplete) return;
             set_conn(Conn::Live);
+            // Whoever was online before is unknown now; the server says again.
+            presence_.clear();
+            emit({{"event", "presence_reset"}});
+            send_presence();
             pump_outbox();
         });
     });
