@@ -107,6 +107,12 @@ endif()
 if(NOT EXISTS "${CORDED_CORE_LIB}")
   message(FATAL_ERROR "The Corded core was not found at ${CORDED_CORE_LIB}. Build it first with ./build.sh, or set CORDED_CORE_LIB.")
 endif()
+# The icon, and the script that puts the app in the desktop's menu with it.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../../assets/logo/variants/corded-icon-indigo.png"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" RENAME corded.png COMPONENT Runtime)
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../packaging/install-desktop.sh"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" RENAME install.sh COMPONENT Runtime)
+
 # The file itself, not a link to it, under the one name the app looks for.
 get_filename_component(CORDED_CORE_LIB_REAL "${CORDED_CORE_LIB}" REALPATH)
 install(FILES "${CORDED_CORE_LIB_REAL}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" RENAME libcorded.so

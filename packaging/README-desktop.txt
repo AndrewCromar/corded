@@ -5,6 +5,8 @@ This folder is the whole app. Keep its files together.
 
   Windows:  double-click corded_app.exe
   Linux:    run ./corded_app   (needs GTK 3, which desktop Linux has)
+            run ./install.sh once to add Corded to your application menu
+            with its icon (it only writes inside your home folder)
 
 The first time, it asks for a name and a passphrase, then for the address of a
 server to join. To be the same person as on your phone or in the terminal

@@ -75,30 +75,33 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         autocorrect: false,
         decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
       ),
-      if (_existing && isPhone) ...[
+      if (_existing) ...[
         const SizedBox(height: 12),
-        OutlinedButton.icon(
-          icon: const Icon(Icons.qr_code_scanner),
-          label: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10), child: Text('Scan the code on your other phone')),
-          onPressed: () async {
-            final messenger = ScaffoldMessenger.of(context);
-            final text = await scanCode(context, title: 'Scan your recovery code');
-            if (text == null || !mounted) return;
-            final found = parseRecoveryCode(text.trim());
-            if (found == null) {
-              messenger.showSnackBar(const SnackBar(
-                  content: Text(
-                      'That is not a Corded recovery code. On the other phone: Settings > Recovery key.')));
-              return;
-            }
-            setState(() {
-              _username.text = found.username;
-              _recoveryKey.text = found.key;
-            });
-          },
-        ),
-        const SizedBox(height: 12),
+        // Only a phone has a camera to scan with; anywhere else the key is typed or pasted.
+        if (isPhone)
+          OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Text('Scan the code on your other phone')),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final text = await scanCode(context, title: 'Scan your recovery code');
+              if (text == null || !mounted) return;
+              final found = parseRecoveryCode(text.trim());
+              if (found == null) {
+                messenger.showSnackBar(const SnackBar(
+                    content: Text(
+                        'That is not a Corded recovery code. On the other phone: Settings > Recovery key.')));
+                return;
+              }
+              setState(() {
+                _username.text = found.username;
+                _recoveryKey.text = found.key;
+              });
+            },
+          ),
+        if (isPhone) const SizedBox(height: 12),
         TextField(
           controller: _recoveryKey,
           autocorrect: false,

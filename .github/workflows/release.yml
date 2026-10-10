@@ -121,7 +121,6 @@ jobs:
           mkdir -p "dist/${app}"
           cp -r frontends/flutter/app/build/linux/x64/release/bundle/. "dist/${app}/"
           cp packaging/README-desktop.txt "dist/${app}/README.txt"
-          cp assets/logo/variants/corded-icon-indigo.png "dist/${app}/corded.png"
           tar -C dist -czf "${app}.tar.gz" "${app}"
           echo "name=${app}" >> "$GITHUB_OUTPUT"
 
