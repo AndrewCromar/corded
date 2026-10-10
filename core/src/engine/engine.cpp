@@ -44,7 +44,8 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
-           type == "m.history.share" || type == "m.receipt" || type == "m.room.pin" || type == "m.profile";
+           type == "m.history.share" || type == "m.receipt" || type == "m.room.pin" || type == "m.profile" ||
+           type == "m.poll" || type == "m.poll.vote";
 }
 
 }  // namespace
