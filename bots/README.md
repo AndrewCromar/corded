@@ -49,7 +49,8 @@ When someone joins, the bot asks them once, in a direct chat, for their
 birthday. They answer there (`05-17`, `17 May`, `2004-05-17` to have their age
 shown) or put it in their profile; an answer in the chat wins. On the day, at
 `--at` by the clock of the machine the bot runs on, it wishes them in the
-direct chat and in `--channel` (`#general` if not given).
+direct chat and in `--channel` (`#general` if not given), where it mentions
+them by `@name` so that they are notified.
 
 In the direct chat it also understands `when`, `forget`, `no` (never ask
 again), `private` (no post in the channel) and `public`. In a channel,

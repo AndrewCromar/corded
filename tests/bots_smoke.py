@@ -164,13 +164,13 @@ def main():
                  among=carol_heard)
         wait_for("a wish in the direct chat", lambda m: m.direct and m.body == "🎂 Happy birthday, carol! 22 today.",
                  among=carol_heard)
-        wait_for("a wish in the channel", lambda item: item == ("birthdays", "🎂 Happy birthday, **carol**! (22 today.)"))
+        wait_for("a wish in the channel", lambda item: item == ("birthdays", "🎂 Happy birthday, @carol! (22 today.)"))
         print("ok  birthday bot: asks a new member, reads the date, wishes in the direct chat and in #general")
 
         # A birthday in the profile, without a year; and a bot that joins is not asked.
         dave, dave_heard, _ = person("dave")
         dave.request({"cmd": "set_profile", "birthday": "05-17"})
-        wait_for("a wish from the profile", lambda item: item == ("birthdays", "🎂 Happy birthday, **dave**!"))
+        wait_for("a wish from the profile", lambda item: item == ("birthdays", "🎂 Happy birthday, @dave!"))
         bot_process("command_bot.py", address, "latecomer", os.path.join(tmp, "latecomer"))
         alice.say("#general", "!birthdays")
         wait_for("the list", lambda item: item[0] == "birthdays" and "carol: 17 May (today)" in item[1]

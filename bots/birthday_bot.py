@@ -169,7 +169,8 @@ def main():
         age = age_on(birthday, day)
         bot.dm(member["username"], f"🎂 Happy birthday, {name_of(member)}!" + (f" {age} today." if age else ""))
         if not person.get("private"):
-            bot.say(channel, f"🎂 Happy birthday, **{name_of(member)}**!" + (f" ({age} today.)" if age else ""))
+            # By username with an @, so they are called to it as by any mention.
+            bot.say(channel, f"🎂 Happy birthday, @{member['username']}!" + (f" ({age} today.)" if age else ""))
 
     def wish():
         now = datetime.datetime.now()
