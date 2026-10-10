@@ -257,6 +257,21 @@ class Bot:
                     found[member.get("user_id", "")] = member
         return found
 
+    def may(self, user_id, permission="manage_bots"):
+        """Whether someone holds a permission through their roles. The
+        server's owner holds every one. "manage_bots" (Manage bots, in a
+        role's settings) is the one meant for this: the people a bot takes
+        its orders from. Asked of the server each time, so a role given a
+        moment ago counts."""
+        try:
+            members = self.request({"cmd": "member_list"})["members"]
+        except RuntimeError:
+            members = list(self.members().values())
+        for member in members:
+            if member.get("user_id") == user_id:
+                return bool(member.get("is_owner")) or permission in member.get("permissions", [])
+        return False
+
     def profile_of(self, user_id):
         """Someone's profile as this bot has received it ({} if it has not)."""
         if user_id not in self._profiles:

@@ -247,6 +247,56 @@ def main():
         print("ok  birthday bot: nobody wished or asked twice after a restart; old members asked only with "
               "--greet-existing; bots never")
 
+        # What only the owner and those with the Manage bots permission may tell it.
+        to_bot = {who: who.dm("birthdays") for who in (alice, carol, dave)}
+        said_to_carol = len(carol_heard)
+        carol.say(to_bot[carol], "list")
+        wait_for("a refusal", lambda m: "Only the server's owner and people with the **Manage bots**" in m.body,
+                 among=carol_heard[said_to_carol:] or carol_heard)
+        alice.say(to_bot[alice], "list")
+        wait_for("the owner's list", lambda item: "**Birthdays I know (3)**" in item[1]
+                 and "- **carol** (`carol`): 17 May; told me, wished in 2026" in item[1]
+                 and "- **dave** (`dave`): 17 May; from the profile, wished in 2026, private" in item[1]
+                 and "**No birthday yet:** alice (said no, asked)" in item[1] and "2004" not in item[1])
+        del heard[:]
+        alice.say(to_bot[alice], "reset wishes @carol")
+        wait_for("the reset", lambda item: "Done: **carol** can be wished again this year." in item[1])
+        wait_for("carol wished again", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @carol! (22 today.)"))
+        assert len([m for m in carol_heard if m.direct and "Happy birthday" in m.body]) == 2
+
+        made = alice.request({"cmd": "create_role", "name": "botkeeper", "permissions": ["manage_bots"]})
+        alice.request({"cmd": "grant_role", "username": "carol", "role": "botkeeper"})
+        assert carol.may(carol.me) or time.sleep(2) or carol.may(carol.me), f"the role did not arrive: {made}"
+        assert alice.may(alice.me) and not dave.may(dave.me)
+        carol.say(to_bot[carol], "set @erin 17 may")
+        wait_for("a date set by someone with the role", lambda m: "Done: **erin**'s birthday is **17 May**." in m.body,
+                 among=carol_heard)
+        wait_for("erin wished", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @erin!"))
+        carol.say(to_bot[carol], "help")
+        wait_for("help with the part for managers", lambda m: "**Because you manage bots here**" in m.body
+                 and "`reset wishes`" in m.body, among=carol_heard)
+        dave.say(to_bot[dave], "help")
+        said = wait_for("help without it", lambda m: "## 🎂 Birthday Bot" in m.body and "Wished in" in m.body,
+                        among=dave_heard[::-1])
+        assert "manage bots" not in said.body
+
+        del heard[:]
+        alice.say(to_bot[alice], "reset dave")
+        wait_for("everything about dave forgotten", lambda item: "forgotten everything about **dave**" in item[1])
+        wait_for("dave wished again, no longer privately",
+                 lambda item: item == ("birthdays", "🎂 **Happy birthday**, @dave!"))
+        alice.say(to_bot[alice], "ask everyone")
+        wait_for("the count", lambda item: "Done: I wrote to 1 person." in item[1])
+        assert len([m for m in dave_heard if "I see from your profile" in m.body]) == 2
+        alice.say(to_bot[alice], "reset asked")
+        wait_for("everyone unasked", lambda item: "people reset. I ask each of them when they next join" in item[1])
+        alice.say(to_bot[alice], "ask @alice")
+        wait_for("no respected", lambda item: "**alice** told me not to ask, so I won't." in item[1])
+        alice.say(to_bot[alice], "reset wishes @nobody")
+        wait_for("an unknown name", lambda item: "I don't know anyone called **nobody** here." in item[1])
+        print("ok  birthday bot: list, reset, set and ask for the owner and for a role with Manage bots; "
+              "refused to everyone else")
+
         # The rest of the kit.
         assert mentioned_names("hi @Sage, mail me a@b.c or @sage-2") == {"sage", "sage-2"}
         assert Message({"content": {"body": "hey @SAGE!"}}, me="sage").mentions_me

@@ -60,6 +60,18 @@ post in the channel) and `public`. In a channel, `!birthdays` lists the next
 few and `!help` says what the bot is for. Its messages use bold, lists and
 headings, which the apps draw as styling.
 
+The server's owner, and anyone with a role that has the **Manage bots**
+permission, can tell it more in a direct chat. Everyone else is refused.
+
+| | |
+|---|---|
+| `list` | Every birthday it knows (day and month), where each came from, and who it has asked. |
+| `reset wishes` | Let this year's wishes go out again; anyone whose birthday is today is wished at once. `reset wishes @name` for one person. |
+| `reset asked` | Let it ask people again. `reset asked @name` for one person. |
+| `reset @name` | Forget everything about one person. |
+| `set @name 05-17` | Set someone's birthday. |
+| `ask @name`, `ask everyone` | Send its question now. It leaves out those who said no and those who told it a date. |
+
 People who were on the server before the bot's first run are not asked, so
 that starting it does not send everyone a message at once; `--greet-existing`
 asks them too. Other bots are never asked. Someone born on 29 February is
@@ -112,6 +124,7 @@ name) and `direct` (it was said in a direct chat with the bot).
 | `bot.typing(room)` | Show "typing" for a few seconds while working. |
 | `bot.recall(event_id)` | A recent message by its id: what `reply_to` and `thread` point at. |
 | `bot.members()`, `bot.profile_of(user_id)`, `bot.rooms` | Who and what the bot can see. |
+| `bot.may(user_id)` | Whether someone may give the bot orders: the server's owner, and anyone whose roles have the Manage bots permission. `bot.may(user_id, "kick_members")` asks about another permission. |
 | `bot.work(fn, *args)` | Run a job after those already waiting, one at a time (one model, one graphics card). Returns how many are ahead. |
 | `bot.store` | A dictionary kept between runs, in `store.json` in the bot's folder. Call `bot.store.save()` after changing it. |
 | `bot.request({...})` | Any command the core understands; returns its answer. |

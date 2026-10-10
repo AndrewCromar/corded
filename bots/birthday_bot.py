@@ -13,6 +13,10 @@ In the direct chat the bot also understands: help, when, forget, no (never
 ask again), private (no post in the channel), public. In a channel, !birthdays
 lists the next few and !help says what the bot is for.
 
+The server's owner, and anyone with a role that has the Manage bots
+permission, can also send it, in a direct chat: list, reset wishes, reset
+asked, reset @name, set @name 05-17, ask @name, ask everyone.
+
 Its messages use the marks the apps draw as styling: **bold**, `code`, lines
 starting with "- " as a list and "## " as a heading.
 
@@ -168,7 +172,7 @@ def main():
         comes first, and it does not ask for a birthday it already has."""
         birthday = birthday_of(user_id)
         person = people.get(user_id, {})
-        return "\n".join([
+        lines = [
             "## 🎂 Birthday Bot",
             f"I wish people a happy birthday on the day, in a direct chat and in {channel}.",
             "",
@@ -188,7 +192,19 @@ def main():
             "- `help`: this message",
             "",
             f"In a channel, `{bot.prefix}birthdays` lists the next few.",
-        ])
+        ]
+        if bot.may(user_id):
+            lines += [
+                "",
+                "**Because you manage bots here**",
+                "- `list`: every birthday I know, and who I have asked",
+                "- `reset wishes`: let this year's wishes go out again (`reset wishes @name` for one person)",
+                "- `reset asked`: let me ask people again (`reset asked @name` for one person)",
+                "- `reset @name`: forget everything about one person",
+                "- `set @name 05-17`: set someone's birthday",
+                "- `ask @name` or `ask everyone`: send my question now",
+            ]
+        return "\n".join(lines)
 
     def hint_for(user_id):
         """The short version, after something it could not read."""
@@ -200,6 +216,103 @@ def main():
 
     def name_of(member):
         return member.get("display_name") or member.get("username", "")
+
+    def find(name):
+        """A member by @username, or by the name people see."""
+        name = name.lstrip("@").lower()
+        members = [m for m in bot.members().values() if not m.get("bot")]
+        return next((m for m in members if m.get("username", "").lower() == name),
+                    next((m for m in members if name_of(m).lower() == name), None))
+
+    def listing():
+        known, without = [], []
+        for user_id, member in sorted(bot.members().items(), key=lambda item: name_of(item[1]).lower()):
+            if member.get("bot"):
+                continue
+            person = people.get(user_id, {})
+            birthday = birthday_of(user_id)
+            notes = [note for note, on in (("from the profile", birthday and not person.get("birthday")),
+                                           ("told me", person.get("birthday")),
+                                           (f"wished in {person.get('wished')}", person.get("wished")),
+                                           ("private", person.get("private")),
+                                           ("said no", person.get("no")),
+                                           ("asked", person.get("asked") and not birthday)) if on]
+            # The day and the month only: the year is theirs to give out.
+            if birthday:
+                known.append(f"- **{name_of(member)}** (`{member['username']}`): "
+                             f"{' '.join(in_words(birthday).split()[:2])}; {', '.join(notes)}")
+            else:
+                without.append(name_of(member) + (f" ({', '.join(notes)})" if notes else ""))
+        return "\n".join([f"**Birthdays I know ({len(known)})**"] + (known or ["- none yet"]) +
+                         (["", "**No birthday yet:** " + ", ".join(without)] if without else []))
+
+    def manage(message):
+        """What the owner and those with the Manage bots permission may tell it."""
+        if not bot.may(message.sender_id):
+            return "Only the server's owner and people with the **Manage bots** permission can do that."
+        words = message.body.split()
+        verb, rest = words[0].lower(), words[1:]
+        unknown = "I don't know anyone called **{}** here."
+        if verb == "list":
+            return listing()
+        if verb == "reset" and rest and rest[0].lower() in ("wishes", "asked"):
+            what = rest[0].lower()
+            keys = ("wished",) if what == "wishes" else ("asked", "seen")
+            after = (" Anyone whose birthday is today is wished again now." if what == "wishes"
+                     else " I ask each of them when they next join, or now with `ask @name` or `ask everyone`.")
+            if len(rest) > 1:
+                member = find(rest[1])
+                if not member:
+                    return unknown.format(rest[1].lstrip("@"))
+                for key in keys:
+                    people.get(member["user_id"], {}).pop(key, None)
+                return (f"Done: **{name_of(member)}** can be wished again this year." if what == "wishes"
+                        else f"Done: I no longer count **{name_of(member)}** as asked.")
+            changed = sum(1 for person in people.values() if any(key in person for key in keys))
+            for person in people.values():
+                for key in keys:
+                    person.pop(key, None)
+            return f"Done: {changed} {'person' if changed == 1 else 'people'} reset." + after
+        if verb == "reset" and rest:
+            member = find(rest[0])
+            if not member:
+                return unknown.format(rest[0].lstrip("@"))
+            people.pop(member["user_id"], None)
+            return (f"Done: I have forgotten everything about **{name_of(member)}**: the date they told me, "
+                    "that I asked, this year's wish and their choices. A birthday in their profile still counts.")
+        if verb == "set" and len(rest) >= 2:
+            member = find(rest[0])
+            if not member:
+                return unknown.format(rest[0].lstrip("@"))
+            birthday = parse_birthday(" ".join(rest[1:]), today().year)
+            if not birthday:
+                return "I can't read that date. Write it like `set @name 05-17` or `set @name 17 May`."
+            people.setdefault(member["user_id"], {})["birthday"] = birthday
+            return f"Done: **{name_of(member)}**'s birthday is {bold(birthday)}."
+        if verb == "ask" and rest:
+            if rest[0].lower() in ("everyone", "all"):
+                waiting = [m for m in bot.members().values() if not m.get("bot")
+                           and not people.get(m["user_id"], {}).get("asked")
+                           and not people.get(m["user_id"], {}).get("no")
+                           and not people.get(m["user_id"], {}).get("birthday")]
+                for member in waiting:
+                    bot._guard(ask, member)
+                    time.sleep(1)
+                return (f"Done: I wrote to {len(waiting)} {'person' if len(waiting) == 1 else 'people'}. "
+                        "I leave out those I have asked before, those who said no, and those who told me a date.")
+            member = find(rest[0])
+            if not member:
+                return unknown.format(rest[0].lstrip("@"))
+            person = people.setdefault(member["user_id"], {})
+            if person.get("no"):
+                return f"**{name_of(member)}** told me not to ask, so I won't."
+            if person.get("birthday"):
+                return f"**{name_of(member)}** has told me a birthday already."
+            person.pop("asked", None)
+            ask(member)
+            return f"Done: I wrote to **{name_of(member)}**."
+        return ("I didn't follow that. What I take from those who manage bots: `list`, `reset wishes`, "
+                "`reset asked`, `reset @name`, `set @name 05-17`, `ask @name`, `ask everyone`.")
 
     def ask(member):
         person = people.setdefault(member["user_id"], {})
@@ -289,7 +402,10 @@ def main():
         person = people.setdefault(message.sender_id, {})
         word = message.body.strip().lower().strip(".!")
         lost = person.pop("lost", 0)
-        if word in ("no", "stop", "no thanks"):
+        if word.split()[:1] and word.split()[0] in ("list", "reset", "set", "ask"):
+            answer = manage(message)
+            person = people.setdefault(message.sender_id, {})   # they may have reset themselves
+        elif word in ("no", "stop", "no thanks"):
             person["no"] = True
             answer = "All right, I won't ask. If you change your mind, tell me a date here any time."
         elif word == "forget":
