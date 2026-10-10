@@ -155,6 +155,14 @@ def main():
         bob.expect("you can only edit your own messages")
         print("ok  commands take a message number")
 
+        # /notify is remembered and says what it does.
+        bob.type("/notify bell\r")
+        bob.expect("ring the terminal's bell")
+        bob.type("/notify\r")
+        bob.expect("now: bell")
+        bob.type("/notify off\r")
+        print("ok  notification setting")
+
         # Pins: in a direct chat either person pins; both see the mark and the list.
         alice.type("/pin 1\r")
         bob.expect("(pinned)", timeout=20)

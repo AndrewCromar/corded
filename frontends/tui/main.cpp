@@ -14,7 +14,18 @@
 #include <csignal>
 #include <pthread.h>
 #endif
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <functional>
+#include <sstream>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
+#endif
 #include <ctime>
 #include <map>
 #include <set>
@@ -64,6 +75,34 @@ struct Room {
     int unread = 0;
     bool loaded = false;
 };
+
+// Draws attention outside the client's own window: the terminal's bell, and
+// where there is one, the desktop's notification service. Never a shell: the
+// text is someone else's message.
+void desktop_notify(const std::string& title, const std::string& body, bool desktop) {
+    std::fputs("\a", stderr);
+    std::fflush(stderr);
+#ifndef _WIN32
+    if (!desktop) return;
+    std::string app = "--app-name=Corded";
+    std::string t = title, b = body;
+    char* const args[] = {const_cast<char*>("notify-send"), app.data(), t.data(), b.data(), nullptr};
+    pid_t pid;
+    posix_spawn_file_actions_t quiet;
+    posix_spawn_file_actions_init(&quiet);
+    posix_spawn_file_actions_addopen(&quiet, 1, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&quiet, 2, "/dev/null", O_WRONLY, 0);
+    if (posix_spawnp(&pid, "notify-send", &quiet, nullptr, args, environ) == 0) {
+        // Reaped by a detached thread so it never lingers.
+        std::thread([pid] { int status; waitpid(pid, &status, 0); }).detach();
+    }
+    posix_spawn_file_actions_destroy(&quiet);
+#else
+    (void)title;
+    (void)body;
+    (void)desktop;
+#endif
+}
 
 std::string clock_time(uint64_t ms) {
     std::time_t t = static_cast<std::time_t>(ms / 1000);
@@ -165,6 +204,12 @@ public:
           invite_(std::move(invite)) {}
 
     int run() {
+        {
+            // What /notify was last set to.
+            std::ifstream saved(vault_dir_ + "/tui-notify");
+            std::string mode;
+            if (saved >> mode && (mode == "on" || mode == "bell" || mode == "off")) notify_mode_ = mode;
+        }
         corded_config cfg{};
         cfg.struct_size = sizeof cfg;
         cfg.vault_dir = vault_dir_.c_str();
@@ -274,7 +319,7 @@ private:
                 room.disappear_after = r.value("disappear_after", uint64_t{0});
                 room.unread = r.value("unread", room.unread);
                 room.pinned.clear();
-                for (const auto& id : r.value("pinned", json::array())) room.pinned.push_back(id.get<std::string>());
+                for (const auto& pin : r.value("pinned", json::array())) room.pinned.push_back(pin.get<std::string>());
             }
             if (members_selected()) command({{"cmd", "member_list"}});
             refresh_titles();  // re-sorts, so look the room up again
@@ -323,6 +368,16 @@ private:
             if (is_new && !d.value("mine", false) && current() != &room) {
                 room.unread = ev.value("unread", room.unread + 1);
                 refresh_titles();
+            }
+            // Tell the person about messages in chats they are not looking
+            // at, and about mentions wherever they are.
+            std::string text_body = d.value("type", "") == "m.text" ? d["content"].value("body", "") : "";
+            bool mentioned = mentions_user(text_body, username_);
+            if (notify_mode_ != "off" && is_new && !text_body.empty() && !d.value("mine", false) &&
+                !d.value("shared_history", false) && (current() != &room || mentioned)) {
+                std::string who = d.value("sender_name", "someone");
+                desktop_notify(room.title + (mentioned ? " (mentioned you)" : ""),
+                               room.title == who ? text_body : who + ": " + text_body, notify_mode_ == "on");
             }
             if (current() == &room) mark_read(room);
         } else if (kind == "event_expired") {
@@ -792,10 +847,10 @@ private:
             } else if (room && cmd == "/pins") {
                 Elements rows = {text("Pinned messages") | bold};
                 for (const auto& id : room->pinned) {
-                    std::string line = "(not loaded here)";
+                    std::string shown = "(not loaded here)";
                     for (const auto& m : room->messages)
-                        if (m.event_id == id) line = std::to_string(m.num) + "  " + m.sender + ": " + m.body;
-                    rows.push_back(text(line));
+                        if (m.event_id == id) shown = std::to_string(m.num) + "  " + m.sender + ": " + m.body;
+                    rows.push_back(text(shown));
                 }
                 if (room->pinned.empty()) rows.push_back(text("Nothing is pinned here. /pin <number> pins a message.") | dim);
                 info_box_ = vbox(std::move(rows)) | border;
@@ -966,6 +1021,14 @@ private:
                 if (settings_selected()) load_settings_page();
             } else if (cmd == "/reboot") {
                 command({{"cmd", "restart_server"}});
+            } else if (cmd == "/notify" && (arg == "on" || arg == "bell" || arg == "off")) {
+                notify_mode_ = arg;
+                std::ofstream(vault_dir_ + "/tui-notify") << arg;  // remembered for next time
+                notice_ = arg == "on" ? "new messages ring the bell and show a desktop notification"
+                          : arg == "bell" ? "new messages ring the terminal's bell"
+                                          : "new messages are announced only in this window";
+            } else if (cmd == "/notify") {
+                notice_ = "/notify on | bell | off   (now: " + notify_mode_ + ")";
             } else if (cmd == "/presence" && (arg == "auto" || arg == "dnd" || arg == "invisible")) {
                 command({{"cmd", "set_presence"}, {"status", arg}});
                 notice_ = arg == "auto" ? "others see you as online while this is open"
@@ -1146,6 +1209,7 @@ private:
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/receipts on|off   whether others see what you have read"),
                               text("/pin <n>  /unpin <n>  /pins      pin a message for everyone, and list what is pinned"),
+                              text("/notify on|bell|off    be told about messages in other chats, and about mentions"),
                               text("/presence auto|dnd|invisible   how others see you (the members page shows everyone)"),
                               text("/history           ask members for earlier messages     /share-history on|off"),
                               text("/open <name>       open a channel or chat by name      /members  /roles"),
@@ -1447,6 +1511,7 @@ private:
     std::vector<std::string> titles_;
     int selected_ = 0;
     bool show_help_ = false, show_verify_ = false, show_info_ = false, is_owner_ = false;
+    std::string notify_mode_ = "off";  // off, bell, or on (bell and a desktop notification)
     std::string server_name_;
     std::set<std::string> permissions_;
     json roles_ = json::array();
