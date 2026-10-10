@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import 'channel_access.dart';
 import 'common.dart';
 import 'roles.dart';
 
@@ -106,6 +107,15 @@ class _ServerScreenState extends State<ServerScreen> {
       builder: (sheet) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(title: Text(r.title)),
+          ListTile(
+            leading: const Icon(Icons.lock_outline),
+            title: const Text('Who can read and write'),
+            onTap: () {
+              Navigator.pop(sheet);
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => ChannelAccessScreen(state: widget.state, room: r)));
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.edit_outlined),
             title: const Text('Rename'),
