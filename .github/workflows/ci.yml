@@ -111,6 +111,37 @@ jobs:
           name: libcorded-${{ matrix.preset }}
           path: out/
 
+  dart:
+    name: Dart binding
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar perl
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+      - name: Build
+        run: ./build.sh
+      - uses: dart-lang/setup-dart@v1
+      # Two clients driven from Dart talk through a real server.
+      - name: Test the binding
+        working-directory: frontends/flutter/packages/corded_dart
+        env:
+          CORDED_BIN: ${{ github.workspace }}/build/dev/bin
+          CORDED_LIB: ${{ github.workspace }}/build/dev/lib/libcorded.so
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
   windows:
     name: Windows build
     runs-on: windows-2022

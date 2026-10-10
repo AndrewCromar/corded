@@ -1,0 +1,20 @@
+name: corded_app
+description: The Corded graphical client.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  corded_dart:
+    path: ../packages/corded_dart
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

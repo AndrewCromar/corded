@@ -1,0 +1,128 @@
+// Two cores, driven from Dart, exchange a message through a real server.
+//
+// Needs the native build:  CORDED_BIN=<dir with cordedd>  CORDED_LIB=<path to libcorded.so>
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:corded_dart/corded_dart.dart';
+import 'package:test/test.dart';
+
+Future<T> eventually<T>(T? Function() probe, String what, {Duration timeout = const Duration(seconds: 20)}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final v = probe();
+    if (v != null) return v;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  fail('timed out waiting for: $what');
+}
+
+void main() {
+  final bin = Platform.environment['CORDED_BIN'];
+  final lib = Platform.environment['CORDED_LIB'];
+  final skip = bin == null || lib == null ? 'set CORDED_BIN and CORDED_LIB to run' : null;
+
+  test('two clients exchange messages, with unread counts, receipts and paging', () async {
+    final tmp = await Directory.systemTemp.createTemp('corded_dart_test');
+    final server = await Process.start(
+        '$bin/cordedd', ['--port', '0', '--data', '${tmp.path}/server', '--owner', 'alice']);
+    addTearDown(() async {
+      server.kill();
+      await server.exitCode;
+      await tmp.delete(recursive: true);
+    });
+    // The server prints the port it was given.
+    final port = Completer<int>();
+    final lines = <String>[];
+    for (final stream in [server.stdout, server.stderr]) {
+      stream.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+        lines.add(line);
+        final m = RegExp(r'listening on .*:(\d+)').firstMatch(line);
+        if (m != null && !port.isCompleted) port.complete(int.parse(m.group(1)!));
+      });
+    }
+    final p = await port.future.timeout(const Duration(seconds: 15),
+        onTimeout: () => fail('the server did not start:\n${lines.join('\n')}'));
+
+    Future<(CordedEngine, CordedStore)> client(String name) async {
+      final engine = await CordedEngine.open('${tmp.path}/$name', fastKdf: true, libraryPath: lib);
+      final store = CordedStore(engine);
+      addTearDown(() async {
+        await store.dispose();
+        await engine.close();
+      });
+      expect(engine.vaultExists(), isFalse);
+      await engine.createVault('a long passphrase', name);
+      await engine.command({'cmd': 'connect', 'host': '127.0.0.1', 'port': p});
+      return (engine, store);
+    }
+
+    final (alice, aliceStore) = await client('alice');
+    final (bob, bobStore) = await client('bob');
+    expect(alice.apiVersion, greaterThanOrEqualTo(2));
+
+    Room? general(CordedStore s) => s.rooms.values.where((r) => r.title == '#general').firstOrNull;
+    final room = await eventually(() => general(bobStore), "bob's #general");
+    await eventually(() => (general(aliceStore)?.members.length ?? 0) == 2 ? true : null, 'alice sees bob');
+    expect(aliceStore.servers.values.single.isOwner, isTrue);
+
+    // A refused command surfaces as an error, not silence.
+    await expectLater(bob.command({'cmd': 'create_channel', 'name': 'nope'}), throwsA(isA<CordedError>()));
+
+    for (var i = 1; i <= 5; i++) {
+      await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'message $i'});
+    }
+    await eventually(() => bobStore.messages(room.id).length == 5 ? true : null, 'five messages at bob');
+    expect(bobStore.messages(room.id).map((m) => m.body), [for (var i = 1; i <= 5; i++) 'message $i']);
+    expect(bobStore.messages(room.id).first.sender, 'alice');
+    expect(bobStore.rooms[room.id]!.unread, 5);
+
+    // Opening the chat reads it: the count drops, and alice learns of it.
+    await bobStore.open(room.id);
+    await eventually(() => bobStore.rooms[room.id]!.unread == 0 ? true : null, 'unread cleared');
+    final last = aliceStore.messages(room.id).last;
+    await eventually(() => aliceStore.readBy(room.id, last.id).contains('bob') ? true : null, 'read by bob');
+    await eventually(() => last.status == 'ok' ? true : null, 'sent confirmation');
+
+    // Typing shows up and lapses on its own.
+    await bob.command({'cmd': 'typing', 'room_id': room.id});
+    await eventually(() => aliceStore.typing(room.id).contains('bob') ? true : null, 'bob typing');
+
+    // A reply, a reaction and an edit arrive as what they are.
+    await bob.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'a reply', 'reply_to': last.id});
+    final reply = await eventually(
+        () => aliceStore.messages(room.id).where((m) => m.body == 'a reply').firstOrNull, 'the reply');
+    expect(reply.replyTo, last.id);
+    expect(aliceStore.typing(room.id), isEmpty); // sending ends the notice
+    await bob.command({
+      'cmd': 'send_event',
+      'room_id': room.id,
+      'type': 'm.reaction',
+      'content': {'key': '+1'},
+      'relation': {'kind': 'annotation', 'target': last.id, 'key': '+1'},
+    });
+    await eventually(() => aliceStore.reactions(room.id, last.id)['+1'] == 1 ? true : null, 'the reaction');
+    await alice.command({'cmd': 'edit_event', 'room_id': room.id, 'event_id': last.id, 'body': 'message 5, edited'});
+    await eventually(
+        () => bobStore.messages(room.id).any((m) => m.body == 'message 5, edited' && m.edited) ? true : null,
+        'the edit');
+
+    // A fresh start reads everything back from the vault.
+    await bobStore.dispose();
+    await bob.close();
+    final again = await CordedEngine.open('${tmp.path}/bob', fastKdf: true, libraryPath: lib);
+    final againStore = CordedStore(again);
+    addTearDown(() async {
+      await againStore.dispose();
+      await again.close();
+    });
+    expect(again.vaultExists(), isTrue);
+    await expectLater(again.unlock('wrong'), throwsA(isA<CordedError>()));
+    await again.unlock('a long passphrase');
+    await eventually(() => againStore.rooms[room.id], 'rooms after restart');
+    await againStore.open(room.id);
+    expect(againStore.messages(room.id).length, 6);
+    expect(againStore.username, 'bob');
+  }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
+}

@@ -1,0 +1,52 @@
+import 'package:flutter/material.dart';
+
+import 'app_state.dart';
+import 'screens/add_server.dart';
+import 'screens/home.dart';
+import 'screens/unlock.dart';
+import 'screens/welcome.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  final state = AppState()..start();
+  runApp(CordedApp(state: state));
+}
+
+class CordedApp extends StatelessWidget {
+  const CordedApp({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    ThemeData theme(Brightness b) => ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4F6BED), brightness: b),
+          useMaterial3: true,
+        );
+    return MaterialApp(
+      title: 'Corded',
+      theme: theme(Brightness.light),
+      darkTheme: theme(Brightness.dark),
+      home: ListenableBuilder(listenable: state, builder: (context, _) => _root()),
+    );
+  }
+
+  // Which screen the app rests on follows from the state of the vault.
+  Widget _root() {
+    if (state.startError != null) {
+      return Scaffold(
+          body: Center(
+              child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text('Corded could not start.\n\n${state.startError}', textAlign: TextAlign.center))));
+    }
+    if (!state.ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    switch (state.store.vaultState) {
+      case 'missing':
+        return WelcomeScreen(state: state);
+      case 'unlocked':
+        return state.store.servers.isEmpty ? AddServerScreen(state: state, first: true) : HomeScreen(state: state);
+      default:
+        return UnlockScreen(state: state);
+    }
+  }
+}

@@ -1,0 +1,14 @@
+name: corded_dart
+description: Dart binding to libcorded, the Corded client core.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  ffi: ^2.1.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0
