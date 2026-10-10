@@ -43,7 +43,48 @@ class CordedStore {
     return list;
   }
 
-  List<Message> messages(String roomId) => _messages[roomId] ?? const [];
+  /// The conversation as shown: everything except replies inside threads.
+  List<Message> messages(String roomId) =>
+      [for (final m in _all(roomId)) if (m.threadRoot == null) m];
+
+  /// The replies in the thread started by [rootId], oldest first.
+  List<Message> thread(String roomId, String rootId) =>
+      [for (final m in _all(roomId)) if (m.threadRoot == rootId) m];
+
+  /// How many replies a message's thread has.
+  int threadCount(String roomId, Message root) {
+    final loaded = thread(roomId, root.id).length;
+    return loaded > root.threadCount ? loaded : root.threadCount;
+  }
+
+  Message? message(String roomId, String id) => _all(roomId).where((m) => m.id == id).firstOrNull;
+
+  List<Message> _all(String roomId) => _messages[roomId] ?? const [];
+
+  /// Loads every reply of a thread, including ones older than the pages shown.
+  Future<void> openThread(String roomId, String rootId) async {
+    try {
+      final r = await engine.command({'cmd': 'fetch_thread', 'room_id': roomId, 'event_id': rootId});
+      for (final j in (r['thread'] as List? ?? const [])) {
+        _applyMessage((j as Map).cast<String, dynamic>());
+      }
+    } on CordedError {
+      // Shown with whatever is already loaded.
+    }
+    await markRead(roomId);
+    _changed();
+  }
+
+  // Server order first. A message still being sent has no place yet and goes
+  // last, in the order it was written. Clocks on different devices disagree,
+  // so the time a sender wrote on a message is never used to order it.
+  static int compareMessages(Message a, Message b) {
+    final sa = a.seq, sb = b.seq;
+    if (sa != null && sb != null) return sa.compareTo(sb);
+    if (sa != null) return -1;
+    if (sb != null) return 1;
+    return a.timestamp.compareTo(b.timestamp);
+  }
 
   /// Reactions on a message: emoji (or word) to how many people sent it.
   Map<String, int> reactions(String roomId, String messageId) {
@@ -97,9 +138,9 @@ class CordedStore {
 
   /// Tells the others (unless turned off) that everything shown has been read.
   Future<void> markRead(String roomId) async {
-    final list = messages(roomId);
+    final list = _all(roomId);
     for (var i = list.length - 1; i >= 0; i--) {
-      if (list[i].mine) continue;
+      if (list[i].mine || list[i].seq == null) continue;
       try {
         await engine.command({'cmd': 'mark_read', 'room_id': roomId, 'event_id': list[i].id});
       } on CordedError {
@@ -188,13 +229,14 @@ class CordedStore {
     for (final m in list) {
       if (m.id == id) {
         m.apply(j);
+        list.sort(compareMessages);
         return false;
       }
     }
     final message = Message.fromJson(j);
-    // Keep the list in time order; pages of older messages arrive later.
+    // Pages of older messages arrive later, so find its place each time.
     var at = list.length;
-    while (at > 0 && list[at - 1].timestamp > message.timestamp) {
+    while (at > 0 && compareMessages(list[at - 1], message) > 0) {
       at--;
     }
     list.insert(at, message);
@@ -233,7 +275,7 @@ class CordedStore {
         final data = (e['data'] as Map).cast<String, dynamic>();
         final roomId = data['room_id'] as String? ?? '';
         final id = data['event_id'];
-        for (final m in messages(roomId)) {
+        for (final m in _all(roomId)) {
           if (m.id == id) m.apply(data);
         }
         // A deleted reaction no longer counts.
@@ -244,12 +286,17 @@ class CordedStore {
         }
       case 'event_send_status':
         final status = e['status'] == 'sent' ? 'ok' : '${e['status']}';
-        for (final m in messages(e['room_id'] as String? ?? '')) {
-          if (m.id == e['event_id']) m.status = status;
+        final list = _messages[e['room_id'] as String? ?? ''] ?? [];
+        for (final m in list) {
+          if (m.id == e['event_id']) {
+            m.status = status;
+            m.seq = (e['event_seq'] as num?)?.toInt() ?? m.seq;
+          }
         }
+        list.sort(compareMessages); // the server has now given it a place
         if (e['status'] == 'failed') notice = 'Could not send: ${e['message'] ?? ''}';
       case 'event_expired':
-        messages(e['room_id'] as String? ?? '').removeWhere((m) => m.id == e['event_id']);
+        _messages[e['room_id'] as String? ?? '']?.removeWhere((m) => m.id == e['event_id']);
       case 'typing':
         (_typing[e['room_id'] as String? ?? ''] ??= {})['${e['display_name'] ?? 'Someone'}'] =
             DateTime.now().add(const Duration(seconds: 5));

@@ -7,11 +7,14 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import 'common.dart';
 
-/// One conversation: its messages and the box for writing a new one.
+/// One conversation: its messages and the box for writing a new one. With
+/// [threadRoot] it shows one thread instead: the message that started it and
+/// the replies under it.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.state, required this.roomId});
+  const ChatScreen({super.key, required this.state, required this.roomId, this.threadRoot});
   final AppState state;
   final String roomId;
+  final String? threadRoot;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -28,14 +31,35 @@ class _ChatScreenState extends State<ChatScreen> {
 
   CordedStore get _store => widget.state.store;
   String get _room => widget.roomId;
+  String? get _thread => widget.threadRoot;
+
+  // What this screen lists: the conversation, or one thread with its first
+  // message on top.
+  List<Message> get _shown {
+    final thread = _thread;
+    if (thread == null) return _store.messages(_room);
+    final root = _store.message(_room, thread);
+    return [if (root != null) root, ..._store.thread(_room, thread)];
+  }
+
+  void _openThread(Message root) {
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ChatScreen(state: widget.state, roomId: _room, threadRoot: root.id)));
+  }
 
   @override
   void initState() {
     super.initState();
-    _store.open(_room);
+    if (_thread == null) {
+      _store.open(_room);
+    } else {
+      _store.openThread(_room, _thread!);
+    }
     // While this screen is up, whatever arrives has been read.
     _sub = _store.changes.listen((_) {
-      final count = _store.messages(_room).length;
+      final count = _shown.length;
       if (count != _seen) {
         _seen = count;
         _store.markRead(_room);
@@ -57,7 +81,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadOlder() async {
-    if (_loadingOlder || !_store.hasOlder(_room)) return;
+    if (_thread != null || _loadingOlder || !_store.hasOlder(_room)) return;
     _loadingOlder = true;
     await _store.loadOlder(_room);
     _loadingOlder = false;
@@ -81,7 +105,8 @@ class _ChatScreenState extends State<ChatScreen> {
           'cmd': 'send_text',
           'room_id': _room,
           'body': text,
-          if (replyingTo != null) 'reply_to': replyingTo.id,
+          // A message has one relation: inside a thread it belongs to the thread.
+          if (_thread != null) 'thread': _thread else if (replyingTo != null) 'reply_to': replyingTo.id,
         });
       }
     });
@@ -114,17 +139,27 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
           ]),
-          ListTile(
-            leading: const Icon(Icons.reply),
-            title: const Text('Reply'),
-            onTap: () {
-              Navigator.pop(sheet);
-              setState(() {
-                _replyingTo = m;
-                _editing = null;
-              });
-            },
-          ),
+          if (_thread == null) ...[
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Reply'),
+              onTap: () {
+                Navigator.pop(sheet);
+                setState(() {
+                  _replyingTo = m;
+                  _editing = null;
+                });
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.forum_outlined),
+              title: Text(_store.threadCount(_room, m) > 0 ? 'Open thread' : 'Start a thread'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _openThread(m);
+              },
+            ),
+          ],
           ListTile(
             leading: const Icon(Icons.copy),
             title: const Text('Copy text'),
@@ -244,6 +279,19 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                 ]),
               ),
+            if (_thread == null && _store.threadCount(_room, m) > 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                  onPressed: () => _openThread(m),
+                  icon: const Icon(Icons.forum_outlined, size: 16),
+                  label: Text(() {
+                    final n = _store.threadCount(_room, m);
+                    return n == 1 ? '1 reply' : '$n replies';
+                  }()),
+                ),
+              ),
             if (readers.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
@@ -259,7 +307,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final room = _store.rooms[_room];
-    final messages = _store.messages(_room);
+    final messages = _shown;
     final typing = _store.typing(_room);
     final banner = _editing != null
         ? 'Editing your message'
@@ -270,8 +318,10 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(room?.title ?? 'Chat', maxLines: 1, overflow: TextOverflow.ellipsis),
-          if (room != null && room.kind != 'direct')
+          Text(_thread != null ? 'Thread' : room?.title ?? 'Chat', maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (_thread != null)
+            Text(room?.title ?? '', style: theme.textTheme.labelSmall)
+          else if (room != null && room.kind != 'direct')
             Text('${room.members.length} members', style: theme.textTheme.labelSmall),
         ]),
       ),
@@ -279,7 +329,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(children: [
           Expanded(
             child: messages.isEmpty
-                ? const Center(child: Text('No messages yet. Say hello.'))
+                ? Center(child: Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
                 : ListView.builder(
                     controller: _scroll,
                     reverse: true,
@@ -328,7 +378,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     if (v.isNotEmpty) widget.state.engine.command({'cmd': 'typing', 'room_id': _room});
                   },
                   decoration: InputDecoration(
-                    hintText: 'Message ${room?.title ?? ''}',
+                    hintText: _thread != null ? 'Reply in thread' : 'Message ${room?.title ?? ''}',
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   ),

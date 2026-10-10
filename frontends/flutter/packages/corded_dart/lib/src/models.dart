@@ -55,9 +55,18 @@ class Message {
   String? replyTo;
   String? threadRoot;
 
+  /// Where the server placed this message in the room; the same for everyone.
+  /// Null until the server has confirmed a message this device sent.
+  int? seq;
+
+  /// How many thread replies the core knew of when it reported this message.
+  int threadCount = 0;
+
   void apply(Map<String, dynamic> j) {
     status = j['status'] as String? ?? status;
     edited = j['edited'] == true;
+    seq = (j['seq'] as num?)?.toInt() ?? seq;
+    threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
     final relation = j['relation'] as Map?;

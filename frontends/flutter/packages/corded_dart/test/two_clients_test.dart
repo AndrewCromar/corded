@@ -108,6 +108,21 @@ void main() {
         () => bobStore.messages(room.id).any((m) => m.body == 'message 5, edited' && m.edited) ? true : null,
         'the edit');
 
+    // A thread reply stays out of the conversation and is counted on its first message.
+    final before = aliceStore.messages(room.id).length;
+    await bob.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'in the thread', 'thread': last.id});
+    await eventually(() => aliceStore.thread(room.id, last.id).length == 1 ? true : null, 'the thread reply');
+    expect(aliceStore.messages(room.id).length, before);
+    expect(aliceStore.threadCount(room.id, last), 1);
+    expect(bobStore.thread(room.id, last.id).single.body, 'in the thread');
+
+    // Both sides hold the conversation in the server's order.
+    for (final s in [aliceStore, bobStore]) {
+      await eventually(() => s.messages(room.id).every((m) => m.seq != null) ? true : null, 'all confirmed');
+      final seqs = s.messages(room.id).map((m) => m.seq!).toList();
+      expect(seqs, [...seqs]..sort());
+    }
+
     // A fresh start reads everything back from the vault.
     await bobStore.dispose();
     await bob.close();
@@ -123,6 +138,8 @@ void main() {
     await eventually(() => againStore.rooms[room.id], 'rooms after restart');
     await againStore.open(room.id);
     expect(againStore.messages(room.id).length, 6);
+    await againStore.openThread(room.id, last.id);
+    expect(againStore.thread(room.id, last.id).length, 1);
     expect(againStore.username, 'bob');
   }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
 }
