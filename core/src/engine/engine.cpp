@@ -214,6 +214,7 @@ Session::Session(Engine& engine, int64_t id, std::string host, std::string port)
       next_request_(engine.next_request_),
       resolver_(engine.io_),
       reconnect_timer_(engine.io_),
+      reshare_timer_(engine.io_),
       host_(std::move(host)),
       port_(std::move(port)) {}
 
@@ -2035,6 +2036,8 @@ void Session::on_frame(wire::FrameT& f) {
         case wire::FrameBody_DevicesChanged:
             // Someone added a device; ask again who their devices are before the next send.
             devices_.erase(f.body.AsDevicesChanged()->user_id);
+            // A new device has nobody's profile, not even its own person's.
+            reshare_profile_soon(f.body.AsDevicesChanged()->user_id);
             break;
         case wire::FrameBody_Ephemeral: {
             const auto* eph = f.body.AsEphemeral();
@@ -2225,6 +2228,14 @@ void Session::accept_profile(const EventRow& e) {
     if (!content.is_object() || !content.value("version", json()).is_number_unsigned()) return;
     if (content.dump().size() > 64 * 1024) return;  // room for a small picture
     if (!vault_.set_profile(e.sender_user, content["version"].get<uint64_t>(), content.dump())) return;
+    // From another device of this same person: it is this device's profile too,
+    // if it is newer than what this device holds.
+    const Key32& me = vault_.identity().user.pk;
+    if (e.sender_user.size() == 32 && std::equal(me.begin(), me.end(), e.sender_user.begin())) {
+        json mine = engine_.own_profile();
+        if (mine.value("version", uint64_t{0}) < content["version"].get<uint64_t>())
+            vault_.set_meta("profile", content.dump());
+    }
     emit({{"event", "profile_updated"}, {"user_id", b64(e.sender_user)}, {"profile", content}});
     // Their name may have changed wherever they appear.
     for (const auto& room : rooms())
@@ -2251,6 +2262,34 @@ void Session::share_profile(ByteView room_id, bool force) {
     if (!force && vault_.meta(key).value_or("") == mark) return;
     vault_.set_meta(key, mark);
     cmd_send_event(engine_.next_request_++, {{"room_id", b64(room_id)}, {"type", "m.profile"}, {"content", profile}});
+}
+
+// A device that was just added has seen no profiles: they were sent before it
+// existed. A few seconds after it appears (so its keys are published), this
+// person's profile is sent once more, in the smallest chat shared with its
+// owner. The owner's other devices do the same, which is how a new device
+// learns its own person's profile.
+void Session::reshare_profile_soon(const Bytes& user_id) {
+    if (!engine_.own_profile().contains("version")) return;
+    reshare_for_.insert(user_id);
+    reshare_timer_.expires_after(std::chrono::seconds(5));
+    reshare_timer_.async_wait([this](asio::error_code ec) {
+        if (ec || conn_ != Conn::Live) return;
+        auto people = std::move(reshare_for_);
+        reshare_for_.clear();
+        std::set<Bytes> done;  // one message per chat, however many people it covers
+        for (const auto& user : people) {
+            const RoomRow* best = nullptr;
+            auto all = rooms();
+            for (const auto& room : all) {
+                bool shared = false;
+                for (const auto& m : room.members)
+                    if (m.user_id == user) shared = true;
+                if (shared && (!best || room.members.size() < best->members.size())) best = &room;
+            }
+            if (best && done.insert(best->room_id).second) share_profile(best->room_id, true);
+        }
+    });
 }
 
 void Session::share_profile_everywhere() {

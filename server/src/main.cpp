@@ -354,6 +354,10 @@ public:
         // reachable from the network; keep it that way rather than cut people off.
         if (!storage_.info("set:scope") && storage_.member_count() > 0)
             storage_.set_info("set:scope", to_bytes(std::string("network")));
+        // A new server writes its scope down at once. Otherwise the rule above
+        // would take it for an old one at its first restart, once it has
+        // members, and open it to the network without anyone asking.
+        if (!storage_.info("set:scope")) storage_.set_info("set:scope", to_bytes(std::string("machine")));
         for (const auto& [key, value] : options_.flags) {
             if (std::string problem = validate(key, value); !problem.empty())
                 throw std::runtime_error("bad value for " + key + ": " + problem);

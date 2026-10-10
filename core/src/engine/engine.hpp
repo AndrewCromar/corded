@@ -152,6 +152,7 @@ private:
     json pins(ByteView room_id);
     void accept_profile(const EventRow& e);
     void share_profile(ByteView room_id, bool force);  // sends ours if this room has not had it
+    void reshare_profile_soon(const Bytes& user_id);   // a device of theirs is new and has never seen it
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
     void fail_outbox(const OutboxRow& row, const std::string& message);
@@ -168,6 +169,8 @@ private:
     asio::ip::tcp::resolver resolver_;
     std::shared_ptr<tls::Stream> stream_;  // one per connection attempt
     asio::steady_timer reconnect_timer_;
+    asio::steady_timer reshare_timer_;   // see reshare_profile_soon
+    std::set<Bytes> reshare_for_;        // people whose new device should get our profile
 
     Conn conn_ = Conn::Disconnected;
     bool want_connection_ = false;

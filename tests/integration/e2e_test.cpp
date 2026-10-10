@@ -2295,3 +2295,68 @@ TEST_CASE("a task-list channel: anyone who can write adds tasks and ticks them")
     REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", chores}, {"body", "hello"}})["ok"] == true);
     REQUIRE(bob.cmd({{"cmd", "set_task_done"}, {"room_id", chores}, {"event_id", "AAAAAAAAAAAAAAAAAAAAAA=="}})["ok"] == false);
 }
+
+TEST_CASE("a new device is sent the profiles it was not there for, its own person's included") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client pc((tmp.path / "alice-pc").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&pc, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    pc.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    // Both say who they are, and have talked, long before the laptop exists.
+    REQUIRE(pc.cmd({{"cmd", "set_profile"}, {"display_name", "Alice A."}, {"bio", "runs this place"}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", "Bobby"}})["ok"] == true);
+    REQUIRE(pc.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hello"}})["ok"] == true);
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hi"}})["ok"] == true);
+    pc.wait_message("hi");
+    std::string bob_id = bob.cmd({{"cmd", "status"}})["data"]["user_id"];
+
+    std::string key = pc.cmd({{"cmd", "get_recovery_key"}})["data"]["recovery_key"];
+    Client laptop((tmp.path / "alice-laptop").string());
+    REQUIRE(laptop.restore("alice", key, "a different passphrase")["ok"] == true);
+    REQUIRE(laptop.cmd(connect)["ok"] == true);
+    laptop.have("live", live);
+
+    // A few seconds on, Bob's client and her own PC have each sent theirs again.
+    laptop.wait("bob's profile", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["user_id"] == bob_id && e["profile"].value("display_name", "") == "Bobby";
+    }, 20000);
+    for (int i = 0; i < 100 && laptop.cmd({{"cmd", "get_profile"}})["data"]["profile"].value("display_name", "") != "Alice A."; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    json mine = laptop.cmd({{"cmd", "get_profile"}})["data"]["profile"];
+    REQUIRE(mine.value("display_name", "") == "Alice A.");
+    REQUIRE(mine.value("bio", "") == "runs this place");
+}
+
+TEST_CASE("a server that only this computer may reach stays that way after a restart") {
+    TempDir tmp;
+    int port = test_port();
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    Client alice((tmp.path / "alice").string());
+    REQUIRE(alice.create("alice")["ok"] == true);
+    auto scope = [&] { return alice.cmd({{"cmd", "server_status"}})["data"]["status"].value("scope", ""); };
+    {
+        // Started with no word about scope: the safe one. It gains a member.
+        Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+        REQUIRE(alice.cmd(connect)["ok"] == true);
+        alice.have("live", live);
+        REQUIRE(scope() == "machine");
+    }
+    // The same server again, now with a member on its books.
+    Server again(port, (tmp.path / "server").string(), "--owner", "alice");
+    alice.wait("live again", live, 40000);
+    REQUIRE(scope() == "machine");
+}
