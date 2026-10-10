@@ -22,6 +22,11 @@
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}
+ *   {"cmd":"set_profile","display_name":"Drew","full_name":"...","birthday":"2004-05-17",
+ *    "bio":"...","links":["https://..."]}     what you say about yourself; fields left out stay,
+ *       "" clears one. Sent encrypted to the chats you are in; no server sees it.
+ *   {"cmd":"get_profile","user_id":"..."}     someone's profile as this device knows it (yours
+ *       without user_id). "profile_updated" {user_id, profile} arrives when one changes.
  *   {"cmd":"set_presence","status":"auto"}   auto (online while in use, away when not), dnd
  *       or invisible (others see you as offline). Kept across restarts.
  *   {"cmd":"set_active","active":false}      the frontend says nobody is using it right now

@@ -53,6 +53,7 @@ public:
     void connect(uint64_t req, const json& cmd);  // applies invite, pin and starts
     void resume();                                 // reconnect after unlock
     void send_presence();                          // tell the server how present this device is
+    void share_profile_everywhere();               // send our profile to every chat on this server
     void disconnect(const std::string& reason);
     void run_command(uint64_t req, const std::string& name, const json& cmd);
     void emit_rooms();
@@ -133,6 +134,8 @@ private:
     void accept_receipt(const EventRow& receipt);
     json receipts_json(ByteView room_id);
     json pins(ByteView room_id);
+    void accept_profile(const EventRow& e);
+    void share_profile(ByteView room_id, bool force);  // sends ours if this room has not had it
     void store_room(const wire::RoomInfoT& info);
     void on_room_event(const wire::RoomEventT& ev);
     void fail_outbox(const OutboxRow& row, const std::string& message);
@@ -235,6 +238,7 @@ private:
     // What this device tells servers: the person's choice (dnd, invisible), or
     // with "auto" whether the frontend says someone is using it.
     std::string effective_presence();
+    json own_profile();
     bool active_ = true;
 
     EngineConfig config_;

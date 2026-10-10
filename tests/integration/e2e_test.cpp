@@ -1798,6 +1798,78 @@ TEST_CASE("pins are not messages") {
     REQUIRE(texts == 1);
 }
 
+TEST_CASE("profiles are shared with the people you talk to and not the server") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    std::string bob_id = bob.cmd({{"cmd", "status"}})["data"]["user_id"];
+    auto name_of_bob = [&](Client& c) {
+        json rooms = c.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"])
+            for (const auto& m : r["members"])
+                if (m["username"] == "bob") return m["display_name"].get<std::string>();
+        return std::string("?");
+    };
+    // Bob says who he is. Alice, who shares a channel with him, is told.
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", "Bobby"}, {"full_name", "Robert Example"},
+                     {"birthday", "2004-05-17"}, {"bio", "hello"}, {"links", {"https://example.org/bob"}}})["ok"] == true);
+    json told = alice.wait("bob's profile", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["user_id"] == bob_id;
+    });
+    REQUIRE(told["profile"]["display_name"] == "Bobby");
+    REQUIRE(told["profile"]["birthday"] == "2004-05-17");
+    REQUIRE(name_of_bob(alice) == "Bobby");
+    REQUIRE(alice.cmd({{"cmd", "get_profile"}, {"user_id", bob_id}})["data"]["profile"]["full_name"] == "Robert Example");
+    // It is not a message: the conversation is unchanged, and nothing is unread.
+    {
+        json tl = alice.cmd({{"cmd", "fetch_timeline"}, {"room_id", general}, {"limit", 50}});
+        for (const auto& e : tl["data"]["events"]) REQUIRE(e["type"] != "m.profile");
+        json rooms = alice.cmd({{"cmd", "list_rooms"}});
+        for (const auto& r : rooms["data"]["rooms"]) REQUIRE(r["unread"] == 0);
+    }
+    // A field left out stays; an empty one is cleared; a newer version wins.
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"bio", ""}, {"display_name", "Bob the Builder"}})["ok"] == true);
+    alice.wait("the newer profile", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["profile"]["display_name"] == "Bob the Builder";
+    });
+    json now = alice.cmd({{"cmd", "get_profile"}, {"user_id", bob_id}})["data"]["profile"];
+    REQUIRE(now["full_name"] == "Robert Example");
+    REQUIRE(!now.contains("bio"));
+    REQUIRE(bob.cmd({{"cmd", "set_profile"}, {"display_name", std::string(60, 'x')}})["ok"] == false);
+    REQUIRE(bob.cmd({{"cmd", "get_profile"}})["data"]["profile"]["display_name"] == "Bob the Builder");
+
+    // Someone who joins later hears it with the next thing Bob says.
+    Client carol((tmp.path / "carol").string());
+    REQUIRE(carol.create("carol")["ok"] == true);
+    REQUIRE(carol.cmd(connect)["ok"] == true);
+    carol.have("live", live);
+    bob.wait("carol joined", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 3;
+    });
+    REQUIRE(name_of_bob(carol) == "bob");  // the server only ever knew his username
+    REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", "hi carol"}})["ok"] == true);
+    carol.wait("bob's profile reaches carol", [&](const json& e) {
+        return e["event"] == "profile_updated" && e["user_id"] == bob_id;
+    });
+    carol.have_message("hi carol");
+    REQUIRE(name_of_bob(carol) == "Bob the Builder");
+}
+
 TEST_CASE("one person on two devices") {
     TempDir tmp;
     int port = test_port();

@@ -29,9 +29,12 @@ struct MemberRow {
     bool is_admin = false;  // the owner, or holds the administrator permission
     bool is_owner = false;
     std::vector<uint32_t> roles;  // role ids, not counting @everyone
-    std::string nickname;  // display name on this server, if they set one
-    // What to show for this person.
-    const std::string& display() const { return nickname.empty() ? username : nickname; }
+    std::string nickname;  // display name held by the server, if one was set there
+    std::string profile_name;  // display name from their own profile, which no server sees
+    // What to show for this person: their own choice first.
+    const std::string& display() const {
+        return !profile_name.empty() ? profile_name : nickname.empty() ? username : nickname;
+    }
 };
 
 struct RoomRow {
@@ -144,6 +147,12 @@ public:
     };
     bool set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, uint64_t seq);
     std::vector<Receipt> receipts(ByteView room_id);
+
+    // Profiles: what people have told this person about themselves. Kept only
+    // here and in their own vaults; no server holds them. Returns true if this
+    // one was newer than what was stored.
+    bool set_profile(ByteView user_id, uint64_t version, const std::string& json_text);
+    std::optional<std::string> profile(ByteView user_id);
     // Messages from others that arrived after this person's read marker.
     uint32_t unread(ByteView room_id, ByteView user_id);
     std::vector<OutboxRow> outbox();

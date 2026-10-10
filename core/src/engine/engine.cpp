@@ -44,7 +44,7 @@ Bytes context_of(ByteView room_id, ByteView event_id) {
 bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
-           type == "m.history.share" || type == "m.receipt" || type == "m.room.pin";
+           type == "m.history.share" || type == "m.receipt" || type == "m.room.pin" || type == "m.profile";
 }
 
 }  // namespace
@@ -538,6 +538,51 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             ok(req, {{"rooms", std::move(rooms)}});
             return;
         }
+        if (name == "set_profile") {
+            // Changes what this person says about themselves; fields left out
+            // stay as they were, and an empty string clears one.
+            json profile = own_profile();
+            static const std::map<std::string, size_t> limits = {
+                {"display_name", 40}, {"full_name", 80}, {"birthday", 10}, {"bio", 500}};
+            for (const auto& [field, limit] : limits) {
+                if (!cmd.contains(field)) continue;
+                std::string value = cmd.at(field).get<std::string>();
+                if (value.size() > limit) {
+                    fail(req, "invalid_argument", field + " is too long");
+                    return;
+                }
+                if (value.empty()) profile.erase(field);
+                else profile[field] = value;
+            }
+            if (cmd.contains("links")) {
+                json links = json::array();
+                for (const auto& link : cmd.at("links")) {
+                    std::string value = link.get<std::string>();
+                    if (!value.empty() && value.size() <= 200 && links.size() < 5) links.push_back(value);
+                }
+                if (links.empty()) profile.erase("links");
+                else profile["links"] = links;
+            }
+            profile["version"] = now_ms();
+            vault_.set_meta("profile", profile.dump());
+            vault_.set_profile(to_bytes(vault_.identity().user.pk), profile["version"].get<uint64_t>(), profile.dump());
+            // Tell every chat now; anyone who joins later hears with the next message.
+            for (auto& [id, s] : sessions_) s->share_profile_everywhere();
+            for (auto& [id, s] : sessions_) s->emit_rooms();
+            ok(req, {{"profile", profile}});
+            return;
+        }
+        if (name == "get_profile") {
+            // Someone's profile as this device knows it; without user_id, our own.
+            if (!cmd.contains("user_id")) {
+                ok(req, {{"profile", own_profile()}});
+                return;
+            }
+            Bytes user_id = need_b64(cmd, "user_id", 32);
+            json profile = json::parse(vault_.profile(user_id).value_or("{}"), nullptr, false);
+            ok(req, {{"user_id", b64(user_id)}, {"profile", profile.is_object() ? profile : json::object()}});
+            return;
+        }
         if (name == "set_presence") {
             // auto (online while in use, away otherwise), dnd or invisible.
             std::string status = cmd.at("status").get<std::string>();
@@ -735,6 +780,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             if (cmd.contains("reply_to"))
                 ev["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
             if (cmd.contains("expires_in")) ev["expires_in"] = cmd.at("expires_in");
+            share_profile(need_b64(cmd, "room_id", 16), false);
             // A thread message points at the message that started the thread.
             // A message has one relation, so a reply made inside a thread
             // belongs to the thread and names what it quotes in its content.
@@ -863,7 +909,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             uint32_t limit = cmd.value("limit", 200u);
             auto page = vault_.timeline(room_id, limit, before_seq);
             for (const auto& e : page)
-                if (e.type != "m.history.share" && e.type != "m.receipt")
+                if (e.type != "m.history.share" && e.type != "m.receipt" && e.type != "m.profile")
                     events.push_back(event_json(e));  // envelopes and receipts are not messages
             // A full page means there may be older ones; ask again with "before"
             // set to "oldest".
@@ -1405,7 +1451,7 @@ void Session::cmd_send_event(uint64_t req, const json& cmd) {
         vault_.outbox_push(e.room_id, e.event_id);
         tx.commit();
     }
-    if (e.type != "m.receipt")
+    if (e.type != "m.receipt" && e.type != "m.profile")
         emit({{"event", "event_received"}, {"room_id", b64(e.room_id)}, {"data", event_json(e)}});
     apply_state(e);
     apply_relation(e);
@@ -1768,6 +1814,53 @@ Session::json Session::receipts_json(ByteView room_id) {
     return out;
 }
 
+// ---------------------------------------------------------------- profiles
+// A profile is what a person says about themselves: a display name and a few
+// optional details. It travels as an encrypted event to the chats they are
+// in, so the people they talk with have it and no server does.
+
+Engine::json Engine::own_profile() {
+    json p = json::parse(vault_.meta("profile").value_or("{}"), nullptr, false);
+    return p.is_object() ? p : json::object();
+}
+
+void Session::accept_profile(const EventRow& e) {
+    // Only a person's own word about themselves counts.
+    json content = json::parse(e.content, nullptr, false);
+    if (!content.is_object() || !content.value("version", json()).is_number_unsigned()) return;
+    if (content.dump().size() > 4096) return;
+    if (!vault_.set_profile(e.sender_user, content["version"].get<uint64_t>(), content.dump())) return;
+    emit({{"event", "profile_updated"}, {"user_id", b64(e.sender_user)}, {"profile", content}});
+    // Their name may have changed wherever they appear.
+    for (const auto& room : rooms())
+        for (const auto& m : room.members)
+            if (m.user_id == e.sender_user) {
+                emit({{"event", "room_updated"}, {"room", room_json(room)}});
+                break;
+            }
+}
+
+void Session::share_profile(ByteView room_id, bool force) {
+    json profile = engine_.own_profile();
+    if (!profile.contains("version")) return;  // nothing set yet
+    auto room = vault_.room(room_id);
+    if (!room) return;
+    // Sent once per version and per set of people, so someone who joins
+    // later gets it with the next thing said here.
+    std::string who;
+    for (const auto& m : room->members) who += b64(m.user_id);
+    std::string mark = std::to_string(profile["version"].get<uint64_t>()) + ":" +
+                       std::to_string(std::hash<std::string>{}(who));
+    std::string key = "profile_sent:" + b64(room_id);
+    if (!force && vault_.meta(key).value_or("") == mark) return;
+    vault_.set_meta(key, mark);
+    cmd_send_event(engine_.next_request_++, {{"room_id", b64(room_id)}, {"type", "m.profile"}, {"content", profile}});
+}
+
+void Session::share_profile_everywhere() {
+    for (const auto& room : rooms()) share_profile(room.room_id, true);
+}
+
 void Session::accept_receipt(const EventRow& receipt) {
     if (receipt.rel_kind != "reference" || receipt.rel_target.size() != 16) return;
     auto target = vault_.event(receipt.room_id, receipt.rel_target);
@@ -1858,7 +1951,7 @@ void Session::on_history_wanted(const wire::HistoryWantedT& wanted) {
         // Never disappearing messages, deleted ones, unsent ones, or history
         // envelopes themselves.
         if (e.status != "ok" || e.expires_at != 0 || !e.seq || e.type == "m.history.share" ||
-            e.type == "m.receipt")
+            e.type == "m.receipt" || e.type == "m.profile")
             continue;
         json item = {{"event_id", b64(e.event_id)},
                      {"type", e.type},
@@ -2074,6 +2167,10 @@ void Session::on_room_event(const wire::RoomEventT& ev) {
     if (decrypted && row.type == "m.receipt") {
         accept_receipt(row);
         return;  // shown on the message it refers to, not as a message
+    }
+    if (decrypted && row.type == "m.profile") {
+        accept_profile(row);
+        return;  // about a person, not part of the conversation
     }
     // Announce the event first, then whatever it changes.
     emit({{"event", "event_received"},

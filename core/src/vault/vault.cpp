@@ -276,6 +276,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     } catch (const db::Error&) {
         db_.exec("ALTER TABLE members ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
     }
+    db_.exec("CREATE TABLE IF NOT EXISTS profiles (user_id BLOB PRIMARY KEY, version INTEGER NOT NULL, "
+             "json TEXT NOT NULL) WITHOUT ROWID");
     db_.exec("CREATE TABLE IF NOT EXISTS receipts (room_id BLOB NOT NULL, user_id BLOB NOT NULL, "
              "event_id BLOB NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (room_id, user_id)) WITHOUT ROWID");
     // Added after the first prototype: rooms can carry a name.
@@ -427,11 +429,17 @@ std::optional<RoomRow> Vault::room(ByteView room_id) {
         r.ttl_s = st.u64(4);
         r.server_id = st.i64(5);
     }
-    auto st = db_.prepare("SELECT user_id, username, is_admin, is_owner, roles, nickname FROM members "
-                          "WHERE room_id = ? ORDER BY username");
+    auto st = db_.prepare("SELECT m.user_id, m.username, m.is_admin, m.is_owner, m.roles, m.nickname, "
+                          "(SELECT p.json FROM profiles p WHERE p.user_id = m.user_id) FROM members m "
+                          "WHERE m.room_id = ? ORDER BY m.username");
     st.bind(1, room_id);
     while (st.step()) {
-        MemberRow m{st.blob(0), st.text(1), st.i64(2) != 0, st.i64(3) != 0, {}, st.text(5)};
+        MemberRow m{st.blob(0), st.text(1), st.i64(2) != 0, st.i64(3) != 0, {}, st.text(5), {}};
+        if (!st.is_null(6)) {
+            json profile = json::parse(st.text(6), nullptr, false);
+            if (profile.is_object() && profile.value("display_name", json()).is_string())
+                m.profile_name = profile["display_name"].get<std::string>();
+        }
         std::string roles = st.text(4);
         for (size_t pos = 0; pos < roles.size();) {
             size_t end = roles.find(',', pos);
@@ -611,6 +619,21 @@ void Vault::redact_event(ByteView room_id, ByteView event_id) {
     st.bind(1, room_id).bind(2, event_id).exec();
 }
 
+bool Vault::set_profile(ByteView user_id, uint64_t version, const std::string& json_text) {
+    auto st = db_.prepare("INSERT INTO profiles (user_id, version, json) VALUES (?,?,?) "
+                          "ON CONFLICT(user_id) DO UPDATE SET version = excluded.version, json = excluded.json "
+                          "WHERE excluded.version > profiles.version");
+    st.bind(1, user_id).bind(2, version).bind(3, json_text).exec();
+    return db_.changes() > 0;
+}
+
+std::optional<std::string> Vault::profile(ByteView user_id) {
+    auto st = db_.prepare("SELECT json FROM profiles WHERE user_id = ?");
+    st.bind(1, user_id);
+    if (!st.step()) return std::nullopt;
+    return st.text(0);
+}
+
 bool Vault::set_receipt(ByteView room_id, ByteView user_id, ByteView event_id, uint64_t seq) {
     auto st = db_.prepare("INSERT INTO receipts (room_id, user_id, event_id, seq) VALUES (?,?,?,?) "
                           "ON CONFLICT(room_id, user_id) DO UPDATE SET event_id = excluded.event_id, "
@@ -625,7 +648,7 @@ uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
     auto st = db_.prepare(
         "SELECT COUNT(*) FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
-        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction') "
+        "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile') "
         "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0)");
     st.bind(1, room_id).bind(2, user_id);
