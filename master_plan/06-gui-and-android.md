@@ -131,7 +131,8 @@ State management is kept plain: the binding's stores are `ChangeNotifier`s and s
 listen to them. No code generation, no large framework, so a newcomer can read it.
 
 Android specifics: `corded://` links open the app; the app asks for no permissions beyond
-network access until the camera is needed for scanning a code; minimum Android 8.0.
+network access until the camera is needed for scanning a code; minimum Android 9, the
+first version whose system library has everything the core's dependencies call.
 
 ## 6. What a phone changes
 
