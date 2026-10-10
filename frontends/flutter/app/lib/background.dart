@@ -6,6 +6,7 @@
 // with the service reads the core's events: it shows a notification for each
 // new message while nobody is looking, and passes every event on to the
 // screen whenever there is one.
+import 'platform.dart';
 import 'dart:convert';
 
 import 'package:corded_dart/corded_dart.dart';
@@ -161,6 +162,8 @@ class Background {
   static bool _supported = false;
 
   static void init() {
+    // A desktop app stays connected while its window is open and needs no service.
+    if (!isPhone) return;
     try {
       FlutterForegroundTask.initCommunicationPort();
       FlutterForegroundTask.init(
@@ -262,7 +265,9 @@ class Background {
     }
   }
 
-  static void onEvent(void Function(Object) callback) => FlutterForegroundTask.addTaskDataCallback(callback);
+  static void onEvent(void Function(Object) callback) {
+    if (_supported) FlutterForegroundTask.addTaskDataCallback(callback);
+  }
 
   /// Calls [onTap] with where a tapped notification leads ({room_id, thread}),
   /// including the one that started the app, if a notification did.

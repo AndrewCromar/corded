@@ -1,3 +1,4 @@
+import '../platform.dart';
 import 'dart:async';
 
 import 'package:corded_dart/corded_dart.dart';
@@ -205,7 +206,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
         if (close != true || !mounted) return;
         if (await attempt(context, () => engine.command({'cmd': 'leave_room', 'room_id': _room}))) {
-          navigator.pop();
+          navigator.maybePop();
         }
       case 'leave':
         final leave = await showDialog<bool>(
@@ -221,7 +222,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
         if (leave != true || !mounted) return;
         if (await attempt(context, () => engine.command({'cmd': 'leave_room', 'room_id': _room}))) {
-          navigator.pop();
+          navigator.maybePop();
         }
     }
   }
@@ -352,7 +353,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       return;
     }
-    if (mounted) navigator.pop();
+    if (mounted) navigator.maybePop();
   }
 
   void _showProfile(Message m) {
@@ -700,23 +701,24 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
             leading: const Icon(Icons.photo_library_outlined),
-            title: const Text('Photo from your gallery'),
+            title: Text(isPhone ? 'Photo from your gallery' : 'A picture'),
             onTap: () {
               Navigator.pop(sheet);
               _sendPhoto(ImageSource.gallery);
             },
           ),
-          ListTile(
-            leading: const Icon(Icons.photo_camera_outlined),
-            title: const Text('Take a photo'),
-            onTap: () {
-              Navigator.pop(sheet);
-              _sendPhoto(ImageSource.camera);
-            },
-          ),
+          if (isPhone)
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take a photo'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _sendPhoto(ImageSource.camera);
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.videocam_outlined),
-            title: const Text('Video from your gallery'),
+            title: Text(isPhone ? 'Video from your gallery' : 'A video'),
             onTap: () {
               Navigator.pop(sheet);
               _sendPicked(() async {
@@ -1314,7 +1316,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   '${room.title} is marked NSFW. It may contain content you do not want on your screen right now.',
                   textAlign: TextAlign.center),
               const SizedBox(height: 24),
-              FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Go back')),
+              FilledButton(onPressed: () => Navigator.maybePop(context), child: const Text('Go back')),
               const SizedBox(height: 8),
               TextButton(
                   onPressed: () => setState(() => _uncovered = true), child: const Text('Open anyway')),

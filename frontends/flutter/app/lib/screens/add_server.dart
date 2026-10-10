@@ -1,3 +1,4 @@
+import '../platform.dart';
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 
@@ -64,16 +65,18 @@ class _AddServerScreenState extends State<AddServerScreen> {
         decoration: InputDecoration(
           labelText: 'Invite link or address',
           border: const OutlineInputBorder(),
-          suffixIcon: IconButton(
-            tooltip: 'Scan an invite code',
-            icon: const Icon(Icons.qr_code_scanner),
-            onPressed: () async {
-              final text = await scanCode(context, title: 'Scan an invite');
-              if (text == null || !mounted) return;
-              setState(() => _address.text = text.trim());
-              if (text.trim().startsWith('corded://')) await _join();
-            },
-          ),
+          suffixIcon: !isPhone
+              ? null
+              : IconButton(
+                  tooltip: 'Scan an invite code',
+                  icon: const Icon(Icons.qr_code_scanner),
+                  onPressed: () async {
+                    final text = await scanCode(context, title: 'Scan an invite');
+                    if (text == null || !mounted) return;
+                    setState(() => _address.text = text.trim());
+                    if (text.trim().startsWith('corded://')) await _join();
+                  },
+                ),
         ),
       ),
       const SizedBox(height: 12),

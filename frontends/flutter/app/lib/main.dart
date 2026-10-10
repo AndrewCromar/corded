@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
+import 'platform.dart';
 import 'app_state.dart';
 import 'screens/add_server.dart';
 import 'screens/chat.dart';
@@ -28,6 +32,29 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
 
   final _navigator = GlobalKey<NavigatorState>();
 
+  // On a desktop window wide enough, the chats stay listed on the left and
+  // the open one fills the rest, instead of one screen covering the other.
+  bool _wide = false;
+  String? _paneRoom;
+
+  // For checking the look of the app where no one can see its window: with
+  // CORDED_SCREENSHOT=/some/file.png set, the app saves a picture of itself
+  // there every few seconds.
+  final _whole = GlobalKey();
+  Timer? _camera;
+
+  Future<void> _photograph(String path) async {
+    try {
+      final boundary = _whole.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+      final image = await boundary.toImage();
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes != null) await File(path).writeAsBytes(bytes.buffer.asUint8List());
+    } catch (_) {
+      // Only a development aid.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -35,11 +62,19 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
     // A message somewhere else shows as a banner at the top for a few seconds.
     state.onBanner = _showBanner;
     // A tapped notification leads to its chat, and into its thread if it has one.
+    final shot = Platform.environment['CORDED_SCREENSHOT'];
+    if (shot != null && shot.isNotEmpty) {
+      _camera = Timer.periodic(const Duration(seconds: 3), (_) => _photograph(shot));
+    }
     state.onOpenChat = (roomId, threadRoot) {
       final navigator = _navigator.currentState;
       if (navigator == null) return;
       navigator.popUntil((route) => route.isFirst);
-      navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
+      if (_wide) {
+        setState(() => _paneRoom = roomId);
+      } else {
+        navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
+      }
       if (threadRoot != null) {
         navigator.push(MaterialPageRoute(
             builder: (_) => ChatScreen(state: state, roomId: roomId, threadRoot: threadRoot)));
@@ -50,6 +85,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _camera?.cancel();
     super.dispose();
   }
 
@@ -138,6 +174,7 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       navigatorKey: _navigator,
       theme: theme(Brightness.light),
       darkTheme: theme(Brightness.dark),
+      builder: (context, child) => RepaintBoundary(key: _whole, child: child),
       home: ListenableBuilder(listenable: state, builder: (context, _) => _root()),
     );
   }
@@ -157,9 +194,21 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       case 'missing':
         return WelcomeScreen(state: state);
       case 'unlocked':
-        return state.store.servers.isEmpty
-            ? AddServerScreen(state: state, first: true)
-            : HomeScreen(state: state);
+        if (state.store.servers.isEmpty) return AddServerScreen(state: state, first: true);
+        return LayoutBuilder(builder: (context, box) {
+          _wide = isDesktop && box.maxWidth >= 840;
+          if (!_wide) return HomeScreen(state: state);
+          final open = _paneRoom != null && state.store.rooms.containsKey(_paneRoom) ? _paneRoom : null;
+          return Row(children: [
+            SizedBox(width: 340, child: HomeScreen(state: state)),
+            const VerticalDivider(width: 1),
+            Expanded(
+              child: open == null
+                  ? const Scaffold(body: Center(child: Text('Choose a chat on the left.')))
+                  : ChatScreen(key: ValueKey(open), state: state, roomId: open),
+            ),
+          ]);
+        });
       default:
         return UnlockScreen(state: state);
     }

@@ -38,13 +38,22 @@ struct Outcome {
 
 // Runs a program and gives back what it printed, or nothing if it failed.
 inline std::optional<std::string> run(const std::string& command) {
+#ifdef _WIN32
+    FILE* pipe = _popen(command.c_str(), "rb");
+#else
     FILE* pipe = popen(command.c_str(), "r");
+#endif
     if (!pipe) return std::nullopt;
     std::string out;
     char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof buf, pipe)) > 0) out.append(buf, n);
-    return pclose(pipe) == 0 ? std::optional<std::string>(out) : std::nullopt;
+#ifdef _WIN32
+    int status = _pclose(pipe);
+#else
+    int status = pclose(pipe);
+#endif
+    return status == 0 ? std::optional<std::string>(out) : std::nullopt;
 }
 
 inline std::optional<Bytes> read_file(const std::filesystem::path& path) {

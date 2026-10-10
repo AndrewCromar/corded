@@ -1,3 +1,4 @@
+import '../platform.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -74,7 +75,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         autocorrect: false,
         decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
       ),
-      if (_existing) ...[
+      if (_existing && isPhone) ...[
         const SizedBox(height: 12),
         OutlinedButton.icon(
           icon: const Icon(Icons.qr_code_scanner),

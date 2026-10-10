@@ -59,8 +59,15 @@ class HomeScreen extends StatelessWidget {
     });
   }
 
+  // The app decides where a chat opens: over this list on a phone, beside it
+  // in a wide desktop window.
   void _open(BuildContext context, String roomId) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
+    final open = state.onOpenChat;
+    if (open != null) {
+      open(roomId, null);
+    } else {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
+    }
   }
 
   @override
@@ -124,6 +131,7 @@ class HomeScreen extends StatelessWidget {
               ),
             if (r.unread > 0) Badge(label: Text('${r.unread}')),
           ]),
+          selected: r.id == state.viewingRoom,
           onTap: () => _open(context, r.id),
           // Hold a chat for what can be done without opening it.
           onLongPress: () => showModalBottomSheet<void>(

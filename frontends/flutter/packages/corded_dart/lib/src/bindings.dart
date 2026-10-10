@@ -67,5 +67,10 @@ DynamicLibrary openCordedLibrary([String? path]) {
   if (path != null) return DynamicLibrary.open(path);
   if (Platform.isWindows) return DynamicLibrary.open('corded.dll');
   if (Platform.isMacOS || Platform.isIOS) return DynamicLibrary.process();
+  if (Platform.isLinux) {
+    // A desktop app carries the core in the "lib" folder beside its program.
+    final bundled = '${File(Platform.resolvedExecutable).parent.path}/lib/libcorded.so';
+    if (File(bundled).existsSync()) return DynamicLibrary.open(bundled);
+  }
   return DynamicLibrary.open('libcorded.so');
 }

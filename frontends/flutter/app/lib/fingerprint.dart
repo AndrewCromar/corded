@@ -3,11 +3,13 @@
 // The passphrase is kept in the phone's secure hardware, under a key that
 // Android only releases after a fingerprint (or face) check. The passphrase
 // still works by itself and is still what protects a copy of the vault file.
+import 'platform.dart';
 import 'package:biometric_storage/biometric_storage.dart';
 
 class Fingerprint {
   /// Whether this phone has a fingerprint (or face) set up to use.
   static Future<bool> available() async {
+    if (!isPhone) return false; // desktops unlock with the passphrase
     try {
       return await BiometricStorage().canAuthenticate() == CanAuthenticateResponse.success;
     } catch (_) {

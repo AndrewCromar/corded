@@ -97,6 +97,21 @@ install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
+# The Corded core, built separately (./build.sh at the top of the repository,
+# or a release's libcorded.so). CORDED_CORE_LIB says where it is.
+if(DEFINED ENV{CORDED_CORE_LIB})
+  set(CORDED_CORE_LIB "$ENV{CORDED_CORE_LIB}")
+else()
+  set(CORDED_CORE_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../../../../build/dev/lib/libcorded.so")
+endif()
+if(NOT EXISTS "${CORDED_CORE_LIB}")
+  message(FATAL_ERROR "The Corded core was not found at ${CORDED_CORE_LIB}. Build it first with ./build.sh, or set CORDED_CORE_LIB.")
+endif()
+# The file itself, not a link to it, under the one name the app looks for.
+get_filename_component(CORDED_CORE_LIB_REAL "${CORDED_CORE_LIB}" REALPATH)
+install(FILES "${CORDED_CORE_LIB_REAL}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" RENAME libcorded.so
+  COMPONENT Runtime)
+
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 

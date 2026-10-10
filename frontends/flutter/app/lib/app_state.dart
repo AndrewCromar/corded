@@ -1,3 +1,5 @@
+import 'desktop_notifier.dart';
+import 'platform.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -192,16 +194,23 @@ class AppState extends ChangeNotifier {
   void Function(String title, String body, String roomId, String? threadRoot)? onBanner;
 
   void _maybeBanner(Map<String, dynamic> event) {
-    if (!_onScreen || _doNotDisturb || onBanner == null) return;
+    // On a desktop the window may be open but not looked at: then the
+    // message is announced by the system, as a phone's service would.
+    final elsewhere = isDesktop && !_onScreen;
+    if ((!_onScreen && !elsewhere) || _doNotDisturb || onBanner == null) return;
     final n = notificationFor(event, {for (final r in store.rooms.values) r.id: r.title},
         muted: mutedRooms,
-        showText: true,
+        showText: elsewhere ? showMessageText : true,
         me: store.username,
         nsfw: {
           for (final r in store.rooms.values)
             if (r.nsfw) r.id
         });
     if (n == null) return;
+    if (elsewhere) {
+      DesktopNotifier.show(n);
+      return;
+    }
     final data = (event['data'] as Map).cast<String, dynamic>();
     final relation = (data['relation'] as Map?) ?? const {};
     final thread = relation['kind'] == 'thread' ? relation['target'] as String? : null;
@@ -315,6 +324,7 @@ class AppState extends ChangeNotifier {
         _tryPendingOpen();
       });
       Background.listenForTaps(openFromNotification);
+      DesktopNotifier.init(openFromNotification);
       engine.events.listen((event) {
         if (event['event'] == 'event_received') _maybeBanner(event);
         // What a server tells the people who run it: a setting changed, an

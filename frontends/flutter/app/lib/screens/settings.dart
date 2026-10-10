@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import '../background.dart';
 import 'common.dart';
 import 'devices.dart';
 import 'profile.dart';
@@ -337,20 +340,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: widget.state.fingerprintUnlock,
             onChanged: _setFingerprint,
           ),
-        SwitchListTile(
-          secondary: const Icon(Icons.notifications_active_outlined),
-          title: const Text('Stay connected in the background'),
-          subtitle: const Text('Get a notification for each new message while the app is not on screen. '
-              'Android shows a permanent notification while this is on, and it uses some battery.'),
-          isThreeLine: true,
-          value: widget.state.backgroundMode,
-          onChanged: (on) async {
-            final messenger = ScaffoldMessenger.of(context);
-            final problem = await widget.state.setBackgroundMode(on);
-            if (problem != null) messenger.showSnackBar(SnackBar(content: Text(problem)));
-            if (mounted) setState(() {});
-          },
-        ),
+        if (Background.supported)
+          SwitchListTile(
+            secondary: const Icon(Icons.notifications_active_outlined),
+            title: const Text('Stay connected in the background'),
+            subtitle: const Text('Get a notification for each new message while the app is not on screen. '
+                'Android shows a permanent notification while this is on, and it uses some battery.'),
+            isThreeLine: true,
+            value: widget.state.backgroundMode,
+            onChanged: (on) async {
+              final messenger = ScaffoldMessenger.of(context);
+              final problem = await widget.state.setBackgroundMode(on);
+              if (problem != null) messenger.showSnackBar(SnackBar(content: Text(problem)));
+              if (mounted) setState(() {});
+            },
+          ),
         if (widget.state.backgroundMode)
           SwitchListTile(
             secondary: const Icon(Icons.visibility_outlined),
@@ -373,12 +377,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (mounted) setState(() {});
           },
         ),
-        ListTile(
-          leading: const Icon(Icons.palette_outlined),
-          title: const Text('App icon'),
-          subtitle: const Text('The colour of the icon on your home screen'),
-          onTap: _chooseIcon,
-        ),
+        if (Platform.isAndroid)
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('App icon'),
+            subtitle: const Text('The colour of the icon on your home screen'),
+            onTap: _chooseIcon,
+          ),
         ListTile(
           leading: const Icon(Icons.add_reaction_outlined),
           title: const Text('Quick reactions'),
