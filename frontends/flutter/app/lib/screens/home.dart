@@ -84,6 +84,9 @@ class HomeScreen extends StatelessWidget {
         rooms.where((r) => r.kind == 'channel' && !r.archived && !r.nsfw && !r.featured).toList();
     // Kept apart from the everyday channels, further down the list.
     final nsfw = rooms.where((r) => r.kind == 'channel' && !r.archived && r.nsfw).toList();
+    // In no section, or in one this device has not been told about.
+    final known = {for (final s in server?.sections ?? const <Section>[]) s.id};
+    final loose = channels.where((r) => !known.contains(r.section)).toList();
     final archived = rooms.where((r) => r.kind == 'channel' && r.archived).toList();
     final others = rooms.where((r) => r.kind != 'channel').toList();
 
@@ -246,8 +249,14 @@ class HomeScreen extends StatelessWidget {
           child: ListView(children: [
             if (pinned.isNotEmpty) heading('Pinned'),
             ...pinned.map(tile),
-            if (channels.isNotEmpty) heading('Channels'),
-            ...channels.map(tile),
+            // The server's own sections, in its order; then the channels in none.
+            for (final section in server?.sections ?? const <Section>[])
+              if (channels.any((r) => r.section == section.id)) ...[
+                heading(section.name),
+                ...channels.where((r) => r.section == section.id).map(tile),
+              ],
+            if (loose.isNotEmpty) heading('Channels'),
+            ...loose.map(tile),
             heading('Direct messages'),
             ...others.map(tile),
             if (others.isEmpty)

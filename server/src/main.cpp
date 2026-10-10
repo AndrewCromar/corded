@@ -505,6 +505,10 @@ public:
                 case wire::FrameBody_Restart: on_restart(*c, rid); break;
                 case wire::FrameBody_UpdateServer: on_update(*c, rid); break;
                 case wire::FrameBody_CancelScheduled: on_cancel_scheduled(*c, rid, *f.body.AsCancelScheduled()); break;
+                case wire::FrameBody_EditSection: on_edit_section(*c, rid, *f.body.AsEditSection()); break;
+                case wire::FrameBody_SetChannelSection:
+                    on_set_channel_section(*c, rid, *f.body.AsSetChannelSection());
+                    break;
                 case wire::FrameBody_SetChannelFeatured:
                     on_set_channel_featured(*c, rid, *f.body.AsSetChannelFeatured());
                     break;
@@ -564,6 +568,7 @@ private:
         info.description = setting("description");
         info.icon = setting("icon");
         for (auto& r : storage_.roles()) info.roles.push_back(std::make_unique<wire::RoleT>(std::move(r)));
+        for (auto& s : storage_.sections()) info.sections.push_back(std::make_unique<wire::SectionT>(std::move(s)));
         return info;
     }
 
@@ -1116,6 +1121,45 @@ private:
         }
         if (row->owner != c.user_id && !require(c, rid, perm::ManageMessages)) return;
         drop_blob(q.blob_id);
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Sections group channels in everyone's list. Whoever manages channels manages them.
+    void on_edit_section(Conn& c, uint32_t rid, const wire::EditSectionT& q) {
+        if (!require(c, rid, perm::ManageChannels)) return;
+        if (q.section_id != 0 && !storage_.section_exists(q.section_id)) {
+            c.fail(rid, err::NotFound, "no such section");
+            return;
+        }
+        if (q.remove) {
+            storage_.remove_section(q.section_id);
+        } else {
+            if (q.name.empty() || q.name.size() > 40) {
+                c.fail(rid, err::Malformed, "a section's name is 1 to 40 characters");
+                return;
+            }
+            if (q.section_id == 0) {
+                if (storage_.section_count() >= 50) {
+                    c.fail(rid, err::Forbidden, "a server has at most 50 sections");
+                    return;
+                }
+                storage_.create_section(q.name);
+            } else {
+                storage_.update_section(q.section_id, q.name, q.position);
+            }
+        }
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
+    void on_set_channel_section(Conn& c, uint32_t rid, const wire::SetChannelSectionT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        if (q.section_id != 0 && !storage_.section_exists(q.section_id)) {
+            c.fail(rid, err::NotFound, "no such section");
+            return;
+        }
+        storage_.set_channel_section(q.room_id, q.section_id);
+        broadcast_state();
         c.reply(rid, wire::OkT{});
     }
 

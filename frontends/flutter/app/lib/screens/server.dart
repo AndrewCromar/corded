@@ -124,6 +124,86 @@ class _ServerScreenState extends State<ServerScreen> {
         type == 'tasks' ? 'Task list created.' : 'Channel created.');
   }
 
+  void _sectionActions(Section s) {
+    final at = _server.sections.indexWhere((x) => x.id == s.id);
+    // Moving swaps places with the neighbour.
+    Future<void> swap(Section other) async {
+      await _do({'cmd': 'edit_section', 'section_id': s.id, 'position': other.position}, 'Moved.');
+      await _do({'cmd': 'edit_section', 'section_id': other.id, 'position': s.position}, 'Moved.');
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text(s.name)),
+          ListTile(
+            leading: const Icon(Icons.edit_outlined),
+            title: const Text('Rename'),
+            onTap: () async {
+              Navigator.pop(sheet);
+              final name = await _ask('Rename section', initial: s.name);
+              if (name == null || name.trim().isEmpty || name.trim() == s.name) return;
+              await _do({'cmd': 'edit_section', 'section_id': s.id, 'name': name.trim()}, 'Renamed.');
+            },
+          ),
+          if (at > 0)
+            ListTile(
+              leading: const Icon(Icons.arrow_upward),
+              title: const Text('Move up'),
+              onTap: () {
+                Navigator.pop(sheet);
+                swap(_server.sections[at - 1]);
+              },
+            ),
+          if (at >= 0 && at < _server.sections.length - 1)
+            ListTile(
+              leading: const Icon(Icons.arrow_downward),
+              title: const Text('Move down'),
+              onTap: () {
+                Navigator.pop(sheet);
+                swap(_server.sections[at + 1]);
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('Remove the section'),
+            subtitle: const Text('Its channels stay, under no section'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _do({'cmd': 'edit_section', 'section_id': s.id, 'remove': true}, 'Section removed.');
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // Which section a channel is listed under.
+  Future<void> _chooseSection(Room r) async {
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(title: Text('Section for ${r.title}'), children: [
+        ListTile(
+          title: const Text('None'),
+          trailing: r.section == 0 ? const Icon(Icons.check) : null,
+          onTap: () => Navigator.pop(context, 0),
+        ),
+        for (final s in _server.sections)
+          ListTile(
+            leading: const Icon(Icons.folder_outlined),
+            title: Text(s.name),
+            trailing: r.section == s.id ? const Icon(Icons.check) : null,
+            onTap: () => Navigator.pop(context, s.id),
+          ),
+      ]),
+    );
+    if (chosen == null || chosen == r.section) return;
+    await _do({'cmd': 'set_channel_section', 'room_id': r.id, 'section_id': chosen},
+        chosen == 0 ? 'Taken out of its section.' : 'Moved.');
+  }
+
   void _channelActions(Room r) {
     final name = r.title.replaceFirst('#', '');
     showModalBottomSheet<void>(
@@ -151,6 +231,15 @@ class _ServerScreenState extends State<ServerScreen> {
                   r.archived ? 'The channel is open again.' : 'Archived.');
             },
           ),
+          if (_server.sections.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('Put in a section'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _chooseSection(r);
+              },
+            ),
           ListTile(
             leading: Icon(r.featured ? Icons.push_pin : Icons.push_pin_outlined),
             title: Text(r.featured ? 'Unpin from the top' : 'Pin to the top'),
@@ -317,6 +406,28 @@ class _ServerScreenState extends State<ServerScreen> {
       appBar: AppBar(title: Text('Manage ${_server.name.isEmpty ? 'server' : _server.name}')),
       body: ListView(children: [
         if (_server.can('manage_channels')) ...[
+          heading('Sections'),
+          for (final s in _server.sections)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(s.name),
+              subtitle: Text(() {
+                final n = channels.where((r) => r.section == s.id).length;
+                return n == 0 ? 'No channels yet' : '$n channel${n == 1 ? '' : 's'}';
+              }()),
+              trailing: const Icon(Icons.more_vert),
+              onTap: () => _sectionActions(s),
+            ),
+          ListTile(
+            leading: const Icon(Icons.create_new_folder_outlined),
+            title: const Text('New section'),
+            subtitle: const Text('A heading that groups channels in everyone\'s list'),
+            onTap: () async {
+              final name = await _ask('New section', hint: 'Projects, Off-topic...', action: 'Create');
+              if (name == null || name.trim().isEmpty) return;
+              await _do({'cmd': 'edit_section', 'name': name.trim()}, 'Section created.');
+            },
+          ),
           heading('Channels'),
           for (final r in channels)
             ListTile(

@@ -200,6 +200,12 @@ private:
     Bytes server_owner_;
     uint64_t my_permissions_ = 0;
     std::vector<RoleInfo> roles_;
+    struct SectionInfo {
+        uint32_t id = 0;
+        std::string name;
+        int32_t position = 0;
+    };
+    std::vector<SectionInfo> sections_;  // how the server groups its channels, in order
     std::set<Bytes> bundle_requested_;
     bool history_sharing_ = true;  // what the server allows
     // Each person's devices as the server last listed them, for this connection.

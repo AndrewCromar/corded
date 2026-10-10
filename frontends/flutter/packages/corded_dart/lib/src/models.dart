@@ -36,6 +36,7 @@ class Room {
   bool nsfw = false; // a channel marked so that clients warn before showing it
   bool archived = false; // a channel kept to read, closed to writing
   bool featured = false; // a channel pinned to the top of everyone's list
+  int section = 0; // the server's section it is listed under; 0 for none
   String channelType = ''; // how a channel is laid out: '' for messages, 'tasks' for a task list
   bool get isTaskList => channelType == 'tasks';
   String firstUnread = ''; // where this person's unread messages start; empty if none
@@ -50,6 +51,7 @@ class Room {
     nsfw = j['nsfw'] as bool? ?? nsfw;
     archived = j['archived'] as bool? ?? archived;
     featured = j['featured'] as bool? ?? featured;
+    section = (j['section'] as num?)?.toInt() ?? section;
     channelType = j['channel_type'] as String? ?? channelType;
     firstUnread = j['first_unread'] as String? ?? firstUnread;
     final p = j['pinned'] as List?;
@@ -181,6 +183,16 @@ class Role {
   final Set<String> permissions;
 }
 
+/// A named group of channels in a server's list, made by those who run it.
+class Section {
+  Section.fromJson(Map<String, dynamic> j)
+      : id = (j['section_id'] as num?)?.toInt() ?? 0,
+        name = '${j['name'] ?? ''}',
+        position = (j['position'] as num?)?.toInt() ?? 0;
+  final int id, position;
+  final String name;
+}
+
 class ServerInfo {
   ServerInfo(this.id);
   final int id;
@@ -193,6 +205,7 @@ class ServerInfo {
   Set<String> permissions = {};
   List<String> roles = const []; // the roles that can be given to members
   List<Role> roleDetails = const []; // every role, the one everybody has included
+  List<Section> sections = const []; // how channels are grouped, in listing order
 
   /// Whether this person may do something that needs [permission] here.
   bool can(String permission) =>
@@ -207,6 +220,13 @@ class ServerInfo {
     isOwner = j['is_owner'] as bool? ?? isOwner;
     final p = j['my_permissions'] as List?;
     if (p != null) permissions = p.map((e) => '$e').toSet();
+    final groups = j['sections'] as List?;
+    if (groups != null) {
+      sections = [
+        for (final g in groups)
+          if (g is Map) Section.fromJson(g.cast<String, dynamic>())
+      ]..sort((a, b) => a.position != b.position ? a.position.compareTo(b.position) : a.id.compareTo(b.id));
+    }
     final r = j['roles'] as List?;
     if (r != null) {
       roleDetails = [

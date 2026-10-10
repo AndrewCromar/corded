@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS room_events (
     PRIMARY KEY (room_id, seq, recipient_device)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS room_events_by_id ON room_events(room_id, event_id);
+CREATE TABLE IF NOT EXISTS sections (
+    section_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS scheduled_events (
     room_id BLOB NOT NULL, event_id BLOB NOT NULL, sender_user BLOB NOT NULL, sender_device BLOB NOT NULL,
     send_at INTEGER NOT NULL, frame BLOB NOT NULL,
@@ -143,6 +146,11 @@ CREATE TABLE IF NOT EXISTS blobs (
             db_.exec("SELECT archived FROM rooms LIMIT 0");
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE rooms ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+        }
+        try {
+            db_.exec("SELECT section FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN section INTEGER NOT NULL DEFAULT 0");
         }
         try {
             db_.exec("SELECT featured FROM rooms LIMIT 0");
@@ -601,6 +609,51 @@ CREATE TABLE IF NOT EXISTS blobs (
         st.bind(1, room_id);
         return st.step() && st.i64(0) != 0;
     }
+    // ---- sections: named groups of channels ----
+    std::vector<wire::SectionT> sections() {
+        std::vector<wire::SectionT> out;
+        auto st = db_.prepare("SELECT section_id, name, position FROM sections ORDER BY position, section_id");
+        while (st.step()) {
+            wire::SectionT s;
+            s.section_id = static_cast<uint32_t>(st.i64(0));
+            s.name = st.text(1);
+            s.position = static_cast<int32_t>(st.i64(2));
+            out.push_back(std::move(s));
+        }
+        return out;
+    }
+    bool section_exists(uint32_t id) {
+        auto st = db_.prepare("SELECT 1 FROM sections WHERE section_id = ?");
+        st.bind(1, static_cast<int64_t>(id));
+        return st.step();
+    }
+    uint32_t section_count() {
+        auto st = db_.prepare("SELECT COUNT(*) FROM sections");
+        return st.step() ? static_cast<uint32_t>(st.i64(0)) : 0;
+    }
+    // A new section goes after the ones there are.
+    void create_section(const std::string& name) {
+        auto st = db_.prepare("INSERT INTO sections (name, position) "
+                              "VALUES (?, COALESCE((SELECT MAX(position) FROM sections), 0) + 1)");
+        st.bind(1, name).exec();
+    }
+    void update_section(uint32_t id, const std::string& name, int32_t position) {
+        auto st = db_.prepare("UPDATE sections SET name = ?, position = ? WHERE section_id = ?");
+        st.bind(1, name).bind(2, static_cast<int64_t>(position)).bind(3, static_cast<int64_t>(id)).exec();
+    }
+    void remove_section(uint32_t id) {
+        db::Transaction tx(db_);
+        auto clear = db_.prepare("UPDATE rooms SET section = 0 WHERE section = ?");
+        clear.bind(1, static_cast<int64_t>(id)).exec();
+        auto del = db_.prepare("DELETE FROM sections WHERE section_id = ?");
+        del.bind(1, static_cast<int64_t>(id)).exec();
+        tx.commit();
+    }
+    void set_channel_section(ByteView room_id, uint32_t section) {
+        auto st = db_.prepare("UPDATE rooms SET section = ? WHERE room_id = ? AND kind = 0");
+        st.bind(1, static_cast<int64_t>(section)).bind(2, room_id).exec();
+    }
+
     void set_channel_featured(ByteView room_id, bool featured) {
         auto st = db_.prepare("UPDATE rooms SET featured = ? WHERE room_id = ? AND kind = 0");
         st.bind(1, static_cast<int64_t>(featured ? 1 : 0)).bind(2, room_id).exec();
@@ -666,7 +719,8 @@ CREATE TABLE IF NOT EXISTS blobs (
         info.room_id = to_bytes(room_id);
         {
             auto st = db_.prepare(
-                "SELECT created_at, kind, name, nsfw, archived, channel_type, featured FROM rooms WHERE room_id = ?");
+                "SELECT created_at, kind, name, nsfw, archived, channel_type, featured, section FROM rooms "
+                "WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
@@ -677,6 +731,7 @@ CREATE TABLE IF NOT EXISTS blobs (
                 info.archived = st.i64(4) != 0;
                 info.channel_type = st.text(5);
                 info.featured = st.i64(6) != 0;
+                info.section = static_cast<uint32_t>(st.i64(7));
             }
         }
         if (info.kind == kChannel) {

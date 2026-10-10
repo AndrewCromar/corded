@@ -363,6 +363,8 @@ Session::json Session::room_json(const RoomRow& room) {
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
             // Pinned to the top of the list by whoever manages the channels.
             {"featured", vault_.meta("featured:" + b64(room.room_id)).value_or("0") == "1"},
+            // Which of the server's sections the channel is listed under; 0 for none.
+            {"section", std::strtoul(vault_.meta("section:" + b64(room.room_id)).value_or("0").c_str(), nullptr, 10)},
             {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
             // How a channel is laid out: "" for messages, "tasks" for a task list.
             {"channel_type", vault_.meta("channel_type:" + b64(room.room_id)).value_or("")},
@@ -381,6 +383,10 @@ Session::json Session::server_json() {
                          {"permissions", perm::to_names(r.permissions)}});
     bool owner = server_owner_.size() == 32 &&
                  std::equal(server_owner_.begin(), server_owner_.end(), vault_.identity().user.pk.begin());
+    // Named groups of channels, in the order they are listed.
+    json sections = json::array();
+    for (const auto& s : sections_)
+        sections.push_back({{"section_id", s.id}, {"name", s.name}, {"position", s.position}});
     return {{"server_id", id_},
             {"address", host_ + ":" + port_},
             {"name", server_name_},
@@ -389,6 +395,7 @@ Session::json Session::server_json() {
             {"is_owner", owner},
             {"history_sharing", history_sharing_},
             {"my_permissions", perm::to_names(my_permissions_)},
+            {"sections", std::move(sections)},
             {"roles", std::move(roles)}};
 }
 
@@ -896,7 +903,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
-                   name == "set_channel_featured" ||
+                   name == "set_channel_featured" || name == "edit_section" || name == "set_channel_section" ||
                    name == "list_devices" || name == "remove_device" || name == "set_channel_archived" ||
                    name == "kick" ||
                    name == "ban_user" ||
@@ -1355,6 +1362,28 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         wire::SetChannelArchivedT q;
         q.room_id = need_b64(cmd, "room_id", 16);
         q.archived = cmd.value("archived", true);
+        simple_request(req, std::move(q));
+    } else if (name == "edit_section") {
+        // {name} makes one; {section_id, name, position?} renames or moves it;
+        // {section_id, remove: true} takes it away.
+        wire::EditSectionT q;
+        q.section_id = cmd.value("section_id", uint32_t{0});
+        q.name = cmd.value("name", std::string{});
+        q.remove = cmd.value("remove", false);
+        q.position = cmd.value("position", int32_t{0});
+        if (q.section_id != 0 && !q.remove) {
+            // Left out, a section keeps its name or its place.
+            for (const auto& s : sections_)
+                if (s.id == q.section_id) {
+                    if (!cmd.contains("name")) q.name = s.name;
+                    if (!cmd.contains("position")) q.position = s.position;
+                }
+        }
+        simple_request(req, std::move(q));
+    } else if (name == "set_channel_section") {
+        wire::SetChannelSectionT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.section_id = cmd.value("section_id", uint32_t{0});
         simple_request(req, std::move(q));
     } else if (name == "set_channel_featured") {
         // Pins a channel to the top of everyone's list, or lets it go.
@@ -2286,6 +2315,9 @@ void Session::on_server_info(const wire::ServerInfoT& info) {
     roles_.clear();
     for (const auto& r : info.roles)
         if (r) roles_.push_back({r->role_id, r->name, r->position, r->permissions, r->is_everyone});
+    sections_.clear();
+    for (const auto& s : info.sections)
+        if (s) sections_.push_back({s->section_id, s->name, s->position});
     json j = server_json();
     j["event"] = "server_info";
     emit(std::move(j));
@@ -2693,6 +2725,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
         vault_.set_meta("featured:" + b64(info.room_id), info.featured ? "1" : "0");
+        vault_.set_meta("section:" + b64(info.room_id), std::to_string(info.section));
         vault_.set_meta("archived:" + b64(info.room_id), info.archived ? "1" : "0");
         vault_.set_meta("channel_type:" + b64(info.room_id), info.channel_type);
         tx.commit();

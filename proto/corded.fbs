@@ -11,6 +11,9 @@ table Member {
   nickname: string;
 }
 table Role { role_id: uint32; name: string; position: int32; permissions: uint64; is_everyone: bool; }
+// A named group of channels in everyone's list, made by those who manage
+// channels. Sections are shown in order of position, lowest first.
+table Section { section_id: uint32; name: string; position: int32; }
 table Recipient { device_id: [ubyte]; ciphertext: [ubyte]; }
 table Cursor { room_id: [ubyte]; seq: uint64; }
 
@@ -61,6 +64,7 @@ table RoomInfo {
   archived: bool;   // channels only: kept to read, closed to writing
   channel_type: string;   // channels only: empty for messages, "tasks" for a task list
   featured: bool;   // channels only: pinned to the top of everyone's list
+  section: uint32;  // channels only: the section it is listed under; 0 for none
 }
 // Groups only. Any member may add someone; anyone may leave.
 table AddMember { room_id: [ubyte]; user_id: [ubyte]; }
@@ -73,6 +77,7 @@ table ServerInfo {
   history_sharing: bool = true;   // whether newcomers may ask members for old messages
   description: string;            // a short line about the community
   icon: string;                   // a small picture as base64, or empty
+  sections: [Section];            // how channels are grouped in the list
 }
 // A newcomer asks for messages from before they joined. The server holds none
 // it can read, so it passes the request to members who are online; each of
@@ -161,6 +166,10 @@ table SendRoomEvent {
 table Scheduled { room_id: [ubyte]; event_id: [ubyte]; send_at: uint64; }
 // The sender takes back an event that is still waiting.
 table CancelScheduled { room_id: [ubyte]; event_id: [ubyte]; }
+// Makes a section (section_id 0), renames or moves one, or removes it; the
+// channels of a removed section go back to no section.
+table EditSection { section_id: uint32; name: string; position: int32; remove: bool; }
+table SetChannelSection { room_id: [ubyte]; section_id: uint32; }
 table SendOk { room_id: [ubyte]; event_id: [ubyte]; seq: uint64; server_ts: uint64; }
 table RoomEvent {
   room_id: [ubyte]; seq: uint64; event_id: [ubyte];
@@ -189,7 +198,8 @@ union FrameBody {
   SetChannelArchived,
   PutBlob, GetBlob, Blob, DeleteBlob,
   UpdateServer, SetChannelFeatured,
-  Scheduled, CancelScheduled
+  Scheduled, CancelScheduled,
+  EditSection, SetChannelSection
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

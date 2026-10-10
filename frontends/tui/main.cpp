@@ -58,6 +58,7 @@ struct ServerState {
     bool is_owner = false;
     std::set<std::string> permissions;
     json roles = json::array();
+    json sections = json::array();  // {section_id, name, position}, in listing order
 };
 
 struct Room {
@@ -71,6 +72,9 @@ struct Room {
     std::map<std::string, std::vector<int>> my_votes;  // poll -> this person's choices
     bool nsfw = false;                // warn before showing this channel
     bool featured = false;            // pinned to the top of the list
+    uint32_t section = 0;             // the server's section it is listed under; 0 for none
+    int section_rank = 1 << 30;       // where that section comes in the list (worked out on refresh)
+    std::string section_name;
     bool archived = false;            // readable, closed to writing
     bool tasks = false;               // a task list: what is typed becomes a task
     bool uncovered = false;           // the person chose to see it, this visit
@@ -343,6 +347,7 @@ private:
                 room.unread = r.value("unread", room.unread);
                 room.nsfw = r.value("nsfw", false);
                 room.featured = r.value("featured", false);
+                room.section = r.value("section", uint32_t{0});
                 room.archived = r.value("archived", false);
                 room.tasks = r.value("channel_type", "") == "tasks";
                 room.pinned.clear();
@@ -365,6 +370,7 @@ private:
             st.permissions.clear();
             for (const auto& p : ev.value("my_permissions", json::array())) st.permissions.insert(p.get<std::string>());
             st.roles = ev.value("roles", json::array());
+            st.sections = ev.value("sections", json::array());
             if (current_server_ == 0) current_server_ = sid;
             apply_current();
             refresh_titles();
@@ -826,11 +832,27 @@ private:
     // rest, each alphabetical. The open chat stays open if it moves.
     void refresh_titles() {
         std::string open = current_id();
+        // Each channel learns where its section stands in the server's order.
+        for (auto& r : rooms_) {
+            r.section_rank = 1 << 30;
+            r.section_name.clear();
+            int rank = 0;
+            for (const auto& s : servers_[r.server_id].sections) {
+                if (r.kind == "channel" && s.value("section_id", uint32_t{0}) == r.section && r.section != 0) {
+                    r.section_rank = rank;
+                    r.section_name = s.value("name", "");
+                }
+                ++rank;
+            }
+        }
         std::stable_sort(rooms_.begin(), rooms_.end(), [](const Room& a, const Room& b) {
-            // Pinned channels first, then the other channels, then the rest.
+            // Pinned channels first, then the channels section by section, then
+            // those in no section, then the rest.
             if (a.featured != b.featured) return a.featured;
             bool ac = a.kind == "channel", bc = b.kind == "channel";
-            return ac != bc ? ac : a.title < b.title;
+            if (ac != bc) return ac;
+            if (a.section_rank != b.section_rank) return a.section_rank < b.section_rank;
+            return a.title < b.title;
         });
         titles_.clear();
         visible_.clear();
@@ -839,7 +861,8 @@ private:
             if (current_server_ != 0 && r.server_id != current_server_) continue;
             if (r.id == open) selected_ = static_cast<int>(visible_.size());
             visible_.push_back(i);
-            titles_.push_back(r.title + (r.featured ? " [pinned]" : "") + (r.tasks ? " [tasks]" : "") +
+            titles_.push_back((r.section_name.empty() ? "" : r.section_name + " / ") + r.title +
+                              (r.featured ? " [pinned]" : "") + (r.tasks ? " [tasks]" : "") +
                               (r.nsfw ? " [NSFW]" : "") +
                               (r.archived ? " [archived]" : "") +
                               (r.unread > 0 ? " (" + std::to_string(r.unread) + ")" : ""));
@@ -1336,6 +1359,34 @@ private:
                 }
                 info_box_ = vbox(std::move(rows)) | border;
                 show_info_ = true;
+            } else if (cmd == "/section") {
+                // /section new <name> | rename <name> = <new name> | delete <name> | first <name>
+                auto sp = arg.find(' ');
+                std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
+                auto find = [&](const std::string& name) -> json {
+                    for (const auto& s : servers_[current_server_].sections)
+                        if (s.value("name", "") == name) return s;
+                    return json();
+                };
+                auto eq = rest.find(" = ");
+                if (sub == "new" && !rest.empty()) {
+                    command({{"cmd", "edit_section"}, {"name", rest}});
+                } else if (sub == "rename" && eq != std::string::npos && find(rest.substr(0, eq)).is_object()) {
+                    command({{"cmd", "edit_section"}, {"section_id", find(rest.substr(0, eq))["section_id"]},
+                             {"name", rest.substr(eq + 3)}});
+                } else if (sub == "delete" && find(rest).is_object()) {
+                    command({{"cmd", "edit_section"}, {"section_id", find(rest)["section_id"]}, {"remove", true}});
+                } else if (sub == "first" && find(rest).is_object()) {
+                    // Before every other section: one lower than the lowest place in use.
+                    int lowest = 0;
+                    for (const auto& s : servers_[current_server_].sections) lowest = std::min(lowest, s.value("position", 0));
+                    command({{"cmd", "edit_section"}, {"section_id", find(rest)["section_id"]}, {"position", lowest - 1}});
+                } else {
+                    std::string names;
+                    for (const auto& s : servers_[current_server_].sections) names += (names.empty() ? "" : ", ") + s.value("name", "");
+                    notice_ = "/section new <name> | rename <name> = <new> | delete <name> | first <name>      sections: " +
+                              (names.empty() ? "none yet" : names);
+                }
             } else if (cmd == "/channel" && !arg.empty()) {
                 // /channel new <name> | rename <name> | delete | private <role> | readonly | open | nsfw on|off
                 auto sp = arg.find(' ');
@@ -1370,6 +1421,17 @@ private:
                              {"allow", {"view_channel"}}});
                 } else if (sub == "archive" && (rest == "on" || rest == "off")) {
                     command({{"cmd", "set_channel_archived"}, {"room_id", room->id}, {"archived", rest == "on"}});
+                } else if (sub == "section" && on_channel && !rest.empty()) {
+                    // /channel section <name>   or   /channel section none
+                    uint32_t id = 0;
+                    bool known = rest == "none";
+                    for (const auto& s : servers_[current_server_].sections)
+                        if (s.value("name", "") == rest) {
+                            id = s.value("section_id", uint32_t{0});
+                            known = true;
+                        }
+                    if (!known) notice_ = "there is no section called " + rest + "; make it with /section new " + rest;
+                    else command({{"cmd", "set_channel_section"}, {"room_id", room->id}, {"section_id", id}});
                 } else if (sub == "pin" && (rest == "on" || rest == "off")) {
                     command({{"cmd", "set_channel_featured"}, {"room_id", room->id}, {"featured", rest == "on"}});
                 } else if (sub == "nsfw" && (rest == "on" || rest == "off")) {
@@ -1380,7 +1442,7 @@ private:
                 } else if (sub == "open") {
                     command({{"cmd", "set_channel_access"}, {"room_id", room->id}, {"role", "@everyone"}});
                 } else {
-                    notice_ = "/channel new <name> | tasks <name> | rename <name> | delete | private <role> | readonly | open | pin on|off";
+                    notice_ = "/channel new <name> | tasks <name> | rename <name> | delete | private <role> | readonly | open | pin on|off | section <name>|none";
                 }
             } else if (cmd == "/role" && !arg.empty()) {
                 // /role new <name> [permission ...] | delete <name> | give <user> <role> | take <user> <role>
@@ -1516,6 +1578,7 @@ private:
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
                               text("/poll Question | option | option     start a poll      /vote <n> <option number>"),
+                              text("/section new <name>   group channels under a name; then /channel section <name> in a channel"),
                               text("/channel tasks <name>   make a task list; type to add a task; /done <n>  /undone <n>"),
                               text("/later 18:30 <text>   have the server send it then, even with this closed    /unschedule <n>"),
                               text("/file <path> | caption   send a file         /save <n> [folder]   keep a file you were sent"),

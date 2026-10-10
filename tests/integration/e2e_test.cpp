@@ -2548,3 +2548,65 @@ TEST_CASE("a scheduled message is held by the server and delivered at its time, 
             REQUIRE(e["seq"].is_number());
         }
 }
+
+TEST_CASE("channels can be grouped into sections that everyone sees in the same order") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    auto sections_are = [](std::vector<std::string> names) {
+        return [names](const json& e) {
+            if (e["event"] != "server_info" || !e.contains("sections")) return false;
+            std::vector<std::string> got;
+            for (const auto& s : e["sections"]) got.push_back(s["name"]);
+            return got == names;
+        };
+    };
+    auto id_of = [](const json& info, const std::string& name) {
+        for (const auto& s : info["sections"])
+            if (s["name"] == name) return s["section_id"].get<uint32_t>();
+        return uint32_t{0};
+    };
+
+    // Only those who manage channels may; a new section goes after the others.
+    REQUIRE(bob.cmd({{"cmd", "edit_section"}, {"name", "Mine"}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"name", ""}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"name", "Projects"}})["ok"] == true);
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"name", "Off-topic"}})["ok"] == true);
+    json info = bob.wait("both sections", sections_are({"Projects", "Off-topic"}));
+    uint32_t projects = id_of(info, "Projects"), off_topic = id_of(info, "Off-topic");
+    REQUIRE(projects != 0);
+    REQUIRE(off_topic != 0);
+
+    // A channel is put in one; everyone's copy of the channel says so.
+    REQUIRE(bob.cmd({{"cmd", "set_channel_section"}, {"room_id", general}, {"section_id", projects}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_channel_section"}, {"room_id", general}, {"section_id", 9999}})["ok"] == false);
+    REQUIRE(alice.cmd({{"cmd", "set_channel_section"}, {"room_id", general}, {"section_id", projects}})["ok"] == true);
+    bob.wait("the channel in its section", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["section"] == projects;
+    });
+
+    // Renamed, and moved ahead of the other, with the name left alone.
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"section_id", off_topic}, {"name", "Chatter"}})["ok"] == true);
+    bob.wait("the new name", sections_are({"Projects", "Chatter"}));
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"section_id", off_topic}, {"position", -5}})["ok"] == true);
+    bob.wait("the new order", sections_are({"Chatter", "Projects"}));
+
+    // Removing a section leaves its channels, in no section.
+    REQUIRE(alice.cmd({{"cmd", "edit_section"}, {"section_id", projects}, {"remove", true}})["ok"] == true);
+    bob.wait("one section left", sections_are({"Chatter"}));
+    bob.wait("the channel in no section", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["section"] == 0;
+    });
+}
