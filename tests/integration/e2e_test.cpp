@@ -851,6 +851,32 @@ TEST_CASE("a server is one community with an owner and roles and channels") {
         REQUIRE(alice.cmd({{"cmd", "set_channel_nsfw"}, {"room_id", staff_room}, {"nsfw", false}})["ok"] == true);
         bob.wait("unmarked", nsfw_is(false));
     }
+    // An archived channel can still be read, and nobody can write in it, the owner included.
+    {
+        auto archived_is = [&](bool want) {
+            return [&, want](const json& e) {
+                return e["event"] == "room_updated" && e["room"]["room_id"] == staff_room && e["room"]["archived"] == want;
+            };
+        };
+        REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", staff_room}, {"body", "before archiving"}})["ok"] == true);
+        alice.have_message("before archiving");
+        REQUIRE(carol.cmd({{"cmd", "set_channel_archived"}, {"room_id", staff_room}})["ok"] == false);
+        REQUIRE(alice.cmd({{"cmd", "set_channel_archived"}, {"room_id", staff_room}, {"archived", true}})["ok"] == true);
+        bob.wait("archived", archived_is(true));
+        json sent = bob.cmd({{"cmd", "send_text"}, {"room_id", staff_room}, {"body", "into the archive"}});
+        std::string refused_id = sent["data"].value("event_id", "");
+        bob.wait("the refusal", [&](const json& e) {
+            return e["event"] == "event_send_status" && e["event_id"] == refused_id && e["status"] == "failed";
+        });
+        json tl = bob.cmd({{"cmd", "fetch_timeline"}, {"room_id", staff_room}, {"limit", 50}});
+        bool readable = false;
+        for (const auto& e : tl["data"]["events"]) readable = readable || e["content"].value("body", "") == "before archiving";
+        REQUIRE(readable);
+        REQUIRE(alice.cmd({{"cmd", "set_channel_archived"}, {"room_id", staff_room}, {"archived", false}})["ok"] == true);
+        bob.wait("open again", archived_is(false));
+        REQUIRE(bob.cmd({{"cmd", "send_text"}, {"room_id", staff_room}, {"body", "after reopening"}})["ok"] == true);
+        alice.have_message("after reopening");
+    }
     // Those who manage channels can read back what a channel's rules are.
     {
         json access = alice.cmd({{"cmd", "channel_access"}, {"room_id", staff_room}});

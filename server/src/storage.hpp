@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
             db_.exec("UPDATE rooms SET kind = 1 WHERE is_direct = 1");
         }
         try {
+            db_.exec("SELECT archived FROM rooms LIMIT 0");
+        } catch (const db::Error&) {
+            db_.exec("ALTER TABLE rooms ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+        }
+        try {
             db_.exec("SELECT nsfw FROM rooms LIMIT 0");
         } catch (const db::Error&) {
             db_.exec("ALTER TABLE rooms ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0");
@@ -542,6 +547,15 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         st.bind(1, room_id).bind(2, now_ms()).bind(3, name).exec();
         return room_id;
     }
+    void set_channel_archived(ByteView room_id, bool archived) {
+        auto st = db_.prepare("UPDATE rooms SET archived = ? WHERE room_id = ? AND kind = 0");
+        st.bind(1, static_cast<int64_t>(archived ? 1 : 0)).bind(2, room_id).exec();
+    }
+    bool is_archived(ByteView room_id) {
+        auto st = db_.prepare("SELECT archived FROM rooms WHERE room_id = ?");
+        st.bind(1, room_id);
+        return st.step() && st.i64(0) != 0;
+    }
     void set_channel_nsfw(ByteView room_id, bool nsfw) {
         auto st = db_.prepare("UPDATE rooms SET nsfw = ? WHERE room_id = ? AND kind = 0");
         st.bind(1, static_cast<int64_t>(nsfw ? 1 : 0)).bind(2, room_id).exec();
@@ -602,7 +616,7 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
         wire::RoomInfoT info;
         info.room_id = to_bytes(room_id);
         {
-            auto st = db_.prepare("SELECT created_at, kind, name, nsfw FROM rooms WHERE room_id = ?");
+            auto st = db_.prepare("SELECT created_at, kind, name, nsfw, archived FROM rooms WHERE room_id = ?");
             st.bind(1, room_id);
             if (st.step()) {
                 info.created_at = st.u64(0);
@@ -610,6 +624,7 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
                 info.is_direct = info.kind == kDirect;
                 info.name = st.text(2);
                 info.nsfw = st.i64(3) != 0;
+                info.archived = st.i64(4) != 0;
             }
         }
         if (info.kind == kChannel) {

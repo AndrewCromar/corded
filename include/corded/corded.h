@@ -63,6 +63,8 @@
  *   {"cmd":"delete_channel","room_id":"..."}
  *   {"cmd":"set_channel_access","room_id":"...","role":"@everyone",
  *    "allow":[],"deny":["view_channel"]}
+ *   {"cmd":"set_channel_archived","room_id":"...","archived":true}   every room carries
+ *       "archived": the channel stays readable and the server refuses anything new in it
  *   {"cmd":"set_channel_nsfw","room_id":"...","nsfw":true}   every room carries "nsfw"; clients
  *       warn before showing such a channel and keep its text out of notifications
  *   {"cmd":"channel_access","room_id":"..."}     the channel's exceptions: [{role, allow[], deny[]}]

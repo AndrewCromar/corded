@@ -460,6 +460,9 @@ public:
                 case wire::FrameBody_SetOverride: on_set_override(*c, rid, *f.body.AsSetOverride()); break;
                 case wire::FrameBody_GetOverrides: on_get_overrides(*c, rid, *f.body.AsGetOverrides()); break;
                 case wire::FrameBody_SetChannelNsfw: on_set_channel_nsfw(*c, rid, *f.body.AsSetChannelNsfw()); break;
+                case wire::FrameBody_SetChannelArchived:
+                    on_set_channel_archived(*c, rid, *f.body.AsSetChannelArchived());
+                    break;
                 case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
                 case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
                 case wire::FrameBody_HistoryRequest: on_history_request(*c, rid, *f.body.AsHistoryRequest()); break;
@@ -946,6 +949,13 @@ private:
         c.reply(rid, wire::OkT{});
     }
 
+    void on_set_channel_archived(Conn& c, uint32_t rid, const wire::SetChannelArchivedT& q) {
+        if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
+        storage_.set_channel_archived(q.room_id, q.archived);
+        broadcast_state();
+        c.reply(rid, wire::OkT{});
+    }
+
     void on_set_channel_nsfw(Conn& c, uint32_t rid, const wire::SetChannelNsfwT& q) {
         if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
         storage_.set_channel_nsfw(q.room_id, q.nsfw);
@@ -1270,6 +1280,10 @@ private:
             return;
         }
         bool channel = storage_.kind(ev.room_id) == kChannel;
+        if (channel && storage_.is_archived(ev.room_id)) {
+            c.fail(rid, err::Forbidden, "this channel is archived; it can be read but not written in");
+            return;
+        }
         if (channel && !(storage_.permissions(c.user_id, ev.room_id) & perm::SendMessages)) {
             c.fail(rid, err::Forbidden, "you cannot post in this channel");
             return;

@@ -298,6 +298,7 @@ Session::json Session::room_json(const RoomRow& room) {
             {"disappear_after", room.ttl_s},
             {"pinned", pins(room.room_id)},
             {"nsfw", vault_.meta("nsfw:" + b64(room.room_id)).value_or("0") == "1"},
+            {"archived", vault_.meta("archived:" + b64(room.room_id)).value_or("0") == "1"},
             {"unread", vault_.unread(room.room_id, to_bytes(vault_.identity().user.pk))},
             {"members", std::move(members)}};
 }
@@ -784,7 +785,7 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                    name == "edit_role" || name == "delete_role" || name == "grant_role" ||
                    name == "create_channel" || name == "rename_channel" || name == "delete_channel" ||
                    name == "set_channel_access" || name == "channel_access" || name == "set_channel_nsfw" ||
-                   name == "list_devices" || name == "remove_device" ||
+                   name == "list_devices" || name == "remove_device" || name == "set_channel_archived" ||
                    name == "kick" ||
                    name == "ban_user" ||
                    name == "remove_account" || name == "set_nickname" ||
@@ -859,7 +860,8 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
             }
             const Bytes me = to_bytes(vault_.identity().user.pk);
             bool moved = vault_.set_receipt(room_id, me, event_id, *target->seq);
-            if (moved && vault_.meta("send_receipts").value_or("1") != "0") {
+            if (moved && vault_.meta("send_receipts").value_or("1") != "0" &&
+                vault_.meta("archived:" + b64(room_id)).value_or("0") != "1") {
                 cmd_send_event(next_request_++, {{"room_id", b64(room_id)},
                                                  {"type", "m.receipt"},
                                                  {"expires_in", 7 * 24 * 3600},
@@ -1150,6 +1152,12 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
         // Signs another of this person's devices out for good.
         wire::RemoveDeviceT q;
         q.device_id = need_b64(cmd, "device_id", 32);
+        simple_request(req, std::move(q));
+    } else if (name == "set_channel_archived") {
+        // An archived channel stays readable; the server refuses anything new in it.
+        wire::SetChannelArchivedT q;
+        q.room_id = need_b64(cmd, "room_id", 16);
+        q.archived = cmd.value("archived", true);
         simple_request(req, std::move(q));
     } else if (name == "set_channel_nsfw") {
         // Marks a channel so that clients warn before showing it.
@@ -1918,6 +1926,7 @@ void Session::accept_profile(const EventRow& e) {
 void Session::share_profile(ByteView room_id, bool force) {
     json profile = engine_.own_profile();
     if (!profile.contains("version")) return;  // nothing set yet
+    if (vault_.meta("archived:" + b64(room_id)).value_or("0") == "1") return;  // closed to writing
     auto room = vault_.room(room_id);
     if (!room) return;
     // Sent once per version and per set of people, so someone who joins
@@ -2154,6 +2163,7 @@ void Session::store_room(const wire::RoomInfoT& info) {
         db::Transaction tx(vault_.db());
         vault_.upsert_room(info.room_id, members, info.kind, info.name, id_);
         vault_.set_meta("nsfw:" + b64(info.room_id), info.nsfw ? "1" : "0");
+        vault_.set_meta("archived:" + b64(info.room_id), info.archived ? "1" : "0");
         tx.commit();
     }
     // New to this room: ask whether anyone will share what was said before.
