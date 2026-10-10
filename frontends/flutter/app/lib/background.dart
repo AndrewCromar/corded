@@ -122,11 +122,16 @@ class Background {
       FlutterForegroundTask.initCommunicationPort();
       FlutterForegroundTask.init(
         androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'connection',
+          // As quiet as Android allows: no status-bar icon, bottom of the
+          // shade. Android fixes a category's loudness when it is first
+          // made, hence the new name.
+          channelId: 'connection_quiet',
           channelName: 'Connection',
-          channelDescription: 'Shown while Corded stays connected in the background',
-          channelImportance: NotificationChannelImportance.LOW,
-          priority: NotificationPriority.LOW,
+          channelDescription: 'Shown while Corded stays connected in the background. '
+              'You can turn this category off; message notifications are separate.',
+          channelImportance: NotificationChannelImportance.MIN,
+          priority: NotificationPriority.MIN,
+          showBadge: false,
           onlyAlertOnce: true,
         ),
         iosNotificationOptions: const IOSNotificationOptions(showNotification: false, playSound: false),
@@ -172,8 +177,8 @@ class Background {
       result = await FlutterForegroundTask.startService(
         serviceId: 7443,
         serviceTypes: [ForegroundServiceTypes.remoteMessaging],
-        notificationTitle: 'Corded is connected',
-        notificationText: 'Messages arrive while the app is in the background',
+        notificationTitle: 'Corded',
+        notificationText: 'Connected',
         callback: backgroundEntry,
       );
     }

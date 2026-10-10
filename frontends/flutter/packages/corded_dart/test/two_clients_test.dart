@@ -147,6 +147,17 @@ void main() {
     expect(aliceStore.threadCount(room.id, last), 1);
     expect(bobStore.thread(room.id, last.id).single.body, 'in the thread');
 
+    // A reply in a thread can start a thread of its own, to any depth.
+    final inner = aliceStore.thread(room.id, last.id).single;
+    await alice.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'one level deeper', 'thread': inner.id});
+    await eventually(() => bobStore.thread(room.id, inner.id).length == 1 ? true : null, 'the nested reply');
+    expect(bobStore.thread(room.id, last.id).length, 1); // the outer thread is unchanged
+    expect(bobStore.messages(room.id).length, before); // and so is the conversation
+    expect(bobStore.threadCount(room.id, bobStore.thread(room.id, last.id).single), 1);
+    final deepest = bobStore.thread(room.id, inner.id).single;
+    await bob.command({'cmd': 'send_text', 'room_id': room.id, 'body': 'and deeper still', 'thread': deepest.id});
+    await eventually(() => aliceStore.thread(room.id, deepest.id).length == 1 ? true : null, 'three levels');
+
     // Both sides hold the conversation in the server's order.
     for (final s in [aliceStore, bobStore]) {
       await eventually(() => s.messages(room.id).every((m) => m.seq != null) ? true : null, 'all confirmed');

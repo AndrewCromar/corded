@@ -1231,8 +1231,17 @@ private:
                 if (root_known) continue;
             }
             draw(m, "");
-            for (const auto& child : room->messages)
-                if (child.thread_root == m.event_id) draw(child, "   | ");
+            // Replies hang under their message; a reply's own replies under it, and so on.
+            std::function<void(const std::string&, const std::string&)> draw_replies =
+                [&](const std::string& parent, const std::string& indent) {
+                    if (indent.size() > 40) return;  // deep enough for any screen
+                    for (const auto& child : room->messages)
+                        if (child.thread_root == parent) {
+                            draw(child, indent);
+                            draw_replies(child.event_id, indent + "   | ");
+                        }
+                };
+            draw_replies(m.event_id, "   | ");
         }
         if (lines.empty()) lines.push_back(text("No messages yet. Say hello.") | dim | center);
         std::string typers;

@@ -253,6 +253,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () =>
                 Navigator.push(context, MaterialPageRoute(builder: (_) => ServerScreen(state: widget.state))),
           ),
+        if (server != null)
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('Leave this server'),
+            subtitle: const Text('Removes it and its chats from this phone. Your account there stays.'),
+            onTap: () async {
+              final navigator = Navigator.of(context);
+              final leave = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text('Leave ${server.name.isEmpty ? server.address : server.name}?'),
+                  content: const Text('The server and its chats are removed from this device. '
+                      'Your account stays on the server, so you can join again later as the same person.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
+                  ],
+                ),
+              );
+              if (leave != true || !context.mounted) return;
+              if (await attempt(context,
+                  () => widget.state.engine.command({'cmd': 'forget_server', 'server_id': server.id}))) {
+                navigator.popUntil((r) => r.isFirst);
+              }
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.lock_outline),
           title: const Text('Lock'),

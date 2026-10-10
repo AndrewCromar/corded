@@ -210,7 +210,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ]),
-          if (_thread == null) ...[
+          if (_thread == null)
             ListTile(
               leading: const Icon(Icons.reply),
               title: const Text('Reply'),
@@ -222,6 +222,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 });
               },
             ),
+          // A reply inside a thread can start a thread of its own.
+          if (m.id != _thread)
             ListTile(
               leading: const Icon(Icons.forum_outlined),
               title: Text(_store.threadCount(_room, m) > 0 ? 'Open thread' : 'Start a thread'),
@@ -230,7 +232,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 _openThread(m);
               },
             ),
-          ],
+
           ListTile(
             leading: const Icon(Icons.copy),
             title: const Text('Copy text'),
@@ -375,7 +377,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                 ]),
               ),
-            if (_thread == null && _store.threadCount(_room, m) > 0)
+            if (m.id != _thread && _store.threadCount(_room, m) > 0)
               // A thread hangs off its first message as a tappable card.
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 4, 12, 2),
