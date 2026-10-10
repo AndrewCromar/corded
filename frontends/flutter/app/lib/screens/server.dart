@@ -99,7 +99,7 @@ class _ServerScreenState extends State<ServerScreen> {
 
   Future<void> _newChannel() async {
     final name = await _ask('New channel',
-        hint: 'Spaces become dashes and capitals become lower case', action: 'Create');
+        hint: 'Spaces become dashes and capitals become lower case', action: 'Next');
     if (name == null || name.isEmpty || !mounted) return;
     // What kind: messages, or a list of tasks to tick off.
     final type = await showDialog<String>(
