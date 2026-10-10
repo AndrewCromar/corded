@@ -52,6 +52,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // is drawn above it.
   String _newFrom = '';
   bool _sendingFile = false;
+  // With a keyboard, Enter sends and Shift+Enter starts a new line.
+  late final _inputFocus = FocusNode(onKeyEvent: (node, event) {
+    if (!isDesktop || event is! KeyDownEvent) return KeyEventResult.ignored;
+    final enter =
+        event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
+    _send();
+    return KeyEventResult.handled;
+  });
   // The card for the link being typed: fetched once the typing pauses, shown
   // above the message box, and sent with the message unless it is closed.
   LinkPreview? _draftPreview;
@@ -130,6 +139,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _sub?.cancel();
     _previewTimer?.cancel();
+    _inputFocus.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -1138,12 +1148,15 @@ class _ChatScreenState extends State<ChatScreen> {
     return Align(
       alignment: m.mine ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+        // Most of a phone's width; on a desktop, a comfortable line length.
+        constraints: BoxConstraints(maxWidth: isDesktop ? 620 : MediaQuery.sizeOf(context).width * 0.82),
         child: Column(
           crossAxisAlignment: m.mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             GestureDetector(
               onLongPress: gone ? null : () => _showActions(m),
+              // With a mouse: the right button.
+              onSecondaryTap: gone ? null : () => _showActions(m),
               onDoubleTap: gone ? null : () => _react(m, widget.state.reactionBar.first),
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -1521,6 +1534,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 Expanded(
                   child: TextField(
                     controller: _input,
+                    focusNode: _inputFocus,
+                    autofocus: isDesktop,
                     minLines: 1,
                     maxLines: 5,
                     textCapitalization: TextCapitalization.sentences,

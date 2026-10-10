@@ -134,6 +134,7 @@ class _TasksViewState extends State<TasksView> {
     final replies = _store.threadCount(widget.room.id, task);
     return InkWell(
       onLongPress: () => _actions(task),
+      onSecondaryTap: () => _actions(task),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [

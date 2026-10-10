@@ -101,6 +101,36 @@ jobs:
             ${{ steps.package.outputs.name }}.tar.gz
             ${{ steps.package.outputs.name }}.tar.gz.sha256
 
+      # The desktop app: the same Flutter app as on phones, with the core
+      # built above bundled inside it.
+      - name: Build the desktop app
+        if: matrix.arch == 'x86_64'
+        id: app
+        run: |
+          version=$(git describe --tags --match 'v*' --always --dirty)
+          app="corded-app-${version}-linux-x86_64"
+          apt-get install -y --no-install-recommends clang libgtk-3-dev liblzma-dev xz-utils libglu1-mesa unzip zip
+          git clone --quiet --depth 1 --branch 3.47.7 https://github.com/flutter/flutter.git /opt/flutter
+          git config --global --add safe.directory /opt/flutter
+          export PATH="/opt/flutter/bin:$PATH"
+          flutter config --no-analytics >/dev/null
+          cd frontends/flutter/app
+          flutter pub get
+          CORDED_CORE_LIB="$GITHUB_WORKSPACE/build/dev/lib/libcorded.so" flutter build linux --release
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "dist/${app}"
+          cp -r frontends/flutter/app/build/linux/x64/release/bundle/. "dist/${app}/"
+          cp packaging/README-desktop.txt "dist/${app}/README.txt"
+          cp assets/logo/variants/corded-icon-indigo.png "dist/${app}/corded.png"
+          tar -C dist -czf "${app}.tar.gz" "${app}"
+          echo "name=${app}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'x86_64'
+        with:
+          name: ${{ steps.app.outputs.name }}
+          path: ${{ steps.app.outputs.name }}.tar.gz
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -114,6 +144,9 @@ jobs:
             "${{ steps.package.outputs.name }}.tar.gz.sha256" --clobber
           if [ -f "${{ steps.package.outputs.name }}.tar.gz.sig" ]; then
             gh release upload "$tag" "${{ steps.package.outputs.name }}.tar.gz.sig" --clobber
+          fi
+          if [ -n "${{ steps.app.outputs.name }}" ]; then
+            gh release upload "$tag" "${{ steps.app.outputs.name }}.tar.gz" --clobber
           fi
 
   android:
@@ -238,6 +271,36 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: ${{ steps.package.outputs.name }}.zip
 
+      # The desktop app, with the core built above beside its program.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      - name: Build the desktop app
+        id: app
+        shell: pwsh
+        run: |
+          $version = git describe --tags --match 'v*' --always --dirty
+          $app = "corded-app-$version-windows-x64"
+          $env:CORDED_CORE_DLL = "$env:GITHUB_WORKSPACE\build\windows\bin\corded.dll"
+          Push-Location frontends\flutter\app
+          flutter pub get
+          flutter build windows --release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+          New-Item -ItemType Directory -Force "dist\$app" | Out-Null
+          Copy-Item -Recurse frontends\flutter\app\build\windows\x64\runner\Release\* "dist\$app\"
+          Copy-Item packaging\README-desktop.txt "dist\$app\README.txt"
+          Compress-Archive -Path "dist\$app" -DestinationPath "$app.zip"
+          "name=$app" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.app.outputs.name }}
+          path: ${{ steps.app.outputs.name }}.zip
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -248,3 +311,4 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --prerelease \
             --notes "Pre-alpha build. Not security audited. See the README for how to run it."
           gh release upload "$tag" "${{ steps.package.outputs.name }}.zip" --clobber
+          gh release upload "$tag" "${{ steps.app.outputs.name }}.zip" --clobber

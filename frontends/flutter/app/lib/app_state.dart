@@ -128,6 +128,42 @@ class AppState extends ChangeNotifier {
 
   Directory? _vaultDir;
 
+  // Only in builds made with --dart-define=CORDED_DEV=true, for trying the
+  // app where no one can type into it: the environment says who to be, which
+  // server to join and which chat to open. Ordinary builds contain none of this.
+  static const _devBuild = bool.fromEnvironment('CORDED_DEV');
+
+  Future<void> _devDrive() async {
+    final env = Platform.environment;
+    final pass = env['CORDED_DEV_PASSPHRASE'];
+    if (pass == null) return;
+    try {
+      if (store.vaultState == 'missing') {
+        await engine.createVault(pass, env['CORDED_DEV_USER'] ?? 'dev');
+      } else if (store.vaultState == 'locked') {
+        await engine.unlock(pass);
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+      final server = env['CORDED_DEV_SERVER'];
+      if (server != null && store.servers.isEmpty) {
+        final parts = server.split(':');
+        await engine.command({'cmd': 'connect', 'host': parts[0], 'port': int.parse(parts[1])});
+      }
+      final open = env['CORDED_DEV_OPEN'];
+      for (var i = 0; open != null && i < 20; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        final room = store.rooms.values.where((r) => r.title == open).firstOrNull;
+        if (room != null && onOpenChat != null) {
+          onOpenChat!(room.id, null);
+          break;
+        }
+      }
+    } catch (e) {
+      startError = 'dev drive: $e';
+      notifyListeners();
+    }
+  }
+
   /// Whether the app keeps its connections while it is not on screen.
   bool backgroundMode = false;
 
@@ -362,6 +398,7 @@ class AppState extends ChangeNotifier {
       if (serviceRunning) {
         Future<void>.delayed(const Duration(seconds: 1), _shareNotificationOptions);
       }
+      if (_devBuild) unawaited(_devDrive());
       fingerprintAvailable = await Fingerprint.available();
       fingerprintUnlock = fingerprintAvailable && (prefs.getBool('fingerprint_unlock') ?? false);
       // Chosen earlier, but the service is gone (the phone restarted, say):
