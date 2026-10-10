@@ -1901,6 +1901,9 @@ TEST_CASE("messages can be searched on the device") {
     bob.have("the direct chat", [&](const json& e) { return e["event"] == "room_updated" && e["room"]["room_id"] == direct; });
     for (const char* body : {"Pizza on Friday?", "the body field is not the word", "100% sure about pizza_night"})
         REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", general}, {"body", body}})["ok"] == true);
+    // Clearly later than the others, so "newest first" has one right answer.
+    bob.have_message("100% sure about pizza_night");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
     REQUIRE(alice.cmd({{"cmd", "send_text"}, {"room_id", direct}, {"body", "secret pizza plan"}})["ok"] == true);
     bob.have_message("secret pizza plan");
     bob.have_message("100% sure about pizza_night");

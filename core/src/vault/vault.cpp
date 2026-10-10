@@ -601,7 +601,7 @@ std::vector<EventRow> Vault::search(const std::string& text, ByteView room_id, u
                       " FROM events WHERE type = 'm.text' AND status = 'ok' AND seq IS NOT NULL "
                       "AND (?2 = 0 OR room_id = ?3) "
                       "AND (content LIKE ?1 ESCAPE '\\' OR edited_content LIKE ?1 ESCAPE '\\') "
-                      "ORDER BY origin_ts DESC LIMIT 2000";
+                      "ORDER BY server_ts DESC, origin_ts DESC LIMIT 2000";
     auto st = db_.prepare(sql.c_str());
     st.bind(1, pattern).bind(2, static_cast<int64_t>(room_id.empty() ? 0 : 1));
     if (room_id.empty()) st.bind_null(3);
