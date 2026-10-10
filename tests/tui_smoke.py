@@ -155,6 +155,13 @@ def main():
         bob.expect("you can only edit your own messages")
         print("ok  commands take a message number")
 
+        # Search looks through what this device holds.
+        bob.type("/search very first\r")
+        bob.expect("Found for")
+        bob.expect("answering the very first message")
+        bob.type("\r")
+        print("ok  search")
+
         # /notify is remembered and says what it does.
         bob.type("/notify bell\r")
         bob.expect("ring the terminal's bell")

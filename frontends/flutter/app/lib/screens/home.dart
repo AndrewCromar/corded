@@ -8,6 +8,7 @@ import 'common.dart';
 import 'group.dart';
 import 'members.dart';
 import 'presence.dart';
+import 'search.dart';
 import 'settings.dart';
 
 /// The chats of one server, with a drawer for moving between servers.
@@ -124,6 +125,12 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(server == null || server.name.isEmpty ? 'Corded' : server.name),
         actions: [
+          IconButton(
+            tooltip: 'Search messages',
+            icon: const Icon(Icons.search),
+            onPressed: () =>
+                Navigator.push(context, MaterialPageRoute(builder: (_) => SearchScreen(state: state))),
+          ),
           if (server != null)
             IconButton(
               tooltip: 'Members',

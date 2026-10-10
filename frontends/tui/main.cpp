@@ -486,6 +486,23 @@ private:
             show_info_ = true;
             return;
         }
+        if (ok && ev["data"].contains("results")) {
+            Elements rows = {text("Found for \"" + ev["data"].value("text", "") + "\"") | bold};
+            for (const auto& e : ev["data"]["results"]) {
+                std::string where = "a chat";
+                for (const auto& r : rooms_)
+                    if (r.id == e.value("room_id", "")) where = r.title;
+                rows.push_back(hbox({text(clock_date(e.value("origin_ts", uint64_t{0})) + "  ") | dim,
+                                     text(where + "  ") | color(Color::Cyan),
+                                     text(e.value("sender_name", "?") + ": ") | bold,
+                                     text(snippet(e["content"].value("body", "")))}));
+            }
+            if (rows.size() == 1) rows.push_back(text("Nothing found.") | dim);
+            rows.push_back(text("Searched on this device only; nothing was sent anywhere.") | dim);
+            info_box_ = vbox(std::move(rows)) | border;
+            show_info_ = true;
+            return;
+        }
         if (ok && ev["data"].contains("devices")) {
             devices_.clear();
             Elements rows = {text("Devices signed in as you") | bold};
@@ -1062,6 +1079,14 @@ private:
                 command({{"cmd", "set_nickname"}, {"nickname", ""}});
                 notice_ = arg.empty() ? "display name cleared" : "you now appear as " + arg;
                 if (members_selected()) command({{"cmd", "member_list"}});
+            } else if (cmd == "/search" && arg.size() >= 2) {
+                // Everything on this device; add "here" first to search only the open chat.
+                bool here = arg.rfind("here ", 0) == 0 && room;
+                json q = {{"cmd", "search"}, {"text", here ? arg.substr(5) : arg}, {"limit", 15}};
+                if (here) q["room_id"] = room->id;
+                command(q);
+            } else if (cmd == "/search") {
+                notice_ = "/search <words>   or   /search here <words>";
             } else if (cmd == "/devices") {
                 command({{"cmd", "list_devices"}});
             } else if (cmd == "/device" && arg.rfind("remove ", 0) == 0) {
@@ -1292,6 +1317,7 @@ private:
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
+                              text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
                               text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),

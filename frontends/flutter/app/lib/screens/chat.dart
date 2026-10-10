@@ -9,16 +9,20 @@ import 'common.dart';
 import 'group.dart';
 import 'linked_text.dart';
 import 'profile.dart';
+import 'search.dart';
 import 'swipe_to_reply.dart';
 
 /// One conversation: its messages and the box for writing a new one. With
 /// [threadRoot] it shows one thread instead: the message that started it and
 /// the replies under it.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.state, required this.roomId, this.threadRoot});
+  const ChatScreen({super.key, required this.state, required this.roomId, this.threadRoot, this.jumpTo});
   final AppState state;
   final String roomId;
   final String? threadRoot;
+
+  /// A message to scroll to once the chat is up (from a search result).
+  final String? jumpTo;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -56,10 +60,14 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    if (_thread == null) {
-      _store.open(_room);
-    } else {
-      _store.openThread(_room, _thread!);
+    final opened = _thread == null ? _store.open(_room) : _store.openThread(_room, _thread!);
+    if (widget.jumpTo != null) {
+      opened.then((_) {
+        // Once the list has been laid out.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _jumpTo(widget.jumpTo!);
+        });
+      });
     }
     // While this screen is up, whatever arrives has been read.
     _sub = _store.changes.listen((_) {
@@ -92,6 +100,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final navigator = Navigator.of(context);
     final engine = widget.state.engine;
     switch (choice) {
+      case 'search':
+        navigator.push(MaterialPageRoute(builder: (_) => SearchScreen(state: widget.state, roomId: _room)));
       case 'disappear':
         final seconds = await showDialog<int>(
           context: context,
@@ -748,6 +758,7 @@ class _ChatScreenState extends State<ChatScreen> {
               tooltip: 'More',
               onSelected: (choice) => _chatAction(choice, room),
               itemBuilder: (context) => [
+                const PopupMenuItem(value: 'search', child: Text('Search this chat')),
                 PopupMenuItem(
                     value: 'disappear',
                     child: Text(room.disappearAfter > 0
