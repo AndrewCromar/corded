@@ -46,7 +46,9 @@ python3 birthday_bot.py 127.0.0.1:7443 --channel '#general' --at 09:00
 ### The birthday bot
 
 When someone joins, the bot asks them once, in a direct chat, for their
-birthday. They answer there (`05-17`, `17 May`, `2004-05-17` to have their age
+birthday. If their profile already has one it does not ask: it says which day
+it found and that it will wish them then, and it says so too when someone it
+asked fills in their profile later. They answer there (`05-17`, `17 May`, `2004-05-17` to have their age
 shown) or put it in their profile; an answer in the chat wins. On the day, at
 `--at` by the clock of the machine the bot runs on, it wishes them in the
 direct chat and in `--channel` (`#general` if not given), where it mentions
@@ -65,12 +67,16 @@ wishes when it is next started that day, and nobody is wished twice in a year.
 The birthdays people tell it are kept in `store.json` in the bot's folder, on
 the machine it runs on, and are sent nowhere.
 
+It shows as "Birthday Bot" with a cake for a picture (`birthday_bot.png`,
+drawn in `birthday_bot.svg`); `--display-name` and `--picture` change them.
+
 ## Write your own
 
 ```python
 from corded_bot import Bot
 
-bot = Bot(vault="./my-vault", username="mybot", about="What I am for.")
+bot = Bot(vault="./my-vault", username="mybot", about="What I am for.",
+          display_name="My Bot", picture="mybot.png")   # both optional; the picture about 128 pixels square
 
 @bot.command("hello", help="say hello")
 def hello(message, words):          # words: what came after !hello
@@ -118,6 +124,10 @@ def welcome(member):                 # someone joined the server
 @bot.on_file
 def got(message):                    # someone sent a file
     print(message.file["name"], message.file["size"], message.body)
+
+@bot.on_profile
+def changed(user_id, profile):       # someone's profile reached the bot, new or changed
+    print(profile.get("birthday"))
 ```
 
 `on_join` is called once for each person who joins after the bot's first run,

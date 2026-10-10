@@ -19,6 +19,7 @@ needs no encryption code of its own.
 
 Only the Python standard library is used.
 """
+import base64
 import collections
 import json
 import os
@@ -106,15 +107,20 @@ _ANSWERS = {"start_chat": "room", "get_profile": "profile", "member_list": "memb
 
 
 class Bot:
-    def __init__(self, vault, username, cli=None, prefix="!", about=None, is_bot=True, hear_bots=False):
+    def __init__(self, vault, username, cli=None, prefix="!", about=None, is_bot=True, hear_bots=False,
+                 display_name=None, picture=None):
         """vault: a folder for this bot's keys and messages (made on first run).
         username: the bot's name on the server. prefix: what commands start with.
         about: a line for the bot's profile. is_bot: say so in the profile, so
-        people see a BOT tag. hear_bots: also handle what other bots say."""
+        people see a BOT tag. hear_bots: also handle what other bots say.
+        display_name: the name people see instead of the username. picture: a
+        small square image file (PNG or JPEG, about 128 pixels) for its profile."""
         self.vault = os.path.abspath(vault)
         self.username = username
         self.prefix = prefix
         self.about = about
+        self.display_name = display_name
+        self.picture = picture
         self.is_bot = is_bot
         self.hear_bots = hear_bots
         self.rooms = {}          # room id -> {"title", "kind", "members", ...}
@@ -129,6 +135,7 @@ class Bot:
         self._handlers = []
         self._file_handlers = []
         self._joiners = []
+        self._profile_handlers = []
         self._timers = []
         self._lock = threading.Lock()
         self._proc = None
@@ -164,6 +171,12 @@ class Bot:
         """@bot.on_file def got(message): ...   Called for every file someone
         else sends; message.file has its name, size and kind, message.body its caption."""
         self._file_handlers.append(fn)
+        return fn
+
+    def on_profile(self, fn):
+        """@bot.on_profile def changed(user_id, profile): ...   Called when
+        someone's profile reaches the bot, new or changed."""
+        self._profile_handlers.append(fn)
         return fn
 
     def on_join(self, fn):
@@ -312,10 +325,19 @@ class Bot:
         profile = {"cmd": "set_profile", "bot": self.is_bot}
         if self.about:
             profile["bio"] = self.about
+        if self.display_name:
+            profile["display_name"] = self.display_name
         try:
             self.request(profile)
         except RuntimeError:
             pass
+        if self.picture:
+            # On its own, so that a picture the core refuses costs only the picture.
+            try:
+                with open(self.picture, "rb") as f:
+                    self.request({"cmd": "set_profile", "picture": base64.b64encode(f.read()).decode()})
+            except (OSError, RuntimeError) as error:
+                print(f"[{self.username}] the profile picture was not set: {error}", flush=True)
         if self._joiners and not self.store.get("kit.members_known"):
             # First run: whoever is here already did not just join. The rooms
             # arrive one by one, so wait until they have stopped arriving.
@@ -394,6 +416,10 @@ class Bot:
                 self.rooms.pop(event.get("room_id", ""), None)
             elif kind == "profile_updated":
                 self._profiles[event.get("user_id", "")] = event.get("profile") or {}
+                if event.get("user_id") != self.me:
+                    for fn in self._profile_handlers:
+                        threading.Thread(target=self._guard, args=(fn, event.get("user_id", ""), event.get("profile") or {}),
+                                         daemon=True).start()
             elif kind == "event_received":
                 data = event.get("data") or {}
                 if data.get("mine"):

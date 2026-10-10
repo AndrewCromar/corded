@@ -18,6 +18,7 @@ beside its vault) and are sent nowhere.
 """
 import argparse
 import datetime
+import os
 import re
 import threading
 import time
@@ -117,6 +118,10 @@ def main():
     parser.add_argument("--greet-existing", action="store_true",
                         help="also ask the people who were here before the bot")
     parser.add_argument("--username", default="birthdays")
+    parser.add_argument("--display-name", default="Birthday Bot", help="the name people see")
+    parser.add_argument("--picture", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                          "birthday_bot.png"),
+                        help="its profile picture, a small square image ('' for none)")
     parser.add_argument("--vault", default="./birthdays-vault")
     # For trying it out: pretend it is this day (and past --at), look more often, greet sooner.
     parser.add_argument("--today", default=None, help=argparse.SUPPRESS)
@@ -126,8 +131,9 @@ def main():
     channel = args.channel or args.old_channel or "#general"
     args.at = datetime.datetime.strptime(args.at, "%H:%M").strftime("%H:%M")   # 9:00 is 09:00
 
-    bot = Bot(vault=args.vault, username=args.username,
-              about="I remember birthdays. Tell me yours in a direct chat, or put it in your profile.")
+    bot = Bot(vault=args.vault, username=args.username, display_name=args.display_name, picture=args.picture,
+              about="I remember birthdays. Tell me yours in a direct chat (like 05-17), or put it in your "
+                    "profile, and I'll wish you a happy one on the day.")
     if args.join_delay is not None:
         bot.join_delay = args.join_delay
     people = bot.store.setdefault("people", {})   # user id -> {"birthday", "asked", "no", "private", "wished"}
@@ -145,21 +151,63 @@ def main():
         written = bot.profile_of(user_id).get("birthday", "")
         return written if re.fullmatch(r"(\d{4}-)?\d{2}-\d{2}", written) and in_range(written) else ""
 
+    def in_profile(user_id):
+        """The birthday in their profile, if the bot goes by it: they have told it none."""
+        return "" if people.get(user_id, {}).get("birthday") else birthday_of(user_id)
+
+    def how_to(user_id):
+        """What to tell someone who asks for help: not "tell me your birthday"
+        to someone whose birthday it has."""
+        birthday = birthday_of(user_id)
+        if not birthday:
+            return "I don't have a birthday for you. " + HELP
+        source = "from your profile" if in_profile(user_id) else "as you told me"
+        return (f"I have your birthday as {in_words(birthday)}, {source}. To change it, send me another date "
+                "(`05-17`, `17 May`, or `2004-05-17` to have your age shown). Other words I know: `forget`, "
+                "`private` (I wish you here only, not in the channel), `public`.")
+
     def name_of(member):
         return member.get("display_name") or member.get("username", "")
 
     def ask(member):
         person = people.setdefault(member["user_id"], {})
-        if person.get("asked") or person.get("no") or birthday_of(member["user_id"]):
+        if person.get("asked") or person.get("no") or person.get("birthday"):
             return
-        bot.dm(member["username"],
-               f"Hi {name_of(member)}, I'm the birthday bot here. Tell me your birthday and I'll wish you a happy "
-               "one: reply `05-17` (month-day), or `2004-05-17` if you want your age shown. Or put it in your "
-               "profile. Reply `no` and I won't ask again.")
+        seen = in_profile(member["user_id"])
+        if seen:
+            # Nothing to ask: say what it found and what it will do with it.
+            words = (f"Hi {name_of(member)}, I'm the birthday bot here. I see from your profile that your birthday "
+                     f"is {in_words(seen)}, so I'll wish you a happy one then, here and in {channel}. Reply "
+                     "`private` if you'd rather I didn't post in the channel, or send me another date if that "
+                     "one is wrong.")
+        else:
+            words = (f"Hi {name_of(member)}, I'm the birthday bot here. Tell me your birthday and I'll wish you a "
+                     "happy one: reply `05-17` (month-day), or `2004-05-17` if you want your age shown. Or put it "
+                     "in your profile. Reply `no` and I won't ask again.")
+        # Marked first, as with a wish: a greeting that fails half way is not repeated.
         person["asked"] = True
+        person["seen"] = seen
         bot.store.save()
+        bot.dm(member["username"], words)
 
     bot.on_join(ask)
+
+    @bot.on_profile
+    def noticed(user_id, profile):
+        """Someone it has asked puts a birthday in their profile, or changes
+        it: the bot says that it has seen it, once for each date."""
+        person = people.get(user_id, {})
+        member = bot.members().get(user_id)
+        seen = in_profile(user_id)
+        if not member or not person.get("asked") or person.get("no") or not seen or seen == person.get("seen"):
+            return
+        person["seen"] = seen
+        bot.store.save()
+        if falls_on(seen, today()):
+            wish()   # the wish says it all
+            return
+        bot.dm(member["username"], f"I see your birthday in your profile now: {in_words(seen)}. "
+                                   "I'll wish you a happy one then.")
 
     def wish_one(member, birthday, day):
         person = people.setdefault(member["user_id"], {})
@@ -197,23 +245,31 @@ def main():
             person["no"] = True
             answer = "All right, I won't ask. If you change your mind, tell me a date here any time."
         elif word == "forget":
-            person.pop("birthday", None)
-            answer = "Forgotten. A birthday in your profile still counts; clear it there too if you want none."
+            told_before = person.pop("birthday", None)
+            written = in_profile(message.sender_id)
+            if written:
+                answer = (("Forgotten what you told me. " if told_before else "") +
+                          f"Your profile says {in_words(written)}, and I go by that; clear it there if you "
+                          "want no wish.")
+            else:
+                answer = "Forgotten. I have no birthday for you now." if told_before else "I had none to forget."
         elif word == "when":
             birthday = birthday_of(message.sender_id)
-            answer = f"I have {in_words(birthday)}." if birthday else "I don't have a birthday for you. " + HELP
+            source = "from your profile" if in_profile(message.sender_id) else "as you told me"
+            answer = (f"I have {in_words(birthday)}, {source}." if birthday
+                      else "I don't have a birthday for you. " + HELP)
         elif word in ("private", "public"):
             person["private"] = word == "private"
             answer = ("I'll wish you here only, not in the channel." if word == "private"
                       else f"I'll wish you in {channel} too.")
         elif word in ("help", "?"):
-            answer = HELP
+            answer = how_to(message.sender_id)
         else:
             birthday = parse_birthday(message.body, today().year)
             if not birthday:
                 slashed = re.fullmatch(r"\d{1,4}[/.]\d{1,2}([/.]\d{1,4})?", word)
                 answer = ("I can't tell the day from the month there. Write it like `05-17` (month-day) or `17 May`."
-                          if slashed else "I didn't understand that. " + HELP)
+                          if slashed else "I didn't understand that. " + how_to(message.sender_id))
                 # Whatever keeps writing things it cannot read (another program,
                 # perhaps) gets three answers and then silence.
                 person["lost"] = lost + 1
@@ -221,9 +277,14 @@ def main():
                     bot.store.save()
                     return
             else:
+                written = in_profile(message.sender_id)
                 person["birthday"] = birthday
                 person.pop("no", None)
-                answer = f"Got it: {in_words(birthday)}. I'll wish you a happy birthday then."
+                answer = f"Got it: {in_words(birthday)}. " + (
+                    "That's today!" if falls_on(birthday, today()) and person.get("wished") != today().year
+                    else "I'll wish you a happy birthday then.")
+                if written and written[-5:] != birthday[-5:]:
+                    answer += f" Your profile says {in_words(written)}; I'll go by what you told me here."
         bot.store.save()
         bot.reply(message, answer)
         wish()   # it may be today
