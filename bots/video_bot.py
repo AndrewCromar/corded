@@ -6,7 +6,8 @@
 The bot does nothing until it is mentioned. Then it looks for a link: in the
 message that mentions it, or else in the message that one replies to, or the
 message whose thread it is in. It fetches the video and posts the file in the
-thread under the message that holds the link. The word "audio" beside the
+thread under the message that holds the link, also when that message is itself
+in a thread. The word "audio" beside the
 mention gets the sound only. In a direct chat with the bot a link is enough.
 
 All of the work happens on the machine the bot runs on. The fetching is done
@@ -359,7 +360,9 @@ def main():
 
     def job(message, holder, url, audio, waiting, adult_ok):
         """One request, from the link to the file in the thread. Run one at a time."""
-        thread = holder.thread or holder.event_id
+        # Always under the message that holds the link, also when that message
+        # is itself in a thread: threads go as deep as they are needed.
+        thread = holder.event_id
         folder = tempfile.mkdtemp(prefix="corded-clip-")
         try:
             for attempt in (1, 2):
@@ -432,7 +435,7 @@ def main():
         waiting = bot.attempt(bot.react, holder, "⏳")
         ahead = bot.work(job, message, holder, url, "audio" in words, waiting, adult_allowed(message))
         if ahead:
-            bot.say(message.room_id, f"In line: {ahead} ahead of you.", thread=holder.thread or holder.event_id)
+            bot.say(message.room_id, f"In line: {ahead} ahead of you.", thread=holder.event_id)
 
     @bot.command("help", help="what I do")
     def help_(message, words):

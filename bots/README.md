@@ -106,7 +106,8 @@ Someone posts a link to a video. The bot does nothing until it is mentioned:
 - `@clips audio https://…` for the sound only.
 
 It then posts the video file in the thread under the message that holds the
-link, with its title, length and size. In a direct chat with the bot a link
+link, with its title, length and size. A link that is itself in a thread gets
+a thread of its own under it. In a direct chat with the bot a link
 alone is enough. If it cannot, it says why in one line, in the same thread.
 
 **Everything is done by the machine the bot runs on.** The fetching is done by

@@ -472,6 +472,16 @@ def main():
         anywhere = carol.say("#general", f"@clips {clip}adult")["event_id"]
         wait_for("a video marked 18+ in an ordinary channel, now allowed", lambda m: m.thread == anywhere,
                  among=alice_files)
+        # A link inside a thread gets a thread of its own under it, not a place in the thread it is in.
+        inner = alice.say("#general", f"and one more, in here: {clip}nested", thread=second)["event_id"]
+        dave.say("#general", "@clips", thread=inner)
+        got = wait_for("a video under a link that is itself in a thread", lambda m: m.thread == inner,
+                       among=alice_files)
+        deeper = alice.say("#general", f"deeper still {clip}deeper", thread=inner)["event_id"]
+        dave.say("#general", "@clips", reply_to=deeper, thread=inner)
+        wait_for("and one level further down", lambda m: m.thread == deeper, among=alice_files)
+        assert len([m for m in alice_files if m.thread == second]) == 2, "it posted into the thread the link was in"
+        print("ok  video bot: a link in a thread gets its own thread under it, however deep")
         print("ok  video bot: adult sites and videos marked 18+ only where a channel is marked NSFW; a manager can "
               "turn them off, allow them anywhere, and name more sites")
 
