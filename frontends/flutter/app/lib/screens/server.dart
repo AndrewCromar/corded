@@ -95,9 +95,10 @@ class _ServerScreenState extends State<ServerScreen> {
       false;
 
   Future<void> _newChannel() async {
-    final name = await _ask('New channel', hint: 'Lower-case letters, digits and dashes', action: 'Create');
+    final name = await _ask('New channel',
+        hint: 'Spaces become dashes and capitals become lower case', action: 'Create');
     if (name == null || name.isEmpty) return;
-    await _do({'cmd': 'create_channel', 'name': name.replaceFirst('#', '')}, 'Channel created.');
+    await _do({'cmd': 'create_channel', 'name': tidyChannelName(name)}, 'Channel created.');
   }
 
   void _channelActions(Room r) {
@@ -134,7 +135,7 @@ class _ServerScreenState extends State<ServerScreen> {
               Navigator.pop(sheet);
               final to = await _ask('Rename $name', initial: name);
               if (to == null || to.isEmpty || to == name) return;
-              await _do({'cmd': 'rename_channel', 'room_id': r.id, 'name': to.replaceFirst('#', '')},
+              await _do({'cmd': 'rename_channel', 'room_id': r.id, 'name': tidyChannelName(to)},
                   'Channel renamed.');
             },
           ),
@@ -318,4 +319,13 @@ class _ServerScreenState extends State<ServerScreen> {
       ]),
     );
   }
+}
+
+/// A channel name as the server wants it: lower case, dashes for spaces, and
+/// nothing but letters, digits, dashes and underscores.
+String tidyChannelName(String typed) {
+  var name = typed.trim().toLowerCase().replaceFirst(RegExp(r'^#+'), '');
+  name = name.replaceAll(RegExp(r'\s+'), '-').replaceAll(RegExp(r'[^a-z0-9_-]'), '');
+  name = name.replaceAll(RegExp(r'-{2,}'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  return name.length > 32 ? name.substring(0, 32) : name;
 }

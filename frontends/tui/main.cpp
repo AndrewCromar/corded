@@ -1233,12 +1233,23 @@ private:
                 auto sp = arg.find(' ');
                 std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
                 bool on_channel = room && room->kind == "channel";
+                // A typed name is tidied: lower case, dashes for spaces.
+                auto tidy = [](std::string name) {
+                    std::string out;
+                    for (char ch : name) {
+                        if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-')
+                            out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                        else if (ch == ' ' && !out.empty() && out.back() != '-') out += '-';
+                    }
+                    while (!out.empty() && out.back() == '-') out.pop_back();
+                    return out.substr(0, 32);
+                };
                 if (sub == "new" && !rest.empty()) {
-                    command({{"cmd", "create_channel"}, {"name", rest}});
+                    command({{"cmd", "create_channel"}, {"name", tidy(rest)}});
                 } else if (!on_channel) {
                     notice_ = "open a channel first";
                 } else if (sub == "rename" && !rest.empty()) {
-                    command({{"cmd", "rename_channel"}, {"room_id", room->id}, {"name", rest}});
+                    command({{"cmd", "rename_channel"}, {"room_id", room->id}, {"name", tidy(rest)}});
                 } else if (sub == "delete") {
                     command({{"cmd", "delete_channel"}, {"room_id", room->id}});
                 } else if (sub == "private" && !rest.empty()) {

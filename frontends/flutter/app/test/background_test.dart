@@ -40,8 +40,10 @@ void main() {
     final n = notificationFor(message('@andrew lunch?'), {'r1': '#general'}, muted: {'r1'}, me: 'andrew')!;
     expect(n.title, '#general · mentioned you');
     expect(n.body, 'bob: @andrew lunch?');
-    expect(notificationFor(message('@carol lunch?'), {'r1': '#general'}, muted: {'r1'}, me: 'andrew'), isNull);
-    final hidden = notificationFor(message('@everyone hi'), {'r1': '#general'}, showText: false, me: 'andrew')!;
+    expect(
+        notificationFor(message('@carol lunch?'), {'r1': '#general'}, muted: {'r1'}, me: 'andrew'), isNull);
+    final hidden =
+        notificationFor(message('@everyone hi'), {'r1': '#general'}, showText: false, me: 'andrew')!;
     expect(hidden.body, 'bob mentioned you');
   });
 
