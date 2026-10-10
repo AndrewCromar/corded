@@ -27,16 +27,25 @@ class CordedStore {
   final Map<int, ServerInfo> servers = {};
   final Map<String, Room> rooms = {};
   final Map<String, List<Message>> _messages = {};
-  final Map<String, Map<String, Map<String, Set<String>>>> _reactions = {}; // room -> message -> key -> ids
-  final Map<String, Map<String, Map<String, String>>> _myReactions = {}; // room -> message -> key -> my reaction's id
-  final Map<String, Map<String, DateTime>> _typing = {}; // room -> name -> until
-  final Map<String, Map<String, String>> _readUpTo = {}; // room -> name -> message id
-  final Map<int, Map<String, String>> _presence = {}; // server -> person -> online, away or dnd
-  final Map<String, Map<String, Map<String, (int, List<int>)>>> _votes = {}; // room -> poll -> voter -> (when, choices)
-  final Map<String, Map<String, List<int>>> _myVotes = {}; // room -> poll -> this person's choices
-  final Map<String, Uint8List?> _pictures = {}; // person -> their picture; null if they have none
+  final Map<String, Map<String, Map<String, Set<String>>>> _reactions =
+      {}; // room -> message -> key -> ids
+  final Map<String, Map<String, Map<String, String>>> _myReactions =
+      {}; // room -> message -> key -> my reaction's id
+  final Map<String, Map<String, DateTime>> _typing =
+      {}; // room -> name -> until
+  final Map<String, Map<String, String>> _readUpTo =
+      {}; // room -> name -> message id
+  final Map<int, Map<String, String>> _presence =
+      {}; // server -> person -> online, away or dnd
+  final Map<String, Map<String, Map<String, (int, List<int>)>>> _votes =
+      {}; // room -> poll -> voter -> (when, choices)
+  final Map<String, Map<String, List<int>>> _myVotes =
+      {}; // room -> poll -> this person's choices
+  final Map<String, Uint8List?> _pictures =
+      {}; // person -> their picture; null if they have none
   final Set<String> _loaded = {};
-  final Map<String, String?> _oldest = {}; // room -> where the next older page starts; null = none left
+  final Map<String, String?> _oldest =
+      {}; // room -> where the next older page starts; null = none left
   String notice = '';
 
   List<Room> roomsOf(int serverId) {
@@ -52,12 +61,16 @@ class CordedStore {
   }
 
   /// The conversation as shown: everything except replies inside threads.
-  List<Message> messages(String roomId) =>
-      [for (final m in _all(roomId)) if (m.threadRoot == null) m];
+  List<Message> messages(String roomId) => [
+        for (final m in _all(roomId))
+          if (m.threadRoot == null) m
+      ];
 
   /// The replies in the thread started by [rootId], oldest first.
-  List<Message> thread(String roomId, String rootId) =>
-      [for (final m in _all(roomId)) if (m.threadRoot == rootId) m];
+  List<Message> thread(String roomId, String rootId) => [
+        for (final m in _all(roomId))
+          if (m.threadRoot == rootId) m
+      ];
 
   /// How many replies a message's thread has.
   int threadCount(String roomId, Message root) {
@@ -65,14 +78,16 @@ class CordedStore {
     return loaded > root.threadCount ? loaded : root.threadCount;
   }
 
-  Message? message(String roomId, String id) => _all(roomId).where((m) => m.id == id).firstOrNull;
+  Message? message(String roomId, String id) =>
+      _all(roomId).where((m) => m.id == id).firstOrNull;
 
   List<Message> _all(String roomId) => _messages[roomId] ?? const [];
 
   /// Loads every reply of a thread, including ones older than the pages shown.
   Future<void> openThread(String roomId, String rootId) async {
     try {
-      final r = await engine.command({'cmd': 'fetch_thread', 'room_id': roomId, 'event_id': rootId});
+      final r = await engine.command(
+          {'cmd': 'fetch_thread', 'room_id': roomId, 'event_id': rootId});
       for (final j in (r['thread'] as List? ?? const [])) {
         _applyMessage((j as Map).cast<String, dynamic>());
       }
@@ -112,10 +127,12 @@ class CordedStore {
   }
 
   /// Adds this person's reaction, or takes it back if they already made it.
-  Future<void> toggleReaction(String roomId, String messageId, String key) async {
+  Future<void> toggleReaction(
+      String roomId, String messageId, String key) async {
     final mine = myReaction(roomId, messageId, key);
     if (mine != null) {
-      await engine.command({'cmd': 'delete_event', 'room_id': roomId, 'event_id': mine});
+      await engine.command(
+          {'cmd': 'delete_event', 'room_id': roomId, 'event_id': mine});
     } else {
       await engine.command({
         'cmd': 'send_event',
@@ -129,8 +146,10 @@ class CordedStore {
 
   /// Someone's profile as this device knows it; yours when [userId] is null.
   Future<Profile> profile([String? userId]) async {
-    final r = await engine.command({'cmd': 'get_profile', if (userId != null) 'user_id': userId});
-    return Profile.fromJson(((r['profile'] as Map?) ?? const {}).cast<String, dynamic>());
+    final r = await engine
+        .command({'cmd': 'get_profile', if (userId != null) 'user_id': userId});
+    return Profile.fromJson(
+        ((r['profile'] as Map?) ?? const {}).cast<String, dynamic>());
   }
 
   /// Someone's profile picture, if this device has it. The first call for a
@@ -158,12 +177,15 @@ class CordedStore {
   }
 
   /// How present someone is on a server: online, away, dnd or offline.
-  String presence(int serverId, String userId) => _presence[serverId]?[userId] ?? 'offline';
+  String presence(int serverId, String userId) =>
+      _presence[serverId]?[userId] ?? 'offline';
 
   /// How many people chose each option of a poll, by option number.
   Map<int, int> pollCounts(String roomId, String pollId) {
     final counts = <int, int>{};
-    for (final vote in (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{}).values) {
+    for (final vote
+        in (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{})
+            .values) {
       for (final choice in vote.$2.toSet()) {
         counts[choice] = (counts[choice] ?? 0) + 1;
       }
@@ -173,10 +195,14 @@ class CordedStore {
 
   /// How many people have voted in a poll.
   int pollVoters(String roomId, String pollId) =>
-      (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{}).values.where((v) => v.$2.isNotEmpty).length;
+      (_votes[roomId]?[pollId] ?? const <String, (int, List<int>)>{})
+          .values
+          .where((v) => v.$2.isNotEmpty)
+          .length;
 
   /// What this person chose in a poll.
-  List<int> myPollChoices(String roomId, String pollId) => _myVotes[roomId]?[pollId] ?? const [];
+  List<int> myPollChoices(String roomId, String pollId) =>
+      _myVotes[roomId]?[pollId] ?? const [];
 
   /// Votes, or changes a vote. One choice replaces the last unless the poll
   /// allows several; choosing what is already chosen takes it back.
@@ -206,7 +232,11 @@ class CordedStore {
       'type': 'm.poll',
       // What clients that do not know polls show instead.
       'fallback_text': 'Poll: $question (${options.join(' / ')})',
-      'content': {'question': question, 'options': options, 'multiple': multiple},
+      'content': {
+        'question': question,
+        'options': options,
+        'multiple': multiple
+      },
       if (thread != null) 'relation': {'kind': 'thread', 'target': thread},
     });
   }
@@ -233,7 +263,8 @@ class CordedStore {
     if (_loaded.add(roomId)) {
       await _loadPage(roomId, null);
       try {
-        final r = await engine.command({'cmd': 'fetch_receipts', 'room_id': roomId});
+        final r =
+            await engine.command({'cmd': 'fetch_receipts', 'room_id': roomId});
         for (final j in (r['receipts'] as List? ?? const [])) {
           _applyReceipt(roomId, (j as Map).cast<String, dynamic>());
         }
@@ -258,7 +289,8 @@ class CordedStore {
     for (var i = list.length - 1; i >= 0; i--) {
       if (list[i].mine || list[i].seq == null) continue;
       try {
-        await engine.command({'cmd': 'mark_read', 'room_id': roomId, 'event_id': list[i].id});
+        await engine.command(
+            {'cmd': 'mark_read', 'room_id': roomId, 'event_id': list[i].id});
       } on CordedError {
         // Not yet confirmed by the server; the next message will carry it.
       }
@@ -338,27 +370,32 @@ class CordedStore {
       if (target == null) return false;
       final key = '${relation['key'] ?? (j['content'] as Map?)?['key'] ?? '?'}';
       if (j['status'] == 'redacted') return false;
-      if (j['mine'] == true) ((_myReactions[roomId] ??= {})[target] ??= {})[key] = id;
+      if (j['mine'] == true)
+        ((_myReactions[roomId] ??= {})[target] ??= {})[key] = id;
       return (((_reactions[roomId] ??= {})[target] ??= {})[key] ??= {}).add(id);
     }
     if (type == 'm.poll.vote') {
       // A person's newest vote on a poll replaces their earlier one.
       final target = relation['target'] as String?;
       final voter = j['sender_user'] as String? ?? '';
-      if (target == null || voter.isEmpty || j['status'] == 'redacted') return false;
-      final at = (j['seq'] as num?)?.toInt() ?? (j['origin_ts'] as num?)?.toInt() ?? 0;
+      if (target == null || voter.isEmpty || j['status'] == 'redacted')
+        return false;
+      final at =
+          (j['seq'] as num?)?.toInt() ?? (j['origin_ts'] as num?)?.toInt() ?? 0;
       final votes = (_votes[roomId] ??= {})[target] ??= {};
       final earlier = votes[voter];
       if (earlier != null && earlier.$1 > at) return false;
       final choices = [
-        for (final c in ((j['content'] as Map?)?['choices'] as List? ?? const []))
+        for (final c
+            in ((j['content'] as Map?)?['choices'] as List? ?? const []))
           if (c is num) c.toInt()
       ];
       votes[voter] = (at, choices);
       if (j['mine'] == true) ((_myVotes[roomId] ??= {})[target] = choices);
       return false;
     }
-    if (type != 'm.text' && type != 'm.poll') return false; // edits, deletions and room changes arrive as updates
+    if (type != 'm.text' && type != 'm.poll' && type != 'm.file')
+      return false; // edits, deletions and room changes arrive as updates
     final list = _messages[roomId] ??= [];
     for (final m in list) {
       if (m.id == id) {
@@ -377,7 +414,8 @@ class CordedStore {
     }
     list.insert(at, message);
     final room = rooms[roomId];
-    if (room != null && message.timestamp > room.lastActivity) room.lastActivity = message.timestamp;
+    if (room != null && message.timestamp > room.lastActivity)
+      room.lastActivity = message.timestamp;
     return true;
   }
 
@@ -390,14 +428,16 @@ class CordedStore {
       case 'connection_state':
         final id = (e['server_id'] as num?)?.toInt();
         if (id != null && id != 0) {
-          servers.putIfAbsent(id, () => ServerInfo(id)).connection = e['state'] as String? ?? '';
+          servers.putIfAbsent(id, () => ServerInfo(id)).connection =
+              e['state'] as String? ?? '';
         }
       case 'server_info':
         _applyServer(e);
       case 'room_updated':
         _applyRoom((e['room'] as Map).cast<String, dynamic>());
       case 'profile_updated':
-        _setPicture('${e['user_id']}', ((e['profile'] as Map?) ?? const {})['picture']);
+        _setPicture(
+            '${e['user_id']}', ((e['profile'] as Map?) ?? const {})['picture']);
       case 'presence':
         final server = (e['server_id'] as num?)?.toInt() ?? 0;
         final status = '${e['status']}';
@@ -411,7 +451,8 @@ class CordedStore {
       case 'server_removed':
         final id = (e['server_id'] as num?)?.toInt();
         servers.remove(id);
-        for (final room in rooms.values.where((r) => r.serverId == id).toList()) {
+        for (final room
+            in rooms.values.where((r) => r.serverId == id).toList()) {
           rooms.remove(room.id);
           _messages.remove(room.id);
         }
@@ -437,7 +478,9 @@ class CordedStore {
           }
         }
         // A deleted reaction no longer counts.
-        for (final byKey in (_reactions[roomId] ?? const <String, Map<String, Set<String>>>{}).values) {
+        for (final byKey in (_reactions[roomId] ??
+                const <String, Map<String, Set<String>>>{})
+            .values) {
           for (final ids in byKey.values) {
             ids.remove(id);
           }
@@ -452,11 +495,14 @@ class CordedStore {
           }
         }
         list.sort(compareMessages); // the server has now given it a place
-        if (e['status'] == 'failed') notice = 'Could not send: ${e['message'] ?? ''}';
+        if (e['status'] == 'failed')
+          notice = 'Could not send: ${e['message'] ?? ''}';
       case 'event_expired':
-        _messages[e['room_id'] as String? ?? '']?.removeWhere((m) => m.id == e['event_id']);
+        _messages[e['room_id'] as String? ?? '']
+            ?.removeWhere((m) => m.id == e['event_id']);
       case 'typing':
-        (_typing[e['room_id'] as String? ?? ''] ??= {})['${e['display_name'] ?? 'Someone'}'] =
+        (_typing[e['room_id'] as String? ?? ''] ??=
+                {})['${e['display_name'] ?? 'Someone'}'] =
             DateTime.now().add(const Duration(seconds: 5));
         // Redraw once more when the notice lapses.
         Timer(const Duration(seconds: 5, milliseconds: 100), _changed);

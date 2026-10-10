@@ -252,7 +252,8 @@ test:
 | Typing indicators | short-lived frame, relayed and never stored | a new frame the server relays |
 | Read receipts | `m.receipt` with `reference` relation, encrypted like any message | none |
 
-Not yet built: mentions, attachments, link previews, presence, pins, polls. Several
+Built since: mentions, presence, pins, polls, and files and photos (D-45). Not yet built:
+link previews, and audio or video as their own kinds of message. Several
 devices per person are built (see 05).
 
 ## 5. Design obligations this places on the core stages

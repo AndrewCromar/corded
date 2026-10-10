@@ -509,6 +509,10 @@ private:
             show_info_ = true;
             return;
         }
+        if (ok && ev["data"].contains("path") && ev["data"].contains("cached")) {
+            notice_ = "saved to " + ev["data"].value("path", "");
+            return;
+        }
         if (ok && ev["data"].contains("devices")) {
             devices_.clear();
             Elements rows = {text("Devices signed in as you") | bold};
@@ -707,6 +711,16 @@ private:
         if (rel_kind == "thread") m.thread_root = rel_target;
         if (m.status == "redacted") m.body = "[deleted]";
         else if (type == "m.text") m.body = d["content"].value("body", "");
+        else if (type == "m.file") {
+            // Shown as a line; /save <number> fetches it.
+            double size = d["content"].value("size", 0.0);
+            char amount[32];
+            if (size >= 1024 * 1024) std::snprintf(amount, sizeof amount, "%.1f MB", size / (1024 * 1024));
+            else std::snprintf(amount, sizeof amount, "%.0f KB", std::max(1.0, size / 1024));
+            std::string caption = d["content"].value("body", "");
+            m.body = "[file] " + d["content"].value("name", "file") + " (" + amount + ")" +
+                     (caption.empty() ? "" : "  " + caption);
+        }
         else if (type == "m.poll") {
             m.body = "[poll] " + d["content"].value("question", "");
             for (const auto& o : d["content"].value("options", json::array())) m.poll_options.push_back(o.get<std::string>());
@@ -1131,6 +1145,36 @@ private:
                              {"fallback_text", "Poll: " + parts[0] + " (" + summary + ")"},
                              {"content", {{"question", parts[0]}, {"options", options}, {"multiple", false}}}});
                 }
+            } else if (room && cmd == "/file" && !arg.empty()) {
+                // /file <path> | caption      the caption is optional
+                auto bar = arg.find('|');
+                auto trim = [](std::string t) {
+                    while (!t.empty() && t.back() == ' ') t.pop_back();
+                    while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+                    return t;
+                };
+                std::string path = trim(arg.substr(0, bar));
+                if (path.rfind("~/", 0) == 0 && std::getenv("HOME")) path = std::string(std::getenv("HOME")) + path.substr(1);
+                json send = {{"cmd", "send_file"}, {"room_id", room->id}, {"path", path}};
+                if (bar != std::string::npos) send["caption"] = trim(arg.substr(bar + 1));
+                command(send);
+                notice_ = "sending " + path + " ...";
+            } else if (cmd == "/file") {
+                notice_ = "/file <path> | caption     send a file; save one you were sent with /save <message number>";
+            } else if (room && cmd == "/save") {
+                // /save <number> [folder]; without a folder it goes beside your vault.
+                std::string rest = arg;
+                const Message* target = take_target(*room, rest);
+                if (!target || target->type != "m.file") notice_ = "give the number of a file message, like /save 12";
+                else {
+                    json fetch = {{"cmd", "download_file"}, {"room_id", room->id}, {"event_id", target->event_id}};
+                    if (!rest.empty()) {
+                        if (rest.rfind("~/", 0) == 0 && std::getenv("HOME")) rest = std::string(std::getenv("HOME")) + rest.substr(1);
+                        fetch["dir"] = rest;
+                    }
+                    command(fetch);
+                    notice_ = "fetching ...";
+                }
             } else if (cmd == "/poll") {
                 notice_ = "/poll Question | option | option ...     vote with /vote <message number> <option number>";
             } else if (room && cmd == "/vote") {
@@ -1407,6 +1451,7 @@ private:
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
                               text("/nick <name>       set your display name (in your profile; servers do not see it)"),
                               text("/poll Question | option | option     start a poll      /vote <n> <option number>"),
+                              text("/file <path> | caption   send a file         /save <n> [folder]   keep a file you were sent"),
                               text("/search <words>    look through your messages (\"/search here <words>\" for this chat only)"),
                               text("/devices           the devices signed in as you     /device remove <n>  sign one out"),
                               text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),

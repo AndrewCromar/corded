@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 
 namespace corded {
 
@@ -45,7 +47,34 @@ bool known_type(const std::string& type) {
     return type == "m.text" || type == "m.reaction" || type == "m.room.name" || type == "m.edit" ||
            type == "m.redaction" || type == "m.room.member" || type == "m.room.retention" ||
            type == "m.history.share" || type == "m.receipt" || type == "m.room.pin" || type == "m.profile" ||
-           type == "m.poll" || type == "m.poll.vote";
+           type == "m.poll" || type == "m.poll.vote" || type == "m.file";
+}
+
+// The largest file this client will send or fetch. It is held in memory whole
+// while it is encrypted, so this is a guard, not a promise; servers set their
+// own, usually lower, limit.
+constexpr uint64_t kMaxFileBytes = 200ull * 1024 * 1024;
+
+// A name that is safe to give a file on this device, whatever the sender called it.
+std::string safe_file_name(const std::string& name) {
+    std::string out;
+    for (unsigned char c : name) {
+        if (out.size() >= 80) break;
+        if (std::isalnum(c) || c == '.' || c == '-' || c == '_' || c >= 0x80) out += static_cast<char>(c);
+        else if (c == ' ') out += '_';
+    }
+    while (!out.empty() && out.front() == '.') out.erase(out.begin());
+    return out.empty() ? "file" : out;
+}
+
+std::string hex_of(ByteView v) {
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    for (uint8_t b : v) {
+        out += digits[b >> 4];
+        out += digits[b & 15];
+    }
+    return out;
 }
 
 }  // namespace
@@ -947,11 +976,26 @@ void Session::run_command(uint64_t req, const std::string& name, const json& cmd
                                  {"content", {{"body", cmd.at("body")}}},
                                  {"relation", {{"kind", "replace"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "delete_event") {
+            // Deleting a file you sent also takes its bytes off the server.
+            if (auto target = vault_.event(need_b64(cmd, "room_id", 16), need_b64(cmd, "event_id", 16));
+                target && target->type == "m.file" && conn_ == Conn::Live) {
+                json content = json::parse(target->content, nullptr, false);
+                auto blob_id = content.is_object() ? unb64(content.value("blob_id", "")) : std::nullopt;
+                if (blob_id && blob_id->size() == 16) {
+                    wire::DeleteBlobT q;
+                    q.blob_id = *blob_id;
+                    request(std::move(q), [](wire::FrameT&) {});  // refused if it is not ours to remove
+                }
+            }
             cmd_send_event(req, {{"room_id", cmd.at("room_id")},
                                  {"type", "m.redaction"},
                                  {"relation", {{"kind", "redact"}, {"target", cmd.at("event_id")}}}});
         } else if (name == "send_event") {
             cmd_send_event(req, cmd);
+        } else if (name == "send_file") {
+            cmd_send_file(req, cmd);
+        } else if (name == "download_file") {
+            cmd_download_file(req, cmd);
         } else if (name == "fetch_thread") {
             Bytes room_id = need_b64(cmd, "room_id", 16);
             Bytes root_id = need_b64(cmd, "event_id", 16);
@@ -1564,6 +1608,192 @@ void Session::cmd_send_event(uint64_t req, const json& cmd) {
     apply_relation(e);
     ok(req, {{"event_id", b64(e.event_id)}});
     pump_outbox();
+}
+
+// ---------------------------------------------------------------- files
+
+// send_file: {room_id, path, name?, mime?, caption?, thumbnail?, width?, height?,
+// reply_to?, thread?}. The file is encrypted under a key made for it alone and
+// uploaded; then an m.file message carries the key to the people in the room.
+void Session::cmd_send_file(uint64_t req, const json& cmd) {
+    Bytes room_id = need_b64(cmd, "room_id", 16);
+    if (!vault_.room(room_id)) {
+        fail(req, "not_found", "unknown room");
+        return;
+    }
+    if (conn_ != Conn::Live) {
+        fail(req, "offline", "a file can only be sent while connected");
+        return;
+    }
+    std::string path = cmd.at("path").get<std::string>();
+    std::error_code ec;
+    uint64_t size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0) {
+        fail(req, "invalid_argument", "that file could not be read, or is empty");
+        return;
+    }
+    if (size > kMaxFileBytes) {
+        fail(req, "invalid_argument", "that file is too large to send");
+        return;
+    }
+    Bytes plain(static_cast<size_t>(size));
+    {
+        std::ifstream in(path, std::ios::binary);
+        in.read(reinterpret_cast<char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
+        if (static_cast<uint64_t>(in.gcount()) != size) {
+            fail(req, "invalid_argument", "that file could not be read");
+            return;
+        }
+    }
+    auto up = std::make_shared<Upload>();
+    up->blob_id = random_bytes(16);
+    Bytes key_bytes = random_bytes(32), nonce = random_bytes(24);
+    Key32 key{};
+    std::copy(key_bytes.begin(), key_bytes.end(), key.begin());
+    // Bound to its id, so the server cannot hand back a different file's bytes.
+    up->cipher = crypto::aead_encrypt(key, nonce, plain, up->blob_id);
+    sodium_memzero(plain.data(), plain.size());
+
+    std::string name = cmd.value("name", std::filesystem::path(path).filename().string());
+    json content = {{"body", cmd.value("caption", std::string{})},
+                    {"name", name},
+                    {"mime", cmd.value("mime", std::string{"application/octet-stream"})},
+                    {"size", size},
+                    {"blob_id", b64(up->blob_id)},
+                    {"key", b64(key_bytes)},
+                    {"nonce", b64(nonce)}};
+    for (const char* extra : {"thumbnail", "width", "height"})
+        if (cmd.contains(extra)) content[extra] = cmd.at(extra);
+    sodium_memzero(key_bytes.data(), key_bytes.size());
+    sodium_memzero(key.data(), key.size());
+    up->event = {{"room_id", cmd.at("room_id")},
+                 {"type", "m.file"},
+                 {"content", std::move(content)},
+                 {"fallback_text", "sent a file: " + name}};
+    if (cmd.contains("reply_to")) up->event["relation"] = {{"kind", "reply"}, {"target", cmd.at("reply_to")}};
+    if (cmd.contains("thread")) {
+        up->event["relation"] = {{"kind", "thread"}, {"target", cmd.at("thread")}};
+        if (cmd.contains("reply_to")) up->event["content"]["reply_to"] = cmd.at("reply_to");
+    }
+    upload_next(req, std::move(up));
+}
+
+void Session::upload_next(uint64_t req, std::shared_ptr<Upload> up) {
+    if (up->sent >= up->cipher.size()) {
+        share_profile(need_b64(up->event, "room_id", 16), false);
+        cmd_send_event(req, up->event);
+        return;
+    }
+    size_t n = std::min<size_t>(kBlobChunkBytes, up->cipher.size() - up->sent);
+    wire::PutBlobT q;
+    q.blob_id = up->blob_id;
+    q.offset = up->sent;
+    q.total = up->cipher.size();
+    q.data.assign(up->cipher.begin() + static_cast<std::ptrdiff_t>(up->sent),
+                  up->cipher.begin() + static_cast<std::ptrdiff_t>(up->sent + n));
+    request(std::move(q), [this, req, up, n](wire::FrameT& r) {
+        if (r.body.type != wire::FrameBody_Ok) {
+            auto* e = r.body.AsError();
+            fail(req, "refused", e ? e->message : "the server refused the file");
+            return;
+        }
+        up->sent += n;
+        emit({{"event", "file_progress"}, {"request_id", req}, {"done", up->sent}, {"total", up->cipher.size()}});
+        upload_next(req, up);
+    });
+}
+
+// download_file: {room_id, event_id, dir?}. Fetches the file a message
+// announced, checks and decrypts it, and writes it under `dir` (by default a
+// "files" folder beside the vault). Answers with the path; a file fetched
+// before is not fetched again.
+void Session::cmd_download_file(uint64_t req, const json& cmd) {
+    Bytes room_id = need_b64(cmd, "room_id", 16);
+    Bytes event_id = need_b64(cmd, "event_id", 16);
+    auto e = vault_.event(room_id, event_id);
+    json content = e && e->type == "m.file" && e->status != "redacted" ? json::parse(e->content, nullptr, false)
+                                                                     : json();
+    auto blob_id = content.is_object() ? unb64(content.value("blob_id", "")) : std::nullopt;
+    auto key = content.is_object() ? unb64(content.value("key", "")) : std::nullopt;
+    auto nonce = content.is_object() ? unb64(content.value("nonce", "")) : std::nullopt;
+    if (!blob_id || blob_id->size() != 16 || !key || key->size() != 32 || !nonce || nonce->size() != 24) {
+        fail(req, "not_found", "that message has no file");
+        return;
+    }
+    auto down = std::make_shared<Download>();
+    down->blob_id = *blob_id;
+    down->key = *key;
+    down->nonce = *nonce;
+    down->size = content.value("size", uint64_t{0});
+    down->name = content.value("name", std::string{"file"});
+    down->mime = content.value("mime", std::string{});
+    std::string dir = cmd.value("dir", engine_.config_.vault_dir + "/files");
+    down->path = dir + "/" + hex_of(event_id).substr(12) + "-" + safe_file_name(down->name);
+    std::error_code ec;
+    if (std::filesystem::file_size(down->path, ec) == down->size && !ec) {
+        ok(req, {{"path", down->path}, {"name", down->name}, {"mime", down->mime}, {"cached", true}});
+        return;
+    }
+    if (down->size > kMaxFileBytes) {
+        fail(req, "invalid_argument", "that file is too large to fetch");
+        return;
+    }
+    if (conn_ != Conn::Live) {
+        fail(req, "offline", "a file can only be fetched while connected");
+        return;
+    }
+    std::filesystem::create_directories(dir, ec);
+    download_next(req, std::move(down));
+}
+
+void Session::download_next(uint64_t req, std::shared_ptr<Download> down) {
+    wire::GetBlobT q;
+    q.blob_id = down->blob_id;
+    q.offset = down->cipher.size();
+    request(std::move(q), [this, req, down](wire::FrameT& r) {
+        auto* piece = r.body.AsBlob();
+        // What the server says about the size is checked against what the
+        // sender said inside the encrypted message.
+        if (!piece || piece->data.empty() || piece->offset != down->cipher.size() ||
+            piece->total > down->size + 1024 || down->cipher.size() + piece->data.size() > piece->total) {
+            auto* e = r.body.AsError();
+            fail(req, e && e->code == kDisconnected ? "offline" : "not_found",
+                 e ? e->message : "the server sent something that is not this file");
+            return;
+        }
+        down->cipher.insert(down->cipher.end(), piece->data.begin(), piece->data.end());
+        emit({{"event", "file_progress"}, {"request_id", req}, {"done", down->cipher.size()}, {"total", piece->total}});
+        if (down->cipher.size() < piece->total) {
+            download_next(req, down);
+            return;
+        }
+        Key32 key{};
+        std::copy(down->key.begin(), down->key.end(), key.begin());
+        auto plain = crypto::aead_decrypt(key, down->nonce, down->cipher, down->blob_id);
+        sodium_memzero(key.data(), key.size());
+        if (!plain || plain->size() != down->size) {
+            fail(req, "bad_file", "the file did not pass its check; it was damaged or swapped");
+            return;
+        }
+        // Written beside its final place and moved, so a half-written file is never taken for whole.
+        std::string partial = down->path + ".part";
+        {
+            std::ofstream out(partial, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(plain->data()), static_cast<std::streamsize>(plain->size()));
+            out.close();
+            if (!out) {
+                fail(req, "io_error", "the file could not be saved on this device");
+                return;
+            }
+        }
+        std::error_code ec;
+        std::filesystem::rename(partial, down->path, ec);
+        if (ec) {
+            fail(req, "io_error", "the file could not be saved on this device");
+            return;
+        }
+        ok(req, {{"path", down->path}, {"name", down->name}, {"mime", down->mime}, {"cached", false}});
+    });
 }
 
 // ---------------------------------------------------------------- network

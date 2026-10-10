@@ -87,6 +87,21 @@ private:
     bool can_moderate(const RoomRow& room, ByteView user_id);
     bool has_permission(const RoomRow& room, ByteView user_id, uint64_t permission);
     void cmd_send_event(uint64_t req, const json& cmd);
+    // Files: encrypted here, uploaded in pieces, announced by an m.file message.
+    struct Upload {
+        Bytes blob_id, cipher;
+        size_t sent = 0;
+        json event;
+    };
+    struct Download {
+        Bytes blob_id, key, nonce, cipher;
+        uint64_t size = 0;
+        std::string path, name, mime;
+    };
+    void cmd_send_file(uint64_t req, const json& cmd);
+    void upload_next(uint64_t req, std::shared_ptr<Upload> up);
+    void cmd_download_file(uint64_t req, const json& cmd);
+    void download_next(uint64_t req, std::shared_ptr<Download> down);
 
     // network
     void start_connect();

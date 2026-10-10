@@ -15,6 +15,7 @@
 #include <ctime>
 #include <cerrno>
 #include <filesystem>
+#include <fstream>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -49,7 +50,11 @@ inline constexpr SettingSpec kSettings[] = {
      "who can reach the server: machine (this computer only), network (the local network), internet (anyone)"},
     {"registration", "open", false, false, "who may create an account: open, invite, closed"},
     {"history_sharing", "on", false, false, "whether newcomers may ask members for earlier messages: on, off"},
-    {"retention_days", "30", false, false, "days the server keeps stored messages; 0 keeps them forever"},
+    {"retention_days", "30", false, false,
+     "days the server keeps stored messages and files; 0 keeps them forever"},
+    {"max_file_mb", "25", false, false, "the largest file a member may send, in megabytes; 0 turns files off"},
+    {"storage_limit_mb", "0", false, false,
+     "how much space files may take in all, in megabytes; 0 sets no limit"},
     {"restart", "off", false, false,
      "scheduled restart: off, \"daily HH:MM\" or \"weekly <mon..sun> HH:MM\" in the server's local time"},
     {"housekeeping", "on", false, false, "hourly tidying of expired invites and old messages: on, off"},
@@ -310,6 +315,11 @@ public:
                 return "use a number of days, or 0 to keep messages forever";
             return "";
         }
+        if (key == "max_file_mb" || key == "storage_limit_mb") {
+            if (value.empty() || value.size() > 7 || value.find_first_not_of("0123456789") != std::string::npos)
+                return "use a number of megabytes";
+            return "";
+        }
         if (key == "restart") return (value == "off" || parse_schedule(value)) ? "" :
                                      "use off, \"daily HH:MM\" or \"weekly <mon..sun> HH:MM\"";
         return "there is no such setting";
@@ -394,6 +404,7 @@ public:
                 if (options_.housekeeping && now_ms() - last_tidy > 3600 * 1000) {
                     last_tidy = now_ms();
                     storage_.housekeeping(options_.retention_days);
+                    for (const auto& id : storage_.blobs_to_drop(options_.retention_days)) drop_blob(id);
                     storage_.prune_empty_rooms();
                 }
                 auto schedule = parse_schedule(options_.restart_schedule);
@@ -474,6 +485,9 @@ public:
                 case wire::FrameBody_SetChannelArchived:
                     on_set_channel_archived(*c, rid, *f.body.AsSetChannelArchived());
                     break;
+                case wire::FrameBody_PutBlob: on_put_blob(*c, rid, *f.body.AsPutBlob()); break;
+                case wire::FrameBody_GetBlob: on_get_blob(*c, rid, *f.body.AsGetBlob()); break;
+                case wire::FrameBody_DeleteBlob: on_delete_blob(*c, rid, *f.body.AsDeleteBlob()); break;
                 case wire::FrameBody_NewInvite: on_create_invite(*c, rid, *f.body.AsNewInvite()); break;
                 case wire::FrameBody_RevokeInvite: on_revoke_invite(*c, rid, *f.body.AsRevokeInvite()); break;
                 case wire::FrameBody_HistoryRequest: on_history_request(*c, rid, *f.body.AsHistoryRequest()); break;
@@ -969,6 +983,108 @@ private:
         c.reply(rid, wire::OkT{});
     }
 
+    // ---- files ----
+    std::string blob_path(const Bytes& id) const {
+        static const char* hex = "0123456789abcdef";
+        std::string name;
+        for (uint8_t b : id) {
+            name += hex[b >> 4];
+            name += hex[b & 15];
+        }
+        return options_.data_dir + "/blobs/" + name;
+    }
+    void drop_blob(const Bytes& id) {
+        std::error_code ec;
+        std::filesystem::remove(blob_path(id), ec);
+        storage_.blob_forget(id);
+    }
+
+    // One piece of an upload. The first piece opens the file; each later one
+    // must come from the same person and continue exactly where it stopped.
+    void on_put_blob(Conn& c, uint32_t rid, const wire::PutBlobT& q) {
+        if (q.blob_id.size() != 16 || q.data.empty() || q.data.size() > kBlobChunkBytes || q.total == 0 ||
+            q.offset + q.data.size() > q.total) {
+            c.fail(rid, err::Malformed, "bad file piece");
+            return;
+        }
+        auto row = storage_.blob(q.blob_id);
+        if (!row) {
+            uint64_t largest = std::strtoull(setting("max_file_mb").c_str(), nullptr, 10) * 1024 * 1024;
+            uint64_t limit = std::strtoull(setting("storage_limit_mb").c_str(), nullptr, 10) * 1024 * 1024;
+            if (q.offset != 0) {
+                c.fail(rid, err::NotFound, "no such upload");
+                return;
+            }
+            if (!require(c, rid, perm::AttachFiles)) return;
+            if (largest == 0) {
+                c.fail(rid, err::Forbidden, "this server does not take files");
+                return;
+            }
+            // The encrypted form is a few bytes longer than the file itself.
+            if (q.total > largest + 1024) {
+                c.fail(rid, err::Forbidden,
+                       "that file is larger than this server allows (" + setting("max_file_mb") + " MB)");
+                return;
+            }
+            if (limit > 0 && storage_.blob_bytes() + q.total > limit) {
+                c.fail(rid, err::Forbidden, "this server has no room left for files");
+                return;
+            }
+            std::filesystem::create_directories(options_.data_dir + "/blobs");
+            storage_.blob_begin(q.blob_id, c.user_id, q.total);
+            row = storage_.blob(q.blob_id);
+        }
+        if (row->owner != c.user_id || row->total != q.total || row->stored != q.offset) {
+            c.fail(rid, err::Forbidden, "that piece does not continue this upload");
+            return;
+        }
+        std::ofstream out(blob_path(q.blob_id), std::ios::binary | (q.offset == 0 ? std::ios::trunc : std::ios::app));
+        out.write(reinterpret_cast<const char*>(q.data.data()), static_cast<std::streamsize>(q.data.size()));
+        out.close();
+        if (!out) {
+            drop_blob(q.blob_id);
+            c.fail(rid, err::Internal, "the server could not store the file");
+            return;
+        }
+        storage_.blob_stored(q.blob_id, q.offset + q.data.size());
+        c.reply(rid, wire::OkT{});
+    }
+
+    // Anyone signed in who knows a file's id may fetch it. The id is random
+    // and only travels inside encrypted messages, and the bytes are useless
+    // without the key that travels with it.
+    void on_get_blob(Conn& c, uint32_t rid, const wire::GetBlobT& q) {
+        auto row = q.blob_id.size() == 16 ? storage_.blob(q.blob_id) : std::nullopt;
+        if (!row || !row->complete() || q.offset >= row->total) {
+            c.fail(rid, err::NotFound, "that file is no longer on the server");
+            return;
+        }
+        wire::BlobT out;
+        out.blob_id = q.blob_id;
+        out.offset = q.offset;
+        out.total = row->total;
+        out.data.resize(static_cast<size_t>(std::min<uint64_t>(kBlobChunkBytes, row->total - q.offset)));
+        std::ifstream in(blob_path(q.blob_id), std::ios::binary);
+        in.seekg(static_cast<std::streamoff>(q.offset));
+        in.read(reinterpret_cast<char*>(out.data.data()), static_cast<std::streamsize>(out.data.size()));
+        if (static_cast<size_t>(in.gcount()) != out.data.size()) {
+            c.fail(rid, err::NotFound, "that file is no longer on the server");
+            return;
+        }
+        c.reply(rid, std::move(out));
+    }
+
+    void on_delete_blob(Conn& c, uint32_t rid, const wire::DeleteBlobT& q) {
+        auto row = q.blob_id.size() == 16 ? storage_.blob(q.blob_id) : std::nullopt;
+        if (!row) {
+            c.reply(rid, wire::OkT{});  // already gone
+            return;
+        }
+        if (row->owner != c.user_id && !require(c, rid, perm::ManageMessages)) return;
+        drop_blob(q.blob_id);
+        c.reply(rid, wire::OkT{});
+    }
+
     void on_set_channel_nsfw(Conn& c, uint32_t rid, const wire::SetChannelNsfwT& q) {
         if (!require(c, rid, perm::ManageChannels) || !channel_exists(c, rid, q.room_id)) return;
         storage_.set_channel_nsfw(q.room_id, q.nsfw);
@@ -1135,7 +1251,7 @@ private:
         st.online = static_cast<uint32_t>(online_.size());
         st.scope = options_.scope;
         std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(options_.data_dir, ec))
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(options_.data_dir, ec))
             if (entry.is_regular_file(ec)) st.stored_bytes += entry.file_size(ec);
         if (auto last = storage_.info("last_housekeeping")) st.last_housekeeping = std::stoull(to_string(*last));
         c.reply(rid, std::move(st));

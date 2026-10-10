@@ -52,7 +52,8 @@ class CordedEngine {
         ..fastKdf = fastKdf ? 1 : 0;
       final status = bindings.engineCreate(config, out);
       if (status != cordedOk) {
-        throw CordedError('engine', bindings.statusMessage(status).toDartString());
+        throw CordedError(
+            'engine', bindings.statusMessage(status).toDartString());
       }
       final engine = CordedEngine._(bindings, out.value, libraryPath);
       if (pump) await engine.startPump();
@@ -81,7 +82,8 @@ class CordedEngine {
   }
 
   /// Makes a new identity on this device.
-  Future<Map<String, dynamic>> createVault(String passphrase, String username) =>
+  Future<Map<String, dynamic>> createVault(
+          String passphrase, String username) =>
       _withPassphrase(passphrase, (bytes, len, request) {
         final name = username.toNativeUtf8();
         try {
@@ -92,12 +94,14 @@ class CordedEngine {
       });
 
   /// Sets this device up as a person who already exists on another device.
-  Future<Map<String, dynamic>> restoreVault(String passphrase, String username, String recoveryKey) =>
+  Future<Map<String, dynamic>> restoreVault(
+          String passphrase, String username, String recoveryKey) =>
       _withPassphrase(passphrase, (bytes, len, request) {
         final name = username.toNativeUtf8();
         final key = recoveryKey.toNativeUtf8();
         try {
-          return _bindings.vaultRestore(_engine, bytes, len, name, key, request);
+          return _bindings.vaultRestore(
+              _engine, bytes, len, name, key, request);
         } finally {
           calloc.free(name);
           calloc.free(key);
@@ -105,7 +109,9 @@ class CordedEngine {
       });
 
   Future<Map<String, dynamic>> unlock(String passphrase) => _withPassphrase(
-      passphrase, (bytes, len, request) => _bindings.vaultUnlock(_engine, bytes, len, request));
+      passphrase,
+      (bytes, len, request) =>
+          _bindings.vaultUnlock(_engine, bytes, len, request));
 
   /// Sends a command and completes with the "data" of its result, or throws
   /// [CordedError] if the core or the server refused it.
@@ -148,7 +154,8 @@ class CordedEngine {
     final out = calloc<Pointer<Utf8>>();
     final events = <String>[];
     try {
-      while (events.length < max && bindings.nextEvent(engine, 0, out, nullptr) == cordedOk) {
+      while (events.length < max &&
+          bindings.nextEvent(engine, 0, out, nullptr) == cordedOk) {
         events.add(out.value.toDartString());
         bindings.eventFree(out.value);
       }
@@ -169,7 +176,8 @@ class CordedEngine {
     _bindings.engineDestroy(_engine);
     calloc.free(_stop);
     for (final c in _pending.values) {
-      if (!c.isCompleted) c.completeError(CordedError('closed', 'the core was closed'));
+      if (!c.isCompleted)
+        c.completeError(CordedError('closed', 'the core was closed'));
     }
     _pending.clear();
     await _events.close();
@@ -178,7 +186,8 @@ class CordedEngine {
   // ---- internals
 
   void _check(int status) {
-    if (status != cordedOk) throw CordedError('call', _bindings.statusMessage(status).toDartString());
+    if (status != cordedOk)
+      throw CordedError('call', _bindings.statusMessage(status).toDartString());
   }
 
   Future<Map<String, dynamic>> _await(int request) {
@@ -187,8 +196,8 @@ class CordedEngine {
     return completer.future;
   }
 
-  Future<Map<String, dynamic>> _withPassphrase(
-      String passphrase, int Function(Pointer<Uint8>, int, Pointer<Uint64>) call) {
+  Future<Map<String, dynamic>> _withPassphrase(String passphrase,
+      int Function(Pointer<Uint8>, int, Pointer<Uint64>) call) {
     final bytes = utf8.encode(passphrase);
     final buffer = calloc<Uint8>(bytes.length + 1);
     final request = calloc<Uint64>();
@@ -217,7 +226,8 @@ class CordedEngine {
       }
       _handle(message as String);
     });
-    await Isolate.spawn(_pump, [port.sendPort, _engine.address, _stop.address, _libraryPath]);
+    await Isolate.spawn(
+        _pump, [port.sendPort, _engine.address, _stop.address, _libraryPath]);
   }
 
   void _handle(String message) {
@@ -232,10 +242,13 @@ class CordedEngine {
         final completer = _pending.remove(event['request']);
         if (completer != null) {
           if (event['ok'] == true) {
-            completer.complete((event['data'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{});
+            completer.complete(
+                (event['data'] as Map?)?.cast<String, dynamic>() ??
+                    <String, dynamic>{});
           } else {
             final error = (event['error'] as Map?) ?? const {};
-            completer.completeError(CordedError('${error['code'] ?? 'error'}', '${error['message'] ?? 'failed'}'));
+            completer.completeError(CordedError('${error['code'] ?? 'error'}',
+                '${error['message'] ?? 'failed'}'));
           }
         }
       }

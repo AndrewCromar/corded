@@ -1,13 +1,17 @@
 import 'dart:async';
 
 import 'package:corded_dart/corded_dart.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import 'common.dart';
 import 'group.dart';
 import 'linked_text.dart';
+import 'picture_view.dart';
 import 'presence.dart';
 import 'profile.dart';
 import 'search.dart';
@@ -40,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   // The first message that was unread when this screen opened; a "New" line
   // is drawn above it.
   String _newFrom = '';
+  bool _sendingFile = false;
 
   CordedStore get _store => widget.state.store;
   String get _room => widget.roomId;
@@ -542,6 +547,127 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  // What the + button offers.
+  void _showAttach() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('Photo from your gallery'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _sendPhoto(ImageSource.gallery);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_camera_outlined),
+            title: const Text('Take a photo'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _sendPhoto(ImageSource.camera);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.poll_outlined),
+            title: const Text('Start a poll'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _createPoll();
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // The photo is made smaller, encrypted on this device and uploaded; what is
+  // typed in the message box goes with it as its caption.
+  Future<void> _sendPhoto(ImageSource source) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file =
+          await ImagePicker().pickImage(source: source, maxWidth: 2000, maxHeight: 2000, imageQuality: 85);
+      if (file == null) return;
+      if (mounted) setState(() => _sendingFile = true);
+      final preview = await compute(previewOf, await file.readAsBytes());
+      if (preview == null) {
+        messenger.showSnackBar(const SnackBar(content: Text('That file is not a picture Corded can read.')));
+        return;
+      }
+      final name = file.name.toLowerCase();
+      final caption = _input.text.trim();
+      final replyingTo = _replyingTo;
+      await widget.state.engine.command({
+        'cmd': 'send_file',
+        'room_id': _room,
+        'path': file.path,
+        'name': file.name,
+        'mime': name.endsWith('.png')
+            ? 'image/png'
+            : name.endsWith('.gif')
+                ? 'image/gif'
+                : name.endsWith('.webp')
+                    ? 'image/webp'
+                    : 'image/jpeg',
+        'caption': caption,
+        'thumbnail': preview.thumbnail,
+        'width': preview.width,
+        'height': preview.height,
+        if (_thread != null) 'thread': _thread,
+        if (replyingTo != null) 'reply_to': replyingTo.id,
+      });
+      if (_input.text.trim() == caption) _input.clear();
+      if (mounted) setState(() => _replyingTo = null);
+    } on CordedError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('The photo could not be opened.')));
+    } finally {
+      if (mounted) setState(() => _sendingFile = false);
+    }
+  }
+
+  static String _sizeWords(int bytes) => bytes >= 1024 * 1024
+      ? '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+      : '${(bytes / 1024).ceil()} KB';
+
+  // A photo shows its small preview and opens full size; any other file shows
+  // what it is called and how large it is.
+  Widget _fileView(Message m, Color foreground) {
+    final theme = Theme.of(context);
+    final preview = m.thumbnail;
+    if (m.isImage && preview != null) {
+      final ratio = m.width > 0 && m.height > 0 ? (m.width / m.height).clamp(0.5, 2.5) : 1.0;
+      return GestureDetector(
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => PictureScreen(state: widget.state, message: m))),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 240, maxHeight: 320),
+            child: AspectRatio(
+                aspectRatio: ratio, child: Image.memory(preview, fit: BoxFit.cover, gaplessPlayback: true)),
+          ),
+        ),
+      );
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.insert_drive_file_outlined, color: foreground),
+      const SizedBox(width: 8),
+      Flexible(
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(m.fileName, style: theme.textTheme.bodyLarge?.copyWith(color: foreground)),
+          Text('${_sizeWords(m.fileSize)} · save it from the desktop client for now',
+              style: theme.textTheme.labelSmall?.copyWith(color: foreground.withValues(alpha: 0.7))),
+        ]),
+      ),
+    ]);
+  }
+
   // Reacting again with the same emoji takes the reaction back.
   Future<void> _react(Message m, String key) =>
       attempt(context, () => _store.toggleReaction(_room, m.id, key));
@@ -651,7 +777,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         {'cmd': 'pin_event', 'room_id': _room, 'event_id': m.id, 'pinned': !_isPinned(m)}));
               },
             ),
-          if (m.mine)
+          if (m.mine && !m.isFile && !m.isPoll)
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('Edit'),
@@ -826,7 +952,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   if (m.isPoll && !gone)
                     _pollView(m, foreground)
-                  else
+                  else if (m.isFile && !gone && m.body.isEmpty)
+                    _fileView(m, foreground)
+                  else ...[
+                    if (m.isFile && !gone)
+                      Padding(padding: const EdgeInsets.only(bottom: 6), child: _fileView(m, foreground)),
                     LinkedText(gone ? m.text : m.body,
                         channels: _channelLinks,
                         onChannel: _openChannel,
@@ -834,6 +964,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: foreground.withValues(alpha: gone ? 0.6 : 1),
                             fontStyle: gone ? FontStyle.italic : null),
                         linkColor: scheme.primary),
+                  ],
                   const SizedBox(height: 2),
                   Text(note,
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -1095,7 +1226,12 @@ class _ChatScreenState extends State<ChatScreen> {
               padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
               child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 IconButton(
-                    tooltip: 'Start a poll', icon: const Icon(Icons.poll_outlined), onPressed: _createPoll),
+                    tooltip: 'Send a photo or start a poll',
+                    icon: _sendingFile
+                        ? const SizedBox(
+                            width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.add_circle_outline),
+                    onPressed: _sendingFile ? null : _showAttach),
                 Expanded(
                   child: TextField(
                     controller: _input,

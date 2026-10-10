@@ -21,6 +21,15 @@ void main() {
     expect(decoded.width, lessThanOrEqualTo(128));
   });
 
+  test('a photo to send gets a small preview and keeps its shape', () {
+    final photo = img.Image(width: 1200, height: 800);
+    final p = previewOf(Uint8List.fromList(img.encodeJpg(photo)))!;
+    expect((p.width, p.height), (1200, 800));
+    final small = img.decodeJpg(base64Decode(p.thumbnail))!;
+    expect((small.width, small.height), (240, 160));
+    expect(previewOf(Uint8List.fromList(utf8.encode('not a picture'))), isNull);
+  });
+
   test('something that is not a picture is refused', () {
     expect(shrinkToProfilePicture(Uint8List.fromList(utf8.encode('not a picture'))), isNull);
   });

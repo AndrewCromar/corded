@@ -2121,3 +2121,93 @@ TEST_CASE("one person on two devices") {
         if (e["event"] == "event_received")
             REQUIRE(e["data"]["content"].value("body", "") != "after the laptop was removed");
 }
+
+TEST_CASE("files are encrypted on the device and fetched by the people in the chat") {
+    TempDir tmp;
+    int port = test_port();
+    Server server(port, (tmp.path / "server").string(), "--owner", "alice");
+    json connect = {{"cmd", "connect"}, {"host", "127.0.0.1"}, {"port", port}};
+    Client alice((tmp.path / "alice").string()), bob((tmp.path / "bob").string());
+    auto live = [](const json& e) { return e["event"] == "connection_state" && e["state"] == "live"; };
+    std::string general;
+    for (auto [client, name] : {std::pair{&alice, "alice"}, {&bob, "bob"}}) {
+        REQUIRE(client->create(name)["ok"] == true);
+        REQUIRE(client->cmd(connect)["ok"] == true);
+        client->have("live", live);
+        general = client->have("#general", [](const json& e) {
+            return e["event"] == "room_updated" && e["room"]["title"] == "#general";
+        })["room"]["room_id"];
+    }
+    alice.have("two members", [&](const json& e) {
+        return e["event"] == "room_updated" && e["room"]["room_id"] == general && e["room"]["members"].size() == 2;
+    });
+    // Large enough to travel in several pieces, with words the server must never see.
+    std::string body;
+    while (body.size() < 700 * 1024) body += "the quick brown fox keeps a SECRET-MARKER in its den\n";
+    auto source = tmp.path / "notes for bob.txt";
+    std::ofstream(source, std::ios::binary) << body;
+
+    json sent = alice.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", source.string()},
+                           {"mime", "text/plain"}, {"caption", "read this"}});
+    REQUIRE(sent["ok"] == true);
+    json got = bob.have("the file message", [](const json& e) {
+        return e["event"] == "event_received" && e["data"]["type"] == "m.file";
+    })["data"];
+    REQUIRE(got["content"]["name"] == "notes for bob.txt");
+    REQUIRE(got["content"]["body"] == "read this");
+    REQUIRE(got["content"]["size"] == body.size());
+    REQUIRE(got["known_type"] == true);
+
+    // What the server holds is one file of the same rough size that reads as noise.
+    auto blobs = tmp.path / "server" / "blobs";
+    std::vector<std::filesystem::path> stored;
+    for (const auto& f : std::filesystem::directory_iterator(blobs)) stored.push_back(f.path());
+    REQUIRE(stored.size() == 1);
+    {
+        std::ifstream in(stored[0], std::ios::binary);
+        std::string held((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        REQUIRE(held.size() >= body.size());
+        REQUIRE(held.find("SECRET-MARKER") == std::string::npos);
+    }
+
+    json fetched = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}});
+    REQUIRE(fetched["ok"] == true);
+    REQUIRE(fetched["data"]["cached"] == false);
+    std::string path = fetched["data"]["path"];
+    REQUIRE(path.find("notes_for_bob.txt") != std::string::npos);
+    {
+        std::ifstream in(path, std::ios::binary);
+        std::string read((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        REQUIRE(read == body);
+    }
+    // The second time it is already on the device.
+    REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["data"]["cached"] == true);
+
+    // Bytes tampered with on the server are noticed.
+    {
+        std::fstream f(stored[0], std::ios::binary | std::ios::in | std::ios::out);
+        f.seekp(1000);
+        f.put('X');
+    }
+    json bad = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]},
+                        {"dir", (tmp.path / "elsewhere").string()}});
+    REQUIRE(bad["ok"] == false);
+    REQUIRE(bad["error"]["code"] == "bad_file");
+
+    // The owner's limit is kept.
+    REQUIRE(alice.cmd({{"cmd", "set_setting"}, {"key", "max_file_mb"}, {"value", "1"}})["ok"] == true);
+    auto big = tmp.path / "big.bin";
+    std::ofstream(big, std::ios::binary) << std::string(2 * 1024 * 1024, 'x');
+    json refused = bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", big.string()}});
+    REQUIRE(refused["ok"] == false);
+    REQUIRE(refused["error"]["message"].get<std::string>().find("larger") != std::string::npos);
+    REQUIRE(bob.cmd({{"cmd", "send_file"}, {"room_id", general}, {"path", (tmp.path / "missing").string()}})["ok"] == false);
+
+    // Deleting the message takes the bytes off the server too.
+    REQUIRE(alice.cmd({{"cmd", "delete_event"}, {"room_id", general}, {"event_id", sent["data"]["event_id"]}})["ok"] == true);
+    bob.wait("the deletion", [&](const json& e) {
+        return e["event"] == "event_updated" && e["data"]["event_id"] == sent["data"]["event_id"] &&
+               e["data"]["status"] == "redacted";
+    });
+    REQUIRE(std::filesystem::is_empty(blobs));
+}

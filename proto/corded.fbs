@@ -110,6 +110,16 @@ table GetOverrides { room_id: [ubyte]; }
 table SetChannelNsfw { room_id: [ubyte]; nsfw: bool; }
 table SetChannelArchived { room_id: [ubyte]; archived: bool; }
 table Overrides { room_id: [ubyte]; entries: [Override]; }
+// Files. The sender encrypts a file on their own device and uploads the result
+// in pieces under an id they pick at random; the key travels inside the
+// message that announces the file. The server holds bytes it cannot read.
+// A piece must start where the last one ended; `total` is the whole size.
+table PutBlob { blob_id: [ubyte]; offset: uint64; data: [ubyte]; total: uint64; }
+// Asks for a piece starting at `offset`; the server picks how much to send.
+table GetBlob { blob_id: [ubyte]; offset: uint64; }
+table Blob { blob_id: [ubyte]; offset: uint64; data: [ubyte]; total: uint64; }
+// The uploader, or someone who manages messages, removes a stored file.
+table DeleteBlob { blob_id: [ubyte]; }
 // Invites: a code that lets someone create an account on an invite-only server.
 // max_uses 0 means unlimited; expires_in_s 0 means it never expires.
 table NewInvite { max_uses: uint32; expires_in_s: uint64; }
@@ -153,7 +163,8 @@ union FrameBody {
   ListDevices, DeviceList, DevicesChanged,
   RemoveAccount, SetNickname, Ephemeral,
   GetOverrides, Overrides, SetChannelNsfw, RemoveDevice,
-  SetChannelArchived
+  SetChannelArchived,
+  PutBlob, GetBlob, Blob, DeleteBlob
 }
 
 table Frame { request_id: uint32; body: FrameBody; }

@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
     allow INTEGER NOT NULL, deny INTEGER NOT NULL,
     PRIMARY KEY (room_id, role_id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS blobs (
+    blob_id BLOB PRIMARY KEY, owner BLOB NOT NULL, total INTEGER NOT NULL, stored INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+) WITHOUT ROWID;
 )sql");
         // Added after the first prototype: two-person chats are marked, so a
         // group that shrinks to two people is not mistaken for one.
@@ -731,6 +735,50 @@ CREATE TABLE IF NOT EXISTS channel_overrides (
             ins.exec();
         }
         tx.commit();
+        return out;
+    }
+
+    // ---- files: the bytes live on disk, one file each; this is the ledger ----
+    struct BlobRow {
+        Bytes owner;
+        uint64_t total = 0, stored = 0, created_at = 0;
+        bool complete() const { return stored == total; }
+    };
+    std::optional<BlobRow> blob(ByteView id) {
+        auto st = db_.prepare("SELECT owner, total, stored, created_at FROM blobs WHERE blob_id = ?");
+        st.bind(1, id);
+        if (!st.step()) return std::nullopt;
+        return BlobRow{st.blob(0), static_cast<uint64_t>(st.i64(1)), static_cast<uint64_t>(st.i64(2)),
+                       static_cast<uint64_t>(st.i64(3))};
+    }
+    void blob_begin(ByteView id, ByteView owner, uint64_t total) {
+        auto st = db_.prepare("INSERT INTO blobs (blob_id, owner, total, stored, created_at) VALUES (?, ?, ?, 0, ?)");
+        st.bind(1, id).bind(2, owner).bind(3, static_cast<int64_t>(total)).bind(4, now_ms()).exec();
+    }
+    void blob_stored(ByteView id, uint64_t stored) {
+        auto st = db_.prepare("UPDATE blobs SET stored = ? WHERE blob_id = ?");
+        st.bind(1, static_cast<int64_t>(stored)).bind(2, id).exec();
+    }
+    void blob_forget(ByteView id) {
+        auto st = db_.prepare("DELETE FROM blobs WHERE blob_id = ?");
+        st.bind(1, id).exec();
+    }
+    // Space promised to files, finished or not.
+    uint64_t blob_bytes() {
+        auto st = db_.prepare("SELECT COALESCE(SUM(total), 0) FROM blobs");
+        st.step();
+        return static_cast<uint64_t>(st.i64(0));
+    }
+    // Files to drop: uploads abandoned for a day, and, when messages are only
+    // kept for a while, files older than that.
+    std::vector<Bytes> blobs_to_drop(int retention_days) {
+        std::vector<Bytes> out;
+        auto st = db_.prepare("SELECT blob_id FROM blobs WHERE (stored < total AND created_at < ?) "
+                              "OR (? > 0 AND created_at < ?)");
+        st.bind(1, now_ms() - uint64_t{24} * 3600 * 1000)
+            .bind(2, static_cast<int64_t>(retention_days))
+            .bind(3, now_ms() - static_cast<uint64_t>(retention_days > 0 ? retention_days : 0) * 24 * 3600 * 1000);
+        while (st.step()) out.push_back(st.blob(0));
         return out;
     }
 

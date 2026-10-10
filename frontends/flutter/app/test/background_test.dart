@@ -47,6 +47,25 @@ void main() {
     expect(hidden.body, 'bob mentioned you');
   });
 
+  test('a photo or file is announced by its caption, or by what it is', () {
+    Map<String, dynamic> file(Map<String, dynamic> content) {
+      final e = message('');
+      (e['data'] as Map)['type'] = 'm.file';
+      (e['data'] as Map)['content'] = content;
+      return e;
+    }
+
+    expect(
+        notificationFor(file({'mime': 'image/jpeg', 'name': 'a.jpg', 'body': ''}), {'r1': '#general'})!.body,
+        'bob: Sent a photo');
+    expect(notificationFor(file({'mime': 'application/pdf', 'name': 'plan.pdf'}), {'r1': '#general'})!.body,
+        'bob: Sent a file: plan.pdf');
+    expect(
+        notificationFor(file({'mime': 'image/jpeg', 'name': 'a.jpg', 'body': 'look'}), {'r1': '#general'})!
+            .body,
+        'bob: look');
+  });
+
   test('an NSFW channel never shows its text in a notification', () {
     final n = notificationFor(message('something'), {'r1': '#after-dark'}, nsfw: {'r1'})!;
     expect(n.title, '#after-dark');

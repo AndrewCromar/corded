@@ -11,6 +11,8 @@ namespace corded {
 
 inline constexpr uint32_t kMaxFrameBytes = 1024 * 1024;
 inline constexpr uint16_t kProtocolVersion = 1;
+// A file travels in pieces of this size, each well inside one frame.
+inline constexpr uint32_t kBlobChunkBytes = 256 * 1024;
 
 // Signature context strings. Every signed message starts with one of these.
 inline constexpr std::string_view kCtxAuth = "corded/v1/auth";

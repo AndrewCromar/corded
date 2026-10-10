@@ -1,10 +1,14 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 // Plain records of what the core reports. Field names follow the JSON.
 
 class Member {
   Member.fromJson(Map<String, dynamic> j)
       : userId = j['user_id'] as String? ?? '',
         username = j['username'] as String? ?? '',
-        displayName = j['display_name'] as String? ?? j['username'] as String? ?? '',
+        displayName =
+            j['display_name'] as String? ?? j['username'] as String? ?? '',
         me = j['me'] == true,
         isOwner = j['is_owner'] == true,
         isAdmin = j['is_admin'] == true,
@@ -29,10 +33,12 @@ class Room {
   int unread = 0;
   int disappearAfter = 0;
   List<Member> members = const [];
-  List<String> pinned = const []; // ids of the pinned messages, oldest pin first
+  List<String> pinned =
+      const []; // ids of the pinned messages, oldest pin first
   bool nsfw = false; // a channel marked so that clients warn before showing it
   bool archived = false; // a channel kept to read, closed to writing
-  String firstUnread = ''; // where this person's unread messages start; empty if none
+  String firstUnread =
+      ''; // where this person's unread messages start; empty if none
   int lastActivity = 0;
 
   void apply(Map<String, dynamic> j) {
@@ -47,7 +53,10 @@ class Room {
     final p = j['pinned'] as List?;
     if (p != null) pinned = p.map((e) => '$e').toList();
     final m = j['members'] as List?;
-    if (m != null) members = m.map((e) => Member.fromJson((e as Map).cast<String, dynamic>())).toList();
+    if (m != null)
+      members = m
+          .map((e) => Member.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
   }
 }
 
@@ -80,6 +89,16 @@ class Message {
   bool pollMultiple = false;
   bool get isPoll => type == 'm.poll';
 
+  /// For a file: what it is called, its kind and size, and for a picture a
+  /// small preview and its shape. The file itself is fetched when wanted.
+  String fileName = '';
+  String fileMime = '';
+  int fileSize = 0;
+  Uint8List? thumbnail;
+  int width = 0, height = 0;
+  bool get isFile => type == 'm.file';
+  bool get isImage => isFile && fileMime.startsWith('image/');
+
   /// Whether it mentions the person using this device (set by the store).
   bool mentionsMe = false;
 
@@ -93,9 +112,25 @@ class Message {
     threadCount = (j['thread_count'] as num?)?.toInt() ?? threadCount;
     final content = (j['content'] as Map?) ?? const {};
     if (content['body'] is String) body = content['body'] as String;
+    if (type == 'm.file') {
+      fileName = content['name'] as String? ?? fileName;
+      fileMime = content['mime'] as String? ?? fileMime;
+      fileSize = (content['size'] as num?)?.toInt() ?? fileSize;
+      width = (content['width'] as num?)?.toInt() ?? width;
+      height = (content['height'] as num?)?.toInt() ?? height;
+      final small = content['thumbnail'];
+      if (small is String && small.isNotEmpty && thumbnail == null) {
+        try {
+          thumbnail = base64Decode(small);
+        } on FormatException {
+          // Shown without a preview.
+        }
+      }
+    }
     if (type == 'm.poll') {
       body = content['question'] as String? ?? body;
-      pollOptions = ((content['options'] as List?) ?? const []).map((o) => '$o').toList();
+      pollOptions =
+          ((content['options'] as List?) ?? const []).map((o) => '$o').toList();
       pollMultiple = content['multiple'] == true;
     }
     // A reply made inside a thread names what it quotes here.
@@ -103,7 +138,8 @@ class Message {
     final relation = j['relation'] as Map?;
     if (relation != null) {
       if (relation['kind'] == 'reply') replyTo = relation['target'] as String?;
-      if (relation['kind'] == 'thread') threadRoot = relation['target'] as String?;
+      if (relation['kind'] == 'thread')
+        threadRoot = relation['target'] as String?;
     }
   }
 
@@ -111,7 +147,9 @@ class Message {
   String get text => switch (status) {
         'redacted' => 'This message was deleted',
         'undecryptable' => 'This message could not be decrypted',
-        _ => body,
+        _ => isFile && body.isEmpty
+            ? (isImage ? 'Photo' : 'File: $fileName')
+            : body,
       };
 }
 
@@ -121,7 +159,8 @@ class Role {
       : name = '${j['name']}',
         isEveryone = j['is_everyone'] == true,
         position = (j['position'] as num?)?.toInt() ?? 0,
-        permissions = ((j['permissions'] as List?) ?? const []).map((e) => '$e').toSet();
+        permissions =
+            ((j['permissions'] as List?) ?? const []).map((e) => '$e').toSet();
   final String name;
   final bool isEveryone; // the role every member has
   final int position;
@@ -139,11 +178,14 @@ class ServerInfo {
   bool isOwner = false;
   Set<String> permissions = {};
   List<String> roles = const []; // the roles that can be given to members
-  List<Role> roleDetails = const []; // every role, the one everybody has included
+  List<Role> roleDetails =
+      const []; // every role, the one everybody has included
 
   /// Whether this person may do something that needs [permission] here.
   bool can(String permission) =>
-      isOwner || permissions.contains('administrator') || permissions.contains(permission);
+      isOwner ||
+      permissions.contains('administrator') ||
+      permissions.contains(permission);
 
   void apply(Map<String, dynamic> j) {
     name = j['name'] as String? ?? name;
@@ -188,5 +230,11 @@ class Profile {
   final String picture;
   final List<String> links;
 
-  bool get isEmpty => displayName.isEmpty && fullName.isEmpty && birthday.isEmpty && bio.isEmpty && links.isEmpty && picture.isEmpty;
+  bool get isEmpty =>
+      displayName.isEmpty &&
+      fullName.isEmpty &&
+      birthday.isEmpty &&
+      bio.isEmpty &&
+      links.isEmpty &&
+      picture.isEmpty;
 }
