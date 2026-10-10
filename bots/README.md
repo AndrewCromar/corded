@@ -126,7 +126,15 @@ person. `--channels '#clips,#general'` keeps it to those channels.
 
 The limits are kept in the bot's files. The server's owner, and anyone with a
 role that has the **Manage bots** permission, change them in a direct chat:
-`limits`, `limit minutes 30`, `limit size 300`, `limit quality 1080`.
+`limits`, `limit minutes 30`, `limit size 300`, `limit quality 1080`, and
+`adult` (below).
+
+Adult sites are fetched only in a channel marked NSFW, or in a direct chat
+with the bot. That covers over seventy adult sites the bot knows by name, any
+site whose address says so (`.xxx`, "porn" in the name), the sites yt-dlp
+marks as adult, and single videos that an ordinary site marks 18+. Those who
+manage bots change it: `adult off` (nowhere), `adult anywhere`, `adult nsfw`
+(as it begins), and `adult add example.com` to name another site.
 
 It only fetches from the public web: an address that leads to the machine it
 runs on, or to the network that machine is on, is refused. This is checked

@@ -22,6 +22,11 @@ owner or anyone with the Manage bots permission (`limit minutes 30`,
 with. One video for each request: no playlists, no live streams. Five
 requests in ten minutes for each person.
 
+Adult sites, and single videos a site marks as 18+, are fetched only in a
+channel marked NSFW or in a direct chat with the bot. Those who manage bots
+change that with `adult off` (nowhere), `adult anywhere` or `adult nsfw`, and
+name more sites with `adult add example.com`.
+
 It only fetches from the public web: an address that leads to this machine or
 to the network it is on is refused. What people fetch is theirs to answer for,
 and so is whether a site allows it.
@@ -44,6 +49,29 @@ from corded_bot import Bot
 LINK = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 DEFAULTS = {"minutes": 20, "size": 200, "quality": 720}
 PER_PERSON, WITHIN = 5, 600   # requests, seconds
+
+# Sites that are for adults throughout. yt-dlp also marks what it fetches from
+# the adult sites it knows, and single videos elsewhere, as 18+, and that mark
+# counts too; this list lets the bot say no before anything is fetched, and
+# covers sites yt-dlp only reaches through the video file in the page.
+ADULT_SITES = """
+4tube.com alphaporno.com beeg.com bongacams.com cam4.com camsoda.com chaturbate.com clips4sale.com daftsex.com
+drtuber.com e-hentai.org e621.net efukt.com empflix.com eporner.com erocast.me erome.com eroprofile.com fansly.com
+fapello.com fux.com gelbooru.com hanime.tv hclips.com hdzog.com heavy-r.com hellporno.com hqporner.com iwara.tv
+lovehomeporn.com manyvids.com motherless.com moviefap.com murrtube.net nhentai.net noodlemagazine.com nubiles-porn.com
+nuvid.com onlyfans.com peekvids.com playvids.com pornbox.com pornerbros.com pornflip.com pornhub.com pornhub.org
+pornone.com porntop.com porntrex.com porntube.com redgifs.com redtube.com rule34.xxx rule34video.com slutload.com
+spankbang.com stripchat.com sunporno.com sxyprn.com thisvid.com tnaflix.com tube8.com tubepornclassic.com txxx.com
+upornia.com vjav.com xfreehd.com xhamster.com xnxx.com xvideos.com xxxymovies.com youjizz.com youporn.com zenporn.com
+""".split()
+ADULT_ENDINGS = (".xxx", ".porn", ".sex", ".adult", ".sexy")
+ADULT_WORDS = re.compile(r"porn|hentai|xxx")
+
+
+def site_of(url):
+    """The site of an address, as someone would name it: no "www." and no path."""
+    host = urllib.parse.urlsplit(url if "://" in url else "//" + url).hostname or ""
+    return host.lower().removeprefix("www.")
 
 
 def first_link(text):
@@ -135,6 +163,30 @@ def main():
             limits[name] = given[name] = flag
     bot.store.save()
 
+    # Adult sites: "nsfw" (only in channels marked NSFW and in direct chats),
+    # "off" (nowhere) or "anywhere"; and the sites a manager has named besides.
+    bot.store.setdefault("adult", "nsfw")
+    more_adult = bot.store.setdefault("adult_sites", [])
+
+    def adult_site(url):
+        site = site_of(url)
+        return bool(site) and (any(site == known or site.endswith("." + known) for known in ADULT_SITES + more_adult)
+                               or site.endswith(ADULT_ENDINGS) or bool(ADULT_WORDS.search(site)))
+
+    def adult_allowed(message):
+        marked = bot.rooms.get(message.room_id, {}).get("nsfw")
+        return bot.store["adult"] == "anywhere" or (bot.store["adult"] == "nsfw" and bool(message.direct or marked))
+
+    def adult_refusal(what):
+        return what + (", and I don't fetch those on this server." if bot.store["adult"] == "off" else
+                       ", and I only fetch those in a channel marked NSFW or in a direct chat with me.")
+
+    def adult_in_words():
+        return {"nsfw": "adult sites, and videos a site marks 18+, only in channels marked NSFW or in a direct chat "
+                        "with me",
+                "off": "nothing from adult sites, and no video a site marks 18+",
+                "anywhere": "adult sites in any channel"}[bot.store["adult"]]
+
     asked = collections.defaultdict(collections.deque)   # user id -> when they last asked
     server = {"size": 0}   # the largest file the server takes, in MB, once known; 0 for not known or no limit
 
@@ -149,7 +201,8 @@ def main():
         return (f"- up to **{limits['minutes']} minutes** and **{cap()} MB**, at **{limits['quality']}p** "
                 "or the nearest below\n"
                 "- one video for each request: no playlists, no live streams\n"
-                f"- {PER_PERSON} requests in {WITHIN // 60} minutes for each person")
+                f"- {PER_PERSON} requests in {WITHIN // 60} minutes for each person\n"
+                f"- {adult_in_words()}")
 
     def help_for(user_id):
         lines = [
@@ -175,6 +228,8 @@ def main():
                 "- `limit minutes 30`: the longest video I fetch",
                 "- `limit size 300`: the largest file, in MB",
                 "- `limit quality 1080`: the picture height I aim for (360, 480, 720, 1080, …)",
+                "- `adult nsfw`, `adult off`, `adult anywhere`: where I fetch from adult sites",
+                "- `adult add example.com`, `adult remove example.com`: sites I count as adult besides those I know",
             ]
         return "\n".join(lines)
 
@@ -182,6 +237,30 @@ def main():
         """What the owner and those with the Manage bots permission may tell it."""
         if not bot.may(message.sender_id):
             return "Only the server's owner and people with the **Manage bots** permission can do that."
+        if words[0] == "adult":
+            if len(words) > 1 and words[1] in ("nsfw", "off", "anywhere"):
+                bot.store["adult"] = words[1]
+                bot.store.save()
+                return f"Done: {adult_in_words()}. I'll remember that when I'm restarted."
+            if len(words) > 2 and words[1] in ("add", "remove"):
+                site = site_of(words[2])
+                if "." not in site:
+                    return "I can't read that as a site. Write it like `adult add example.com`."
+                if words[1] == "add" and not adult_site(site):
+                    more_adult.append(site)
+                elif words[1] == "remove" and site in more_adult:
+                    more_adult.remove(site)
+                elif words[1] == "remove" and adult_site(site):
+                    return f"`{site}` is one of the sites I know as adult from the start; I keep those."
+                bot.store.save()
+                return (f"Done: I count `{site}` as an adult site." if adult_site(site)
+                        else f"Done: I no longer count `{site}` as an adult site.")
+            return ("**Adult sites**\n"
+                    f"- now: {adult_in_words()}\n"
+                    f"- I know {len(ADULT_SITES)} adult sites from the start, and take a site's own 18+ mark too"
+                    + (f"\n- named here besides: {', '.join(f'`{site}`' for site in more_adult)}" if more_adult else "")
+                    + "\n\nTo change: `adult nsfw`, `adult off`, `adult anywhere`, `adult add example.com`, "
+                      "`adult remove example.com`.")
         if words[0] == "limits" or len(words) == 1:
             return "**Limits**\n" + limits_in_words() + "\n\nTo change one: `limit minutes 30`, `limit size 300`, " \
                    "`limit quality 1080`."
@@ -230,7 +309,7 @@ def main():
         # yt-dlp's advice on its own options is of no use to someone in a chat.
         return re.split(r"\. (?:See|Use|Try|Pass) |; please report", words)[0][:300]
 
-    def fetch(url, audio, folder):
+    def fetch(url, audio, folder, adult_ok):
         """Fetches one video into folder and returns (path, what yt-dlp knows about it)."""
         about = None
         heights = [limits["quality"]] + [h for h in (480, 360, 240) if h < limits["quality"]]
@@ -248,6 +327,9 @@ def main():
                 raise Refused(f"The site would not give it to me: {complaint(err)}")
             if about is None:
                 about = chosen
+                if not adult_ok and ((about.get("age_limit") or 0) >= 18
+                                     or adult_site(about.get("webpage_url") or "")):
+                    raise Refused(adult_refusal("That video is marked 18+"))
                 if about.get("_type") == "playlist":
                     raise Refused("That is a list of videos. I fetch one at a time: send me the link of a single "
                                   "video.")
@@ -275,14 +357,14 @@ def main():
                     os.remove(entry.path)
         raise Refused(f"That video is larger than {cap()} MB, {whose_cap()}, even at the lowest quality I try.")
 
-    def job(message, holder, url, audio, waiting):
+    def job(message, holder, url, audio, waiting, adult_ok):
         """One request, from the link to the file in the thread. Run one at a time."""
         thread = holder.thread or holder.event_id
         folder = tempfile.mkdtemp(prefix="corded-clip-")
         try:
             for attempt in (1, 2):
                 bot.typing(message.room_id)
-                path, about = fetch(url, audio, folder)
+                path, about = fetch(url, audio, folder, adult_ok)
                 bot.typing(message.room_id)
                 site = about.get("webpage_url_domain") or urllib.parse.urlsplit(url).hostname
                 facts = [length_in_words(about.get("duration")) if about.get("duration") else "",
@@ -317,6 +399,9 @@ def main():
             if not message.mentions_me or (channels and title not in channels):
                 return
         words = [w for w in message.body.lower().split() if w != f"@{bot.username.lower()}"]
+        if message.direct and words and words[0] in ("limit", "limits", "adult"):
+            bot.reply(message, manage(message, words))   # before a link is looked for: `adult add` may name one
+            return
         # The link: in this message, or in the one it answers, or the one whose thread this is.
         holder, url = message, first_link(message.body)
         for earlier in (message.reply_to, message.thread):
@@ -324,13 +409,14 @@ def main():
                 holder = bot.lookup(message.room_id, earlier)
                 url = first_link(holder.body) if holder else None
         if not url:
-            if message.direct and words and words[0] in ("limit", "limits"):
-                bot.reply(message, manage(message, words))
-            elif message.direct:
+            if message.direct:
                 bot.reply(message, help_for(message.sender_id))
             else:
                 bot.reply(message, f"I didn't find a link. Mention me with one (`@{bot.username} https://…`), or "
                                    "in a reply to a message that has one.")
+            return
+        if adult_site(url) and not adult_allowed(message):
+            bot.reply(message, adult_refusal("That link is to an adult site"))
             return
         problem = None if args.allow_private else address_problem(url)
         if problem:
@@ -344,7 +430,7 @@ def main():
             return
         recent.append(time.time())
         waiting = bot.attempt(bot.react, holder, "⏳")
-        ahead = bot.work(job, message, holder, url, "audio" in words, waiting)
+        ahead = bot.work(job, message, holder, url, "audio" in words, waiting, adult_allowed(message))
         if ahead:
             bot.say(message.room_id, f"In line: {ahead} ahead of you.", thread=holder.thread or holder.event_id)
 

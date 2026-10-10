@@ -36,6 +36,7 @@ if "--dump-single-json" in args:
         sys.exit(1)
     print(json.dumps({"title": "A Test Clip", "duration": 9000 if "long" in url else 75,
                       "webpage_url_domain": "videos.example", "is_live": "live" in url,
+                      "age_limit": 18 if "adult" in url else 0,
                       "_type": "playlist" if "list" in url else "video"}))
     sys.exit(0)
 folder = args[args.index("--paths") + 1]
@@ -431,6 +432,48 @@ def main():
         assert json.load(open(os.path.join(tmp, "clips", "store.json")))["limits"] == {
             "minutes": 300, "size": 1, "quality": 720}
         print("ok  video bot: help, a link alone in a direct chat, limits changed by the owner and by nobody else")
+
+        # Adult sites: only in a channel marked NSFW or in a direct chat, unless a manager says otherwise.
+        made = alice.request({"cmd": "create_channel", "name": "after-dark"})
+        time.sleep(3)
+        alice.request({"cmd": "set_channel_nsfw", "room_id": alice.room_id("#after-dark"), "nsfw": True})
+        time.sleep(3)
+        del heard[:]
+        dave.say("#general", "@clips https://www.pornhub.com/view_video.php?viewkey=abc")
+        wait_for("an adult site refused in an ordinary channel", lambda item: item == ("clips", "That link is to an "
+                 "adult site, and I only fetch those in a channel marked NSFW or in a direct chat with me."))
+        dave.say("#general", f"@clips {clip}adult")
+        wait_for("a video marked 18+ refused in an ordinary channel", lambda item: item == ("clips", "That video is "
+                 "marked 18+, and I only fetch those in a channel marked NSFW or in a direct chat with me."))
+        before = len(alice_files)
+        marked = dave.say("#after-dark", f"@clips {clip}adult")["event_id"]
+        wait_for("the same video in a channel marked NSFW", lambda m: m.thread == marked, among=alice_files)
+        to_clips = alice.dm("clips")
+        for said, answer in (("adult", "adult sites from the start"),
+                             ("adult add somewhere.example", "Done: I count `somewhere.example`"),
+                             ("adult add https://www.pornhub.com/x", "Done: I count `pornhub.com` as an adult site."),
+                             ("adult off", "Done: nothing from adult sites")):
+            alice.say(to_clips, said)
+            wait_for(f"the answer to {said}", lambda item: item[0] == "clips" and answer in item[1])
+        del heard[:]
+        carol.say("#after-dark", "@clips https://clips.somewhere.example/1")
+        wait_for("a named site refused everywhere once adult is off", lambda item: item == ("clips", "That link is to "
+                 "an adult site, and I don't fetch those on this server."))
+        kept = json.load(open(os.path.join(tmp, "clips", "store.json")))
+        assert kept["adult"] == "off" and kept["adult_sites"] == ["somewhere.example"], (kept, made)
+        assert len(alice_files) == before + 1
+        earlier = len(dave_heard)
+        dave.say(dave.dm("clips"), "adult anywhere")
+        wait_for("someone who does not manage bots refused", lambda m: m.sender == "clips"
+                 and "**Manage bots**" in m.body and dave_heard.index(m) >= earlier, among=dave_heard)
+        alice.say(to_clips, "adult anywhere")
+        wait_for("adult sites allowed anywhere", lambda item: item == ("clips", "Done: adult sites in any channel. "
+                 "I'll remember that when I'm restarted."))
+        anywhere = carol.say("#general", f"@clips {clip}adult")["event_id"]
+        wait_for("a video marked 18+ in an ordinary channel, now allowed", lambda m: m.thread == anywhere,
+                 among=alice_files)
+        print("ok  video bot: adult sites and videos marked 18+ only where a channel is marked NSFW; a manager can "
+              "turn them off, allow them anywhere, and name more sites")
 
         # The rest of the kit.
         assert mentioned_names("hi @Sage, mail me a@b.c or @sage-2") == {"sage", "sage-2"}
