@@ -88,6 +88,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.state.setDoNotDisturb(picked == 'dnd');
   }
 
+  // Signing out cannot be undone, so it takes two deliberate steps.
+  Future<void> _signOut() async {
+    final navigator = Navigator.of(context);
+    final name = widget.state.store.username;
+    final understood = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.warning_amber_rounded, color: Theme.of(context).colorScheme.error, size: 36),
+        title: const Text('Sign out and erase this device?'),
+        content: SingleChildScrollView(
+          child: Text('This deletes everything Corded keeps on this phone:\n\n'
+              '• your identity keys for "$name" on this device\n'
+              '• every message stored here\n'
+              '• the list of servers you joined\n\n'
+              'Your account on each server stays, and other people keep their copies of your messages.\n\n'
+              'You can only come back as "$name" with your recovery key (Settings > Recovery key) '
+              'or from another device that is still signed in. Without one of those, "$name" is gone for good '
+              'and nobody can restore it.\n\n'
+              'If you have not saved the recovery key and might want this identity again, cancel and save it first.'),
+        ),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continue')),
+        ],
+      ),
+    );
+    if (understood != true || !mounted) return;
+    final controller = TextEditingController();
+    final typed = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Last check'),
+        content:
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Type your username, $name, to erase this device. This cannot be undone.'),
+          const SizedBox(height: 12),
+          TextField(controller: controller, autofocus: true, autocorrect: false),
+        ]),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: Text('Erase', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (typed == null || !mounted) return;
+    if (typed.toLowerCase() != name.toLowerCase()) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('That is not your username, so nothing was erased.')));
+      return;
+    }
+    navigator.popUntil((r) => r.isFirst);
+    await widget.state.signOut();
+  }
+
   Future<void> _setFingerprint(bool on) async {
     final messenger = ScaffoldMessenger.of(context);
     if (!on) {
@@ -333,6 +390,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             await widget.state.lock();
             navigator.popUntil((r) => r.isFirst);
           },
+        ),
+        ListTile(
+          leading: Icon(Icons.delete_forever_outlined, color: Theme.of(context).colorScheme.error),
+          title: const Text('Sign out and erase this device'),
+          subtitle: const Text('To start over, or to set this phone up as a different person'),
+          onTap: _signOut,
         ),
         ListTile(
           leading: const Icon(Icons.info_outline),

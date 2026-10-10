@@ -87,6 +87,45 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Signs this device out for good: the vault, with this device's keys and
+  /// its copy of every message, is deleted, and the app starts over. Nothing
+  /// on any server changes. Unless the person has their recovery key or
+  /// another device, the identity is gone.
+  Future<void> signOut() async {
+    final dir = _vaultDir;
+    if (backgroundMode) {
+      // The service's task was reading the core's events; without it nothing
+      // would answer the commands below, so read them here again.
+      await Background.stop();
+      await engine.startPump();
+    }
+    backgroundMode = false;
+    _wantBackground = false;
+    await Fingerprint.clear();
+    fingerprintUnlock = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('fingerprint_unlock');
+    await prefs.remove('background_mode');
+    await prefs.remove('muted_rooms');
+    mutedRooms = {};
+    try {
+      await engine.command({'cmd': 'lock'}).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Closing it below is what matters.
+    }
+    await _sub?.cancel();
+    await _store?.dispose();
+    await _engine?.close();
+    _store = null;
+    _engine = null;
+    _selectedServer = null;
+    notifyListeners();
+    if (dir != null && await dir.exists()) await dir.delete(recursive: true);
+    await start();
+  }
+
+  Directory? _vaultDir;
+
   /// Whether the app keeps its connections while it is not on screen.
   bool backgroundMode = false;
 
@@ -207,6 +246,7 @@ class AppState extends ChangeNotifier {
       final base = await getApplicationSupportDirectory();
       final dir = Directory('${base.path}/vault');
       await dir.create(recursive: true);
+      _vaultDir = dir;
       final prefs = await SharedPreferences.getInstance();
       // If the background service outlived the screen, the core is still
       // running and the service is reading its events; join it as it is.
