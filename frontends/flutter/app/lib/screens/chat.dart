@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'group.dart';
 import 'linked_text.dart';
 import 'swipe_to_reply.dart';
 
@@ -80,6 +81,79 @@ class _ChatScreenState extends State<ChatScreen> {
     _input.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  static const _spans = {0: 'Off', 3600: '1 hour', 86400: '1 day', 604800: '1 week'};
+  static String _spanName(int seconds) => _spans[seconds] ?? '${(seconds / 3600).round()} hours';
+
+  // What the menu at the top of a chat does.
+  Future<void> _chatAction(String choice, Room room) async {
+    final navigator = Navigator.of(context);
+    final engine = widget.state.engine;
+    switch (choice) {
+      case 'disappear':
+        final seconds = await showDialog<int>(
+          context: context,
+          builder: (context) => SimpleDialog(
+            title: const Text('Disappearing messages'),
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Text('New messages in this chat erase themselves, for everyone, after:'),
+              ),
+              for (final s in _spans.entries)
+                ListTile(
+                  leading: Icon(s.key == room.disappearAfter
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked),
+                  title: Text(s.value),
+                  onTap: () => Navigator.pop(context, s.key),
+                ),
+            ],
+          ),
+        );
+        if (seconds == null || seconds == room.disappearAfter || !mounted) return;
+        await attempt(
+            context, () => engine.command({'cmd': 'set_disappearing', 'room_id': _room, 'seconds': seconds}));
+      case 'add':
+        final member = await pickMember(context, widget.state, {for (final m in room.members) m.userId});
+        if (member == null || !mounted) return;
+        await attempt(context,
+            () => engine.command({'cmd': 'add_member', 'room_id': _room, 'username': member.username}));
+      case 'rename':
+        final controller = TextEditingController(text: room.kind == 'group' ? room.title : '');
+        final name = await showDialog<String>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Rename group'),
+            content: TextField(controller: controller, autofocus: true),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
+            ],
+          ),
+        );
+        if (name == null || name.isEmpty || !mounted) return;
+        await attempt(
+            context, () => engine.command({'cmd': 'set_room_name', 'room_id': _room, 'name': name}));
+      case 'leave':
+        final leave = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('Leave ${room.title}?'),
+            content: const Text('You stop receiving its messages. Someone in the group can add you back.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
+            ],
+          ),
+        );
+        if (leave != true || !mounted) return;
+        if (await attempt(context, () => engine.command({'cmd': 'leave_room', 'room_id': _room}))) {
+          navigator.pop();
+        }
+    }
   }
 
   final _keys = <String, GlobalKey>{};
@@ -465,6 +539,23 @@ class _ChatScreenState extends State<ChatScreen> {
                         ? 'Muted. No notifications from this chat on this phone.'
                         : 'Notifications are back on for this chat.')));
               },
+            ),
+          if (_thread == null && room != null)
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              onSelected: (choice) => _chatAction(choice, room),
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                    value: 'disappear',
+                    child: Text(room.disappearAfter > 0
+                        ? 'Disappearing messages: ${_spanName(room.disappearAfter)}'
+                        : 'Disappearing messages')),
+                if (room.kind == 'group') ...const [
+                  PopupMenuItem(value: 'add', child: Text('Add people')),
+                  PopupMenuItem(value: 'rename', child: Text('Rename group')),
+                  PopupMenuItem(value: 'leave', child: Text('Leave group')),
+                ],
+              ],
             ),
         ],
       ),

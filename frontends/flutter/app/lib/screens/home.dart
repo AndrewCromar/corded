@@ -5,6 +5,7 @@ import '../app_state.dart';
 import 'add_server.dart';
 import 'chat.dart';
 import 'common.dart';
+import 'group.dart';
 import 'members.dart';
 import 'presence.dart';
 import 'settings.dart';
@@ -191,7 +192,30 @@ class HomeScreen extends StatelessWidget {
         ),
       ]),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _startChat(context),
+        onPressed: () => showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          builder: (sheet) => SafeArea(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: const Text('Message someone'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _startChat(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.group_add_outlined),
+                title: const Text('New group'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => NewGroupScreen(state: state)));
+                },
+              ),
+            ]),
+          ),
+        ),
         icon: const Icon(Icons.edit_outlined),
         label: const Text('Message'),
       ),
