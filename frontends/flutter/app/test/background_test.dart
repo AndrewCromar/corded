@@ -28,6 +28,14 @@ void main() {
     expect(notificationFor(threaded, {})!.payload, '{"room_id":"r1","thread":"root1"}');
   });
 
+  test('a muted chat is silent, and hidden text says who but not what', () {
+    expect(notificationFor(message('hello'), {'r1': '#general'}, muted: {'r1'}), isNull);
+    final hidden = notificationFor(message('a secret'), {'r1': '#general'}, showText: false)!;
+    expect(hidden.title, '#general');
+    expect(hidden.body, 'New message from bob');
+    expect(notificationFor(message('a secret'), {'r1': 'bob'}, showText: false)!.body, 'New message');
+  });
+
   test('in a direct chat the title is the sender and the body is just the text', () {
     final n = notificationFor(message('hello'), {'r1': 'bob'})!;
     expect(n.title, 'bob');

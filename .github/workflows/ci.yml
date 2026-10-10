@@ -182,6 +182,8 @@ jobs:
       # The one-line installer from the README, against the latest published release.
       - name: Check the PowerShell installer
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           & ([scriptblock]::Create((Get-Content -Raw packaging\install.ps1))) -NoRun
           $exe = Get-ChildItem -Path "$env:LOCALAPPDATA\Corded" -Filter corded-tui.exe -Recurse | Select-Object -First 1

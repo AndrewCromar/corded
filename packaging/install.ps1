@@ -18,6 +18,8 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $headers = @{ 'User-Agent' = 'corded-installer' }
+# GitHub allows few anonymous lookups per hour from one address; a token, if one is set, lifts that.
+if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 
 # The newest release that has a Windows build (pre-releases included).
 $releases = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/AndrewCromar/corded/releases?per_page=10'

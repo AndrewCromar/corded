@@ -113,6 +113,7 @@ class AppState extends ChangeNotifier {
       // The task takes a moment to start listening.
       Future<void>.delayed(const Duration(seconds: 2), () async {
         _shareRoomTitles(force: true);
+        _shareNotificationOptions();
         try {
           final s = await engine.command({'cmd': 'client_settings'});
           setDoNotDisturb((s['client_settings'] as Map?)?['presence'] == 'dnd');
@@ -166,6 +167,31 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Chats whose messages raise no notification on this phone.
+  Set<String> mutedRooms = {};
+
+  /// Whether notifications show what a message says, or only that one came.
+  bool showMessageText = true;
+
+  bool isMuted(String roomId) => mutedRooms.contains(roomId);
+
+  Future<void> setMuted(String roomId, bool muted) async {
+    muted ? mutedRooms.add(roomId) : mutedRooms.remove(roomId);
+    notifyListeners();
+    _shareNotificationOptions();
+    (await SharedPreferences.getInstance()).setStringList('muted_rooms', mutedRooms.toList());
+  }
+
+  Future<void> setShowMessageText(bool show) async {
+    showMessageText = show;
+    notifyListeners();
+    _shareNotificationOptions();
+    (await SharedPreferences.getInstance()).setBool('show_message_text', show);
+  }
+
+  void _shareNotificationOptions() =>
+      Background.tell({'muted': mutedRooms.toList(), 'show_text': showMessageText});
+
   /// With do not disturb on, this phone shows no message notifications.
   void setDoNotDisturb(bool on) => Background.tell(on ? 'dnd_on' : 'dnd_off');
 
@@ -213,6 +239,11 @@ class AppState extends ChangeNotifier {
         }
       }
       _wantBackground = prefs.getBool('background_mode') ?? false;
+      mutedRooms = (prefs.getStringList('muted_rooms') ?? const []).toSet();
+      showMessageText = prefs.getBool('show_message_text') ?? true;
+      if (serviceRunning) {
+        Future<void>.delayed(const Duration(seconds: 1), _shareNotificationOptions);
+      }
       fingerprintAvailable = await Fingerprint.available();
       fingerprintUnlock = fingerprintAvailable && (prefs.getBool('fingerprint_unlock') ?? false);
       // Chosen earlier, but the service is gone (the phone restarted, say):

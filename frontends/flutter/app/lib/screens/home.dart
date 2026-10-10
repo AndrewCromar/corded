@@ -87,7 +87,14 @@ class HomeScreen extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: r.unread > 0 ? const TextStyle(fontWeight: FontWeight.bold) : null),
-          trailing: r.unread > 0 ? Badge(label: Text('${r.unread}')) : null,
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (state.isMuted(r.id))
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(Icons.notifications_off_outlined, size: 18, color: theme.colorScheme.outline),
+              ),
+            if (r.unread > 0) Badge(label: Text('${r.unread}')),
+          ]),
           onTap: () => _open(context, r.id),
         );
     Widget heading(String text) => Padding(

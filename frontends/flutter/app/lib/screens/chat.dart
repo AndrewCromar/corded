@@ -449,6 +449,24 @@ class _ChatScreenState extends State<ChatScreen> {
           else if (room != null && room.kind != 'direct')
             Text('${room.members.length} members', style: theme.textTheme.labelSmall),
         ]),
+        actions: [
+          if (_thread == null)
+            IconButton(
+              tooltip: widget.state.isMuted(_room) ? 'Turn notifications back on' : 'Mute notifications',
+              icon: Icon(
+                  widget.state.isMuted(_room) ? Icons.notifications_off_outlined : Icons.notifications_none),
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                final mute = !widget.state.isMuted(_room);
+                await widget.state.setMuted(_room, mute);
+                if (mounted) setState(() {});
+                messenger.showSnackBar(SnackBar(
+                    content: Text(mute
+                        ? 'Muted. No notifications from this chat on this phone.'
+                        : 'Notifications are back on for this chat.')));
+              },
+            ),
+        ],
       ),
       body: SafeArea(
         child: Column(children: [

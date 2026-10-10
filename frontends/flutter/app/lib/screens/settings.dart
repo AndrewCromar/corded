@@ -258,6 +258,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (mounted) setState(() {});
           },
         ),
+        if (widget.state.backgroundMode)
+          SwitchListTile(
+            secondary: const Icon(Icons.visibility_outlined),
+            title: const Text('Show message text in notifications'),
+            subtitle: const Text('Off: a notification says who wrote and where, not what'),
+            value: widget.state.showMessageText,
+            onChanged: (v) async {
+              await widget.state.setShowMessageText(v);
+              if (mounted) setState(() {});
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.add_reaction_outlined),
           title: const Text('Quick reactions'),
