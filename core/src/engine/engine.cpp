@@ -372,7 +372,14 @@ uint64_t Engine::vault_unlock(Bytes passphrase) {
     uint64_t req = next_request_++;
     asio::post(io_, [this, req, pass = std::move(passphrase)]() mutable {
         try {
-            if (vault_.unlocked()) throw VaultError("the vault is already open");
+            if (vault_.unlocked()) {
+                // Already open: this only checks the passphrase, so a frontend
+                // can confirm it before, say, keeping it for fingerprint unlock.
+                Vault::check_passphrase(config_.vault_dir, pass);
+                sodium_memzero(pass.data(), pass.size());
+                ok(req, {{"already_open", true}});
+                return;
+            }
             vault_.unlock(config_.vault_dir, pass);
             sodium_memzero(pass.data(), pass.size());
             after_unlock();
@@ -513,6 +520,30 @@ void Engine::run_command(uint64_t req, const std::string& text) {
             for (auto& [id, s] : sessions_)
                 for (auto& room : s->rooms_json()) rooms.push_back(std::move(room));
             ok(req, {{"rooms", std::move(rooms)}});
+            return;
+        }
+        if (name == "forget_server") {
+            // Leaves a server as far as this device is concerned: the
+            // connection, the server's entry and its chats all go. The account
+            // on the server is untouched; its owner can remove that.
+            int64_t id = cmd.at("server_id").get<int64_t>();
+            auto it = sessions_.find(id);
+            if (it == sessions_.end()) {
+                fail(req, "not_found", "unknown server");
+                return;
+            }
+            it->second->disconnect("left this server");
+            for (const auto& room : vault_.rooms(id)) {
+                vault_.delete_room(room.room_id);
+                emit({{"event", "room_removed"}, {"room_id", b64(room.room_id)}});
+            }
+            sessions_.erase(it);
+            json kept = json::array();
+            for (const auto& entry : load_servers())
+                if (entry.value("id", int64_t{0}) != id) kept.push_back(entry);
+            save_servers(kept);
+            emit({{"event", "server_removed"}, {"server_id", id}});
+            ok(req);
             return;
         }
         if (name == "disconnect" && !cmd.contains("server_id")) {

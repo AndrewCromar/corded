@@ -188,6 +188,12 @@ void main() {
     await freshStore.dispose();
     await bobStore.open(room.id);
 
+    // Leaving a server takes it and its chats off this device only.
+    await alice.command({'cmd': 'forget_server', 'server_id': aliceServer.id});
+    await eventually(() => aliceStore.servers.isEmpty && aliceStore.rooms.isEmpty ? true : null, 'the server gone');
+    expect((await alice.command({'cmd': 'list_servers'}))['servers'], isEmpty);
+    expect(general(bobStore)!.members.length, 2); // her account is still on the server
+
     // A fresh start reads everything back from the vault.
     await bobStore.dispose();
     await bob.close();
@@ -200,6 +206,9 @@ void main() {
     expect(again.vaultExists(), isTrue);
     await expectLater(again.unlock('wrong'), throwsA(isA<CordedError>()));
     await again.unlock('a long passphrase');
+    // With the vault open, unlock only checks a passphrase.
+    expect((await again.unlock('a long passphrase'))['already_open'], isTrue);
+    await expectLater(again.unlock('not it'), throwsA(isA<CordedError>()));
     await eventually(() => againStore.rooms[room.id], 'rooms after restart');
     await againStore.open(room.id);
     expect(againStore.messages(room.id).length, 7);

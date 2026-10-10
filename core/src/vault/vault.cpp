@@ -118,7 +118,21 @@ void Vault::create(const std::string& dir, ByteView passphrase, const std::strin
     fs::rename(tmp, header_path(dir));
 }
 
+void Vault::check_passphrase(const std::string& dir, ByteView passphrase) {
+    Key32 key = unwrap_key(dir, passphrase);
+    sodium_memzero(key.data(), key.size());
+}
+
 void Vault::unlock(const std::string& dir, ByteView passphrase) {
+    Key32 vault_key = unwrap_key(dir, passphrase);
+    open_database(dir, vault_key);
+    sodium_memzero(vault_key.data(), vault_key.size());
+    migrate();
+    load_identity();
+}
+
+// The vault's key, unwrapped with the passphrase. Throws WrongPassphrase.
+Key32 Vault::unwrap_key(const std::string& dir, ByteView passphrase) {
     if (!exists(dir)) throw VaultError("no vault found");
     json hdr;
     try {
@@ -140,11 +154,7 @@ void Vault::unlock(const std::string& dir, ByteView passphrase) {
     if (!key || key->size() != 32) throw WrongPassphrase();
     Key32 vault_key = to_key32(*key);
     sodium_memzero(key->data(), key->size());
-
-    open_database(dir, vault_key);
-    sodium_memzero(vault_key.data(), vault_key.size());
-    migrate();
-    load_identity();
+    return vault_key;
 }
 
 void Vault::lock() {

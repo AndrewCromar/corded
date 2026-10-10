@@ -270,6 +270,15 @@ private:
             if (current_server_ == 0) current_server_ = sid;
             apply_current();
             refresh_titles();
+        } else if (kind == "server_removed") {
+            int64_t gone = ev.value("server_id", int64_t{0});
+            servers_.erase(gone);
+            rooms_.erase(std::remove_if(rooms_.begin(), rooms_.end(), [&](const Room& r) { return r.server_id == gone; }),
+                         rooms_.end());
+            if (current_server_ == gone) current_server_ = servers_.empty() ? 0 : servers_.begin()->first;
+            visible_.clear();
+            selected_ = 0;
+            refresh_titles();
         } else if (kind == "room_removed") {
             if (ev.value("reason", "") == "removed") notice_ = "you were removed from a chat";
             std::string id = ev.value("room_id", "");
@@ -801,13 +810,13 @@ private:
                         text(unread ? "  " + std::to_string(unread) + " unread" : "") | color(Color::Yellow),
                     }));
                 }
-                rows.push_back(text("/server switch <name or number>     /server join <invite link or host:port>") | dim);
+                rows.push_back(text("/server switch <name or number>   /server leave <name or number>   /server join <link or host:port>") | dim);
                 info_box_ = vbox(std::move(rows)) | border;
                 show_info_ = true;
             } else if (cmd == "/server") {
                 auto sp = arg.find(' ');
                 std::string sub = arg.substr(0, sp), rest = sp == std::string::npos ? "" : arg.substr(sp + 1);
-                if (sub == "switch" && !rest.empty()) {
+                if ((sub == "switch" || sub == "leave") && !rest.empty()) {
                     int64_t found = 0;
                     int n = 1;
                     for (const auto& [sid, st] : servers_) {
@@ -818,7 +827,11 @@ private:
                             found = sid;
                         ++n;
                     }
-                    if (found) switch_server(found);
+                    if (found && sub == "leave") {
+                        // Off this device only; the account on the server stays.
+                        command({{"cmd", "forget_server"}, {"server_id", found}});
+                        notice_ = "left " + servers_[found].name + " on this device";
+                    } else if (found) switch_server(found);
                     else notice_ = "no server matches \"" + rest + "\"; /servers lists them";
                 } else if (sub == "join" && !rest.empty()) {
                     // An invite link, or a plain address for a server that needs no invite.

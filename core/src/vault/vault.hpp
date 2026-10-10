@@ -79,6 +79,8 @@ public:
     void create(const std::string& dir, ByteView passphrase, const std::string& username,
                 bool fast_kdf, const std::optional<Key32>& seed = std::nullopt);
     void unlock(const std::string& dir, ByteView passphrase);
+    // Throws WrongPassphrase unless this passphrase opens the vault in `dir`.
+    static void check_passphrase(const std::string& dir, ByteView passphrase);
     void lock();
     bool unlocked() const { return db_.is_open(); }
 
@@ -148,6 +150,7 @@ public:
     void outbox_remove(int64_t local_id);
 
 private:
+    static Key32 unwrap_key(const std::string& dir, ByteView passphrase);
     void open_database(const std::string& dir, const Key32& vault_key);
     void migrate();
     void load_identity();

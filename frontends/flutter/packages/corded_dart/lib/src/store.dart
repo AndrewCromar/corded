@@ -286,6 +286,13 @@ class CordedStore {
         _applyServer(e);
       case 'room_updated':
         _applyRoom((e['room'] as Map).cast<String, dynamic>());
+      case 'server_removed':
+        final id = (e['server_id'] as num?)?.toInt();
+        servers.remove(id);
+        for (final room in rooms.values.where((r) => r.serverId == id).toList()) {
+          rooms.remove(room.id);
+          _messages.remove(room.id);
+        }
       case 'room_removed':
         final id = e['room_id'] as String?;
         rooms.remove(id);

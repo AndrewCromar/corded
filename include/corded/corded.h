@@ -22,6 +22,8 @@
  *   {"cmd":"connect","host":"example.org","port":7443,"fingerprint":"<optional server key>",
  *    "invite":"<code, if the server needs one to register>"}
  *   {"cmd":"connect","link":"corded://example.org:7443/?fp=...&invite=..."}
+ *   {"cmd":"forget_server","server_id":2}   leave a server on this device: its chats are
+ *       deleted here; the account on the server stays
  *   {"cmd":"disconnect"}
  *   {"cmd":"lock"}
  *   {"cmd":"list_rooms"}
@@ -84,7 +86,7 @@
  *  mark_read moves the marker; event_received carries the room's new count.
  *
  * Events (JSON objects, "event" names the event):
- *   vault_state, connection_state, account, server_info, server_pinned, room_updated,
+ *   vault_state, connection_state, account, server_info, server_pinned, server_removed, room_updated,
  *   room_removed,
  *   event_received, event_expired, history_received, server_notice, typing, receipt,
  *   event_updated, event_send_status, command_result, warning
@@ -151,6 +153,8 @@ CORDED_API corded_status corded_vault_create(corded_engine* engine, const uint8_
 CORDED_API corded_status corded_vault_restore(corded_engine* engine, const uint8_t* passphrase,
                                               size_t passphrase_len, const char* username,
                                               const char* recovery_key, corded_request* out_request);
+/* If the vault is already open this only checks the passphrase: the result is
+ * ok with "already_open", or the wrong_passphrase error. */
 CORDED_API corded_status corded_vault_unlock(corded_engine* engine, const uint8_t* passphrase,
                                              size_t passphrase_len, corded_request* out_request);
 
