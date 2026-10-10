@@ -26,7 +26,7 @@ $releases = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/rep
 $asset = $null
 $tag = $null
 foreach ($release in $releases) {
-    $candidate = $release.assets | Where-Object { $_.name -like '*-windows-x64.zip' } | Select-Object -First 1
+    $candidate = $release.assets | Where-Object { $_.name -like '*-windows-x64.zip' -and $_.name -notlike 'corded-app-*' } | Select-Object -First 1
     if ($candidate) { $asset = $candidate; $tag = $release.tag_name; break }
 }
 if (-not $asset) { throw 'No Corded release with a Windows build was found.' }

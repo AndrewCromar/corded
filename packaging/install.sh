@@ -18,7 +18,7 @@ esac
 
 api="https://api.github.com/repos/AndrewCromar/corded/releases?per_page=10"
 url="$(curl -fsSL -H 'User-Agent: corded-installer' "$api" \
-  | grep -o "https://[^\"]*-linux-${arch}\.tar\.gz" | head -n 1)"
+  | grep -o "https://[^\"]*-linux-${arch}\.tar\.gz" | grep -v "/corded-app-" | head -n 1)"
 if [ -z "$url" ]; then
   echo "No Corded release with a Linux ${arch} build was found." >&2
   exit 1
