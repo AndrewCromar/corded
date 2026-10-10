@@ -299,6 +299,12 @@ class Bot:
         self._jobs.put((fn, args))
         return ahead
 
+    def attempt(self, fn, *args):
+        """Calls fn(*args). If it fails, the failure is printed and None is
+        returned: for doing the same thing for many people, where one going
+        wrong should not stop the rest."""
+        return self._guard(fn, *args)
+
     def request(self, cmd, timeout=30):
         """Sends any core command and returns its result's data. Raises
         RuntimeError with the core's message if it was refused."""
@@ -432,9 +438,9 @@ class Bot:
             elif kind == "profile_updated":
                 self._profiles[event.get("user_id", "")] = event.get("profile") or {}
                 if event.get("user_id") != self.me:
+                    told = (event.get("user_id", ""), event.get("profile") or {})
                     for fn in self._profile_handlers:
-                        threading.Thread(target=self._guard, args=(fn, event.get("user_id", ""), event.get("profile") or {}),
-                                         daemon=True).start()
+                        threading.Thread(target=self._guard, args=(fn, *told), daemon=True).start()
             elif kind == "event_received":
                 data = event.get("data") or {}
                 if data.get("mine"):

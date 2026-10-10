@@ -32,7 +32,7 @@ address.
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
 | `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Its character comes from a "soul" text file; see `soul.example.txt`. Answers when mentioned or in a direct chat. | By the test suite with a stand-in model; not yet with a real one |
-| `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite; not yet on a real server |
+| `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite, and tried on a real server |
 
 ```sh
 python3 webhook_bot.py 127.0.0.1:7443 '#development' --secret some-long-word
@@ -40,7 +40,7 @@ curl -X POST localhost:8765/say -H 'X-Corded-Secret: some-long-word' -d '{"text"
 
 python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --model llama3.2
 
-python3 birthday_bot.py 127.0.0.1:7443 --channel '#general' --at 09:00
+python3 birthday_bot.py 127.0.0.1:7443
 ```
 
 ### The birthday bot
@@ -136,6 +136,7 @@ name) and `direct` (it was said in a direct chat with the bot).
 | `bot.may(user_id)` | Whether someone may give the bot orders: the server's owner, and anyone whose roles have the Manage bots permission. `bot.may(user_id, "kick_members")` asks about another permission. |
 | `bot.work(fn, *args)` | Run a job after those already waiting, one at a time (one model, one graphics card). Returns how many are ahead. |
 | `bot.store` | A dictionary kept between runs, in `store.json` in the bot's folder. Call `bot.store.save()` after changing it. |
+| `bot.attempt(fn, *args)` | Call something that may fail without stopping the rest; the failure is printed. |
 | `bot.request({...})` | Any command the core understands; returns its answer. |
 
 More things to hang a function on:

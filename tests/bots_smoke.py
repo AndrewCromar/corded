@@ -165,10 +165,11 @@ def main():
         assert carol.dm("birthdays") == asked.room_id
         wait_for("the date read back", lambda m: m.sender == "birthdays" and "Got it: **17 May 2004**" in m.body,
                  among=carol_heard)
-        assert "That's today!" in carol_heard[-1].body or any("That's today!" in m.body for m in carol_heard)
+        assert any("That's today!" in m.body for m in carol_heard)
         wait_for("a wish in the direct chat", lambda m: m.direct and m.body == "🎂 **Happy birthday, carol!** 22 today.",
                  among=carol_heard)
-        wait_for("a wish in the channel", lambda item: item == ("birthdays", "🎂 **Happy birthday**, @carol! (22 today.)"))
+        wait_for("a wish in the channel",
+                 lambda item: item == ("birthdays", "🎂 **Happy birthday**, @carol! (22 today.)"))
         its = next(m for m in carol.members().values() if m["username"] == "birthdays")
         profile = carol.profile_of(its["user_id"])
         assert its["display_name"] == "Birthday Bot" and its["bot"] and "birthdays" in profile["bio"]
@@ -194,9 +195,14 @@ def main():
         for said, answer in (("when", "I have **17 May**, from your profile."),
                              ("17/05", "I can't tell the day from the month"),
                              ("private", "I'll wish you here only"),
-                             ("what?", "I didn't understand that. I have your birthday as **17 May**, from your profile."),
+                             ("what?", "I didn't understand that. I have your birthday as **17 May**, "
+                                       "from your profile."),
                              ("forget", "Your profile says **17 May**, and I go by that"),
-                             ("help", "## 🎂 Birthday Bot\nI wish people a happy birthday on the day, in a direct chat and in #general.\n\n**Your birthday:** 17 May, from your profile\n**Wished in #general:** no, here only\n\n**To change it, send me a date**\n- `05-17`"),
+                             ("help", "## 🎂 Birthday Bot\n"
+                                      "I wish people a happy birthday on the day, in a direct chat and in #general.\n\n"
+                                      "**Your birthday:** 17 May, from your profile\n"
+                                      "**Wished in #general:** no, here only\n\n"
+                                      "**To change it, send me a date**\n- `05-17`"),
                              ("!help", "**Your birthday:** 17 May, from your profile")):
             dave.say(with_bot, said)
             wait_for(f"the answer to {said}", lambda m: m.sender == "birthdays" and answer in m.body, among=dave_heard)
@@ -218,8 +224,9 @@ def main():
         wait_for("the bot to notice", lambda m: m.direct and
                  "I see your birthday in your profile now: **25 December 1999**" in m.body, among=erin_heard)
         erin.say(erin.dm("birthdays"), "24 dec")
-        wait_for("the two dates to be weighed", lambda m: "Got it: **24 December**. I'll wish you a happy birthday then. "
-                 "Your profile says **25 December 1999**; I'll go by what you told me here." in m.body, among=erin_heard)
+        wait_for("the two dates to be weighed",
+                 lambda m: "Got it: **24 December**. I'll wish you a happy birthday then. Your profile says "
+                           "**25 December 1999**; I'll go by what you told me here." in m.body, among=erin_heard)
         print("ok  birthday bot: help (in a chat and in a channel), when, private, forget, a date it cannot read, "
               "a profile filled in later, "
               "and the list leaves private people out")
@@ -251,10 +258,9 @@ def main():
 
         # What only the owner and those with the Manage bots permission may tell it.
         to_bot = {who: who.dm("birthdays") for who in (alice, carol, dave)}
-        said_to_carol = len(carol_heard)
         carol.say(to_bot[carol], "list")
         wait_for("a refusal", lambda m: "Only the server's owner and people with the **Manage bots**" in m.body,
-                 among=carol_heard[said_to_carol:] or carol_heard)
+                 among=carol_heard)
         alice.say(to_bot[alice], "list")
         wait_for("the owner's list", lambda item: "**Birthdays I know (3)**" in item[1]
                  and "- **carol** (`carol`): 17 May; told me, wished in 2026" in item[1]
@@ -268,7 +274,11 @@ def main():
 
         made = alice.request({"cmd": "create_role", "name": "botkeeper", "permissions": ["manage_bots"]})
         alice.request({"cmd": "grant_role", "username": "carol", "role": "botkeeper"})
-        assert carol.may(carol.me) or time.sleep(2) or carol.may(carol.me), f"the role did not arrive: {made}"
+        for _ in range(20):   # a role just given takes a moment to be known everywhere
+            if carol.may(carol.me):
+                break
+            time.sleep(0.5)
+        assert carol.may(carol.me), f"the role did not arrive: {made}"
         assert alice.may(alice.me) and not dave.may(dave.me)
         carol.say(to_bot[carol], "set @erin 17 may")
         wait_for("a date set by someone with the role", lambda m: "Done: **erin**'s birthday is **17 May**." in m.body,
@@ -277,9 +287,10 @@ def main():
         carol.say(to_bot[carol], "help")
         wait_for("help with the part for managers", lambda m: "**Because you manage bots here**" in m.body
                  and "`reset wishes`" in m.body, among=carol_heard)
+        before = len(dave_heard)
         dave.say(to_bot[dave], "help")
-        said = wait_for("help without it", lambda m: "## 🎂 Birthday Bot" in m.body and "Wished in" in m.body,
-                        among=dave_heard[::-1])
+        said = wait_for("help without it", lambda m: dave_heard.index(m) >= before and "## 🎂 Birthday Bot" in m.body
+                        and "Wished in" in m.body, among=dave_heard)
         assert "manage bots" not in said.body
 
         del heard[:]

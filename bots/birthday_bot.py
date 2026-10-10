@@ -88,9 +88,9 @@ def parse_time(text):
 def falls_on(birthday, today):
     """Whether a stored birthday is to be wished on this day. Someone born on
     29 February is wished on the 28th in years without one."""
-    parts = birthday.split("-")
-    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+    if not well_formed(birthday):
         return False
+    parts = birthday.split("-")
     month, day = int(parts[-2]), int(parts[-1])
     if (month, day) == (2, 29) and (today.month, today.day) == (2, 28):
         try:
@@ -100,11 +100,13 @@ def falls_on(birthday, today):
     return (month, day) == (today.month, today.day)
 
 
-def in_range(birthday):
-    """Whether "MM-DD" or "YYYY-MM-DD" names a day that exists."""
+def well_formed(birthday):
+    """Whether this is "MM-DD" or "YYYY-MM-DD" and names a day that exists."""
+    if not re.fullmatch(r"(\d{4}-)?\d{2}-\d{2}", birthday or ""):
+        return False
     parts = birthday.split("-")
     try:
-        datetime.date(2004, int(parts[-2]), int(parts[-1]))
+        datetime.date(2004, int(parts[-2]), int(parts[-1]))   # 2004 had a 29 February
     except ValueError:
         return False
     return True
@@ -165,7 +167,10 @@ def main():
                     "profile, and I'll wish you a happy one on the day.")
     if args.join_delay is not None:
         bot.join_delay = args.join_delay
-    people = bot.store.setdefault("people", {})   # user id -> {"birthday", "asked", "no", "private", "wished"}
+    # What it keeps about each person, by user id: "birthday" (the one they
+    # told it), "asked", "seen" (the profile birthday it has spoken of), "no",
+    # "private", "wished" (the year), "lost" (unreadable messages in a row).
+    people = bot.store.setdefault("people", {})
 
     # Where birthdays are announced is kept in the bot's files. --channel
     # counts when it is new or has changed, so that what a manager chose
@@ -206,7 +211,7 @@ def main():
         if told:
             return told
         written = bot.profile_of(user_id).get("birthday", "")
-        return written if re.fullmatch(r"(\d{4}-)?\d{2}-\d{2}", written) and in_range(written) else ""
+        return written if well_formed(written) else ""
 
     def in_profile(user_id):
         """The birthday in their profile, if the bot goes by it: they have told it none."""
@@ -301,9 +306,9 @@ def main():
 
     def manage(message):
         """What the owner and those with the Manage bots permission may tell it."""
+        nonlocal channel, at
         if not bot.may(message.sender_id):
             return "Only the server's owner and people with the **Manage bots** permission can do that."
-        nonlocal channel, at
         words = message.body.split()
         verb, rest = words[0].lower(), words[1:]
         unknown = "I don't know anyone called **{}** here."
@@ -381,7 +386,7 @@ def main():
                            and not people.get(m["user_id"], {}).get("no")
                            and not people.get(m["user_id"], {}).get("birthday")]
                 for member in waiting:
-                    bot._guard(ask, member)
+                    bot.attempt(ask, member)
                     time.sleep(1)
                 return (f"Done: I wrote to {len(waiting)} {'person' if len(waiting) == 1 else 'people'}. "
                         "I leave out those I have asked before, those who said no, and those who told me a date.")
@@ -396,8 +401,9 @@ def main():
             person.pop("asked", None)
             ask(member)
             return f"Done: I wrote to **{name_of(member)}**."
-        return ("I didn't follow that. What I take from those who manage bots: `list`, `channel #name`, `time 08:30`, `reset wishes`, "
-                "`reset asked`, `reset @name`, `set @name 05-17`, `ask @name`, `ask everyone`.")
+        return ("I didn't follow that. What I take from those who manage bots: `list`, `channel #name`, "
+                "`time 08:30`, `reset wishes`, `reset asked`, `reset @name`, `set @name 05-17`, `ask @name`, "
+                "`ask everyone`.")
 
     def ask(member):
         person = people.setdefault(member["user_id"], {})
@@ -477,7 +483,7 @@ def main():
                 birthday = birthday_of(user_id)
                 if (not member.get("bot") and people.get(user_id, {}).get("wished") != day.year
                         and falls_on(birthday, day)):
-                    bot._guard(wish_one, member, birthday, day)
+                    bot.attempt(wish_one, member, birthday, day)
 
     bot.every(args.tick)(wish)
 
@@ -575,7 +581,7 @@ def main():
         time.sleep(bot.join_delay)   # the bots already here say that they are bots when someone new arrives
         for member in bot.members().values():
             if not member.get("bot"):
-                bot._guard(ask, member)
+                bot.attempt(ask, member)
                 time.sleep(1)
     bot.run()
 

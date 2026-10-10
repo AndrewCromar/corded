@@ -17,7 +17,7 @@ Wants=network-online.target
 [Service]
 WorkingDirectory=/home/you/corded/bots
 Environment=CORDED_CLI=/home/you/corded/corded-cli
-ExecStart=/usr/bin/python3 -u birthday_bot.py 127.0.0.1:7443 --channel "#general" --at 09:00 --vault /home/you/corded-bots/birthdays
+ExecStart=/usr/bin/python3 -u birthday_bot.py 127.0.0.1:7443 --vault /home/you/corded-bots/birthdays
 Restart=always
 RestartSec=10
 
