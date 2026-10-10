@@ -37,8 +37,8 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       navigator.popUntil((route) => route.isFirst);
       navigator.push(MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId)));
       if (threadRoot != null) {
-        navigator.push(
-            MaterialPageRoute(builder: (_) => ChatScreen(state: state, roomId: roomId, threadRoot: threadRoot)));
+        navigator.push(MaterialPageRoute(
+            builder: (_) => ChatScreen(state: state, roomId: roomId, threadRoot: threadRoot)));
       }
     };
   }
@@ -76,14 +76,17 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
           body: Center(
               child: Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Text('Corded could not start.\n\n${state.startError}', textAlign: TextAlign.center))));
+                  child:
+                      Text('Corded could not start.\n\n${state.startError}', textAlign: TextAlign.center))));
     }
     if (!state.ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     switch (state.store.vaultState) {
       case 'missing':
         return WelcomeScreen(state: state);
       case 'unlocked':
-        return state.store.servers.isEmpty ? AddServerScreen(state: state, first: true) : HomeScreen(state: state);
+        return state.store.servers.isEmpty
+            ? AddServerScreen(state: state, first: true)
+            : HomeScreen(state: state);
       default:
         return UnlockScreen(state: state);
     }

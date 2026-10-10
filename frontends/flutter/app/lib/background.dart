@@ -177,7 +177,9 @@ class Background {
         callback: backgroundEntry,
       );
     }
-    if (result is ServiceRequestFailure) return 'Android would not start the background connection: ${result.error}';
+    if (result is ServiceRequestFailure) {
+      return 'Android would not start the background connection: ${result.error}';
+    }
     return null;
   }
 

@@ -100,8 +100,8 @@ class HomeScreen extends StatelessWidget {
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => SettingsScreen(state: state))),
+            onPressed: () =>
+                Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(state: state))),
           ),
         ],
       ),
@@ -130,14 +130,17 @@ class HomeScreen extends StatelessWidget {
                         content: const Text('The server and its chats are removed from this device. '
                             'Your account stays on the server, so you can join again later as the same person.'),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
+                          TextButton(
+                              onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                          FilledButton(
+                              onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
                         ],
                       ),
                     );
                     if (leave != true || !context.mounted) return;
                     Navigator.pop(context);
-                    await attempt(context, () => state.engine.command({'cmd': 'forget_server', 'server_id': s.id}));
+                    await attempt(
+                        context, () => state.engine.command({'cmd': 'forget_server', 'server_id': s.id}));
                   },
                 ),
               ),

@@ -47,7 +47,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
         ],
       ),
     );
@@ -71,7 +72,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Unlock with fingerprint'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        content:
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text("Type your passphrase once more. It is then kept in this phone's secure hardware and "
               'released only by your fingerprint. The passphrase itself keeps working.'),
           const SizedBox(height: 12),
@@ -85,7 +87,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Turn on')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text), child: const Text('Turn on')),
         ],
       ),
     );
@@ -96,7 +99,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } on CordedError {
       messenger.showSnackBar(const SnackBar(content: Text('That is not your passphrase.')));
     } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('The fingerprint check did not finish, so nothing changed.')));
+      messenger.showSnackBar(
+          const SnackBar(content: Text('The fingerprint check did not finish, so nothing changed.')));
     }
     if (mounted) setState(() {});
   }
@@ -153,8 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: const Text('Recovery key'),
         content: SelectableText(key, style: const TextStyle(fontFamily: 'monospace', fontSize: 16)),
         actions: [
-          TextButton(
-              onPressed: () => Clipboard.setData(ClipboardData(text: key)), child: const Text('Copy')),
+          TextButton(onPressed: () => Clipboard.setData(ClipboardData(text: key)), child: const Text('Copy')),
           FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
         ],
       ),
@@ -263,7 +266,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ListTile(
           leading: const Icon(Icons.info_outline),
           title: const Text('About'),
-          subtitle: Text('${widget.state.engine.version}\nPrototype. Not yet audited; do not rely on it for secrets.'),
+          subtitle: Text(
+              '${widget.state.engine.version}\nPrototype. Not yet audited; do not rely on it for secrets.'),
           isThreeLine: true,
         ),
       ]),

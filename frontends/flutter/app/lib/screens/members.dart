@@ -33,9 +33,14 @@ class _MembersScreenState extends State<MembersScreen> {
     try {
       final r = await _command({'cmd': 'member_list'});
       final list = [
-        for (final m in (r['members'] as List? ?? const [])) Member.fromJson((m as Map).cast<String, dynamic>())
+        for (final m in (r['members'] as List? ?? const []))
+          Member.fromJson((m as Map).cast<String, dynamic>())
       ];
-      int rank(Member m) => m.isOwner ? 0 : m.isAdmin ? 1 : 2;
+      int rank(Member m) => m.isOwner
+          ? 0
+          : m.isAdmin
+              ? 1
+              : 2;
       list.sort((a, b) {
         final byRank = rank(a).compareTo(rank(b));
         return byRank != 0 ? byRank : a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
@@ -87,7 +92,8 @@ class _MembersScreenState extends State<MembersScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
         ],
       ),
     );
@@ -106,14 +112,18 @@ class _MembersScreenState extends State<MembersScreen> {
           child: ListView(shrinkWrap: true, children: [
             ListTile(title: Text('Roles for ${m.displayName}')),
             if (_server.roles.isEmpty)
-              const ListTile(title: Text('This server has no roles yet. Roles are made in the terminal client for now.')),
+              const ListTile(
+                  title:
+                      Text('This server has no roles yet. Roles are made in the terminal client for now.')),
             for (final role in _server.roles)
               SwitchListTile(
                 title: Text(role),
                 value: held.contains(role),
                 onChanged: (on) async {
                   final ok = await attempt(
-                      this.context, () => _command({'cmd': 'grant_role', 'username': m.username, 'role': role, 'grant': on}));
+                      this.context,
+                      () =>
+                          _command({'cmd': 'grant_role', 'username': m.username, 'role': role, 'grant': on}));
                   if (ok) setSheet(() => on ? held.add(role) : held.remove(role));
                 },
               ),
@@ -142,7 +152,8 @@ class _MembersScreenState extends State<MembersScreen> {
       context: context,
       showDragHandle: true,
       builder: (sheet) {
-        Widget item(IconData icon, String label, Future<void> Function() run, {bool danger = false}) => ListTile(
+        Widget item(IconData icon, String label, Future<void> Function() run, {bool danger = false}) =>
+            ListTile(
               leading: Icon(icon, color: danger ? Theme.of(context).colorScheme.error : null),
               title: Text(label),
               onTap: () {
@@ -166,8 +177,10 @@ class _MembersScreenState extends State<MembersScreen> {
             if (_server.can('manage_roles')) item(Icons.shield_outlined, 'Roles', () => _roles(m)),
             if (manageable && _server.can('kick_members'))
               item(Icons.logout, 'Kick', () async {
-                if (await _confirm('Kick ${m.displayName}?',
-                    'They are disconnected now. They can come straight back unless they are also banned.', 'Kick')) {
+                if (await _confirm(
+                    'Kick ${m.displayName}?',
+                    'They are disconnected now. They can come straight back unless they are also banned.',
+                    'Kick')) {
                   await _do({'cmd': 'kick', 'username': m.username}, '${m.displayName} was kicked.');
                 }
               }),
@@ -175,7 +188,8 @@ class _MembersScreenState extends State<MembersScreen> {
               item(Icons.block, 'Ban', () async {
                 if (await _confirm('Ban ${m.displayName}?',
                     'They are disconnected and cannot sign in again until someone lifts the ban.', 'Ban')) {
-                  await _do({'cmd': 'ban_user', 'username': m.username, 'banned': true}, '${m.displayName} was banned.');
+                  await _do({'cmd': 'ban_user', 'username': m.username, 'banned': true},
+                      '${m.displayName} was banned.');
                 }
               }, danger: true),
             if (manageable && _server.can('ban_members'))
@@ -203,7 +217,9 @@ class _MembersScreenState extends State<MembersScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(members == null ? 'Members' : 'Members (${members.length})')),
       body: _error != null
-          ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
+          ? Center(
+              child: Padding(
+                  padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
           : members == null
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
@@ -211,7 +227,8 @@ class _MembersScreenState extends State<MembersScreen> {
                   child: ListView(children: [
                     for (final m in members)
                       ListTile(
-                        leading: CircleAvatar(child: Text(m.displayName.isEmpty ? '?' : m.displayName[0].toUpperCase())),
+                        leading: CircleAvatar(
+                            child: Text(m.displayName.isEmpty ? '?' : m.displayName[0].toUpperCase())),
                         title: Text(m.me ? '${m.displayName} (you)' : m.displayName),
                         subtitle: Text([
                           '@${m.username}',

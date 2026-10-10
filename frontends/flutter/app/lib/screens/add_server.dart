@@ -39,7 +39,8 @@ class _AddServerScreenState extends State<AddServerScreen> {
     }
     final ok = await attempt(context, () async {
       await widget.state.engine.command(cmd).timeout(const Duration(seconds: 20),
-          onTimeout: () => throw CordedError('timeout', 'The server did not answer. Check the address, and that this device can reach it'));
+          onTimeout: () => throw CordedError(
+              'timeout', 'The server did not answer. Check the address, and that this device can reach it'));
       await widget.state.store.refresh();
     });
     if (ok && !widget.first && navigator.canPop()) navigator.pop();

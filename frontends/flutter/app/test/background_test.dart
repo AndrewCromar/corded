@@ -1,7 +1,8 @@
 import 'package:corded_app/background.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Map<String, dynamic> message(String body, {bool mine = false, String type = 'm.text', bool shared = false}) => {
+Map<String, dynamic> message(String body, {bool mine = false, String type = 'm.text', bool shared = false}) =>
+    {
       'event': 'event_received',
       'data': {
         'room_id': 'r1',

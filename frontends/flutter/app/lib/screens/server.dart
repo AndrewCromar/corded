@@ -37,7 +37,9 @@ class _ServerScreenState extends State<ServerScreen> {
       final st = await _command({'cmd': 'server_status'});
       if (!mounted) return;
       setState(() {
-        _settings = [for (final e in (s['settings'] as List? ?? const [])) (e as Map).cast<String, dynamic>()];
+        _settings = [
+          for (final e in (s['settings'] as List? ?? const [])) (e as Map).cast<String, dynamic>()
+        ];
         _status = ((st['status'] as Map?) ?? const {}).cast<String, dynamic>();
       });
     } on CordedError {
@@ -110,7 +112,8 @@ class _ServerScreenState extends State<ServerScreen> {
               Navigator.pop(sheet);
               final to = await _ask('Rename $name', initial: name);
               if (to == null || to.isEmpty || to == name) return;
-              await _do({'cmd': 'rename_channel', 'room_id': r.id, 'name': to.replaceFirst('#', '')}, 'Channel renamed.');
+              await _do({'cmd': 'rename_channel', 'room_id': r.id, 'name': to.replaceFirst('#', '')},
+                  'Channel renamed.');
             },
           ),
           ListTile(
@@ -131,7 +134,8 @@ class _ServerScreenState extends State<ServerScreen> {
 
   Future<void> _invite() async {
     Map<String, dynamic>? invite;
-    if (!await attempt(context, () async => invite = await _command({'cmd': 'create_invite', 'expires_in_hours': 168}))) {
+    if (!await attempt(
+        context, () async => invite = await _command({'cmd': 'create_invite', 'expires_in_hours': 168}))) {
       return;
     }
     if (!mounted) return;
@@ -140,14 +144,16 @@ class _ServerScreenState extends State<ServerScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Invite link'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        content:
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           SelectableText(link, style: const TextStyle(fontFamily: 'monospace')),
           const SizedBox(height: 12),
           const Text('Anyone with this link can join for the next 7 days. '
               'It carries the server\'s key, so they cannot be sent to an impostor.'),
         ]),
         actions: [
-          TextButton(onPressed: () => Clipboard.setData(ClipboardData(text: link)), child: const Text('Copy')),
+          TextButton(
+              onPressed: () => Clipboard.setData(ClipboardData(text: link)), child: const Text('Copy')),
           FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
         ],
       ),
@@ -195,8 +201,7 @@ class _ServerScreenState extends State<ServerScreen> {
         ? await _choose(key, '${s['value']}', options, '${s['description'] ?? ''}')
         : await _ask(key, initial: '${s['value']}', hint: '${s['description'] ?? ''}');
     if (value == null || value == '${s['value']}') return;
-    await _do(
-        {'cmd': 'set_setting', 'key': key, 'value': value},
+    await _do({'cmd': 'set_setting', 'key': key, 'value': value},
         s['needs_restart'] == true ? '$key changed. It takes effect after a restart.' : '$key changed.');
   }
 
@@ -266,8 +271,10 @@ class _ServerScreenState extends State<ServerScreen> {
             title: const Text('Restart the server'),
             subtitle: const Text('Everyone is disconnected for a few seconds and reconnects'),
             onTap: () async {
-              if (await _confirm('Restart the server?',
-                  'Everyone is disconnected for a few seconds. Their apps reconnect by themselves.', 'Restart')) {
+              if (await _confirm(
+                  'Restart the server?',
+                  'Everyone is disconnected for a few seconds. Their apps reconnect by themselves.',
+                  'Restart')) {
                 await _do({'cmd': 'restart_server'}, 'The server is restarting.');
               }
             },

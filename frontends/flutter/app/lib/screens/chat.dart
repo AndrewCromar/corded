@@ -82,6 +82,44 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+  final _keys = <String, GlobalKey>{};
+  String? _highlight;
+
+  // Scrolls to a message and lights it up. Only messages near the screen are
+  // laid out, so an older one is reached by scrolling towards it, loading
+  // earlier pages on the way if it is further back than what is loaded.
+  Future<void> _jumpTo(String id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    for (var step = 0; step < 60 && mounted; step++) {
+      final target = _keys[id]?.currentContext;
+      if (target != null && target.mounted) {
+        await Scrollable.ensureVisible(target,
+            alignment: 0.5, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+        if (!mounted) return;
+        setState(() => _highlight = id);
+        Timer(const Duration(milliseconds: 1600), () {
+          if (mounted && _highlight == id) setState(() => _highlight = null);
+        });
+        return;
+      }
+      if (!_shown.any((m) => m.id == id)) {
+        if (_thread != null || !_store.hasOlder(_room)) break;
+        await _store.loadOlder(_room);
+        continue;
+      }
+      if (!_scroll.hasClients) break;
+      final position = _scroll.position;
+      if (position.pixels >= position.maxScrollExtent) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        continue;
+      }
+      final next = position.pixels + position.viewportDimension * 0.9;
+      await _scroll.animateTo(next > position.maxScrollExtent ? position.maxScrollExtent : next,
+          duration: const Duration(milliseconds: 110), curve: Curves.linear);
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('That message is not on this device.')));
+  }
+
   Future<void> _loadOlder() async {
     if (_thread != null || _loadingOlder || !_store.hasOlder(_room)) return;
     _loadingOlder = true;
@@ -236,7 +274,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final now = DateTime.now();
     final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     final sameDay = t.year == now.year && t.month == now.month && t.day == now.day;
-    return sameDay ? hm : '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} $hm';
+    return sameDay
+        ? hm
+        : '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} $hm';
   }
 
   Widget _bubble(Message m, List<Message> all) {
@@ -280,6 +320,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 decoration: BoxDecoration(
                   color: m.mine ? scheme.primaryContainer : scheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(14),
+                  // Lit up for a moment after jumping here.
+                  border:
+                      Border.all(color: m.id == _highlight ? scheme.primary : Colors.transparent, width: 2),
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   if (!m.mine)
@@ -287,20 +330,25 @@ class _ChatScreenState extends State<ChatScreen> {
                         style: theme.textTheme.labelMedium
                             ?.copyWith(color: scheme.primary, fontWeight: FontWeight.bold)),
                   if (m.replyTo != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 2, bottom: 4),
-                      padding: const EdgeInsets.only(left: 8),
-                      decoration:
-                          BoxDecoration(border: Border(left: BorderSide(color: scheme.primary, width: 3))),
-                      child: Text(
-                        quoted == null ? 'A message not shown here' : '${quoted.sender}: ${quoted.text}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(color: foreground.withValues(alpha: 0.75)),
+                    // Tap the quoted line to go to the message it quotes.
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _jumpTo(m.replyTo!),
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 2, bottom: 4),
+                        padding: const EdgeInsets.only(left: 8),
+                        decoration:
+                            BoxDecoration(border: Border(left: BorderSide(color: scheme.primary, width: 3))),
+                        child: Text(
+                          quoted == null ? 'A message not shown here' : '${quoted.sender}: ${quoted.text}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              theme.textTheme.bodySmall?.copyWith(color: foreground.withValues(alpha: 0.75)),
+                        ),
                       ),
                     ),
-                  LinkedText(
-                      gone ? m.text : m.body,
+                  LinkedText(gone ? m.text : m.body,
                       style: theme.textTheme.bodyLarge?.copyWith(
                           color: foreground.withValues(alpha: gone ? 0.6 : 1),
                           fontStyle: gone ? FontStyle.italic : null),
@@ -346,12 +394,15 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: Text(() {
                             final n = _store.threadCount(_room, m);
                             final replies = _store.thread(_room, m.id);
-                            final last = replies.isEmpty ? '' : '  ·  last from ${replies.last.mine ? 'you' : replies.last.sender}';
+                            final last = replies.isEmpty
+                                ? ''
+                                : '  ·  last from ${replies.last.mine ? 'you' : replies.last.sender}';
                             return '${n == 1 ? 'Thread: 1 reply' : 'Thread: $n replies'}$last';
                           }(),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSecondaryContainer)),
+                              style:
+                                  theme.textTheme.labelLarge?.copyWith(color: scheme.onSecondaryContainer)),
                         ),
                         Icon(Icons.chevron_right, size: 20, color: scheme.onSecondaryContainer),
                       ]),
@@ -385,7 +436,8 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_thread != null ? 'Thread' : room?.title ?? 'Chat', maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(_thread != null ? 'Thread' : room?.title ?? 'Chat',
+              maxLines: 1, overflow: TextOverflow.ellipsis),
           if (_thread != null)
             Text(room?.title ?? '', style: theme.textTheme.labelSmall)
           else if (room != null && room.kind != 'direct')
@@ -396,13 +448,18 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(children: [
           Expanded(
             child: messages.isEmpty
-                ? Center(child: Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
+                ? Center(
+                    child: Text(_thread != null ? 'This thread is empty.' : 'No messages yet. Say hello.'))
                 : ListView.builder(
                     controller: _scroll,
                     reverse: true,
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     itemCount: messages.length,
-                    itemBuilder: (context, i) => _bubble(messages[messages.length - 1 - i], messages),
+                    itemBuilder: (context, i) {
+                      final m = messages[messages.length - 1 - i];
+                      return KeyedSubtree(
+                          key: _keys.putIfAbsent(m.id, GlobalKey.new), child: _bubble(m, messages));
+                    },
                   ),
           ),
           if (typing.isNotEmpty)
