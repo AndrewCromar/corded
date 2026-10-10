@@ -70,6 +70,19 @@ void main() {
     // A refused command surfaces as an error, not silence.
     await expectLater(bob.command({'cmd': 'create_channel', 'name': 'nope'}), throwsA(isA<CordedError>()));
 
+    // A profile reaches the people you talk to, and names follow it.
+    await bob.command({'cmd': 'set_profile', 'display_name': 'Bobby', 'bio': 'hello', 'birthday': '2004-05-17'});
+    await eventually(
+        () => general(aliceStore)!.members.any((m) => m.displayName == 'Bobby') ? true : null, "bob's profile name");
+    final bobUser = general(aliceStore)!.members.firstWhere((m) => m.username == 'bob').userId;
+    final seen = await aliceStore.profile(bobUser);
+    expect(seen.displayName, 'Bobby');
+    expect(seen.bio, 'hello');
+    expect((await bobStore.profile()).birthday, '2004-05-17');
+    await bob.command({'cmd': 'set_profile', 'display_name': ''});
+    await eventually(
+        () => general(aliceStore)!.members.any((m) => m.displayName == 'bob') ? true : null, 'the name cleared');
+
     // Each sees the other online; do not disturb and invisible show through.
     final bobId = general(aliceStore)!.members.firstWhere((m) => m.username == 'bob').userId;
     final serverId = aliceStore.servers.values.single.id;

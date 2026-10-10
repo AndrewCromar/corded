@@ -122,6 +122,12 @@ class CordedStore {
     }
   }
 
+  /// Someone's profile as this device knows it; yours when [userId] is null.
+  Future<Profile> profile([String? userId]) async {
+    final r = await engine.command({'cmd': 'get_profile', if (userId != null) 'user_id': userId});
+    return Profile.fromJson(((r['profile'] as Map?) ?? const {}).cast<String, dynamic>());
+  }
+
   /// How present someone is on a server: online, away, dnd or offline.
   String presence(int serverId, String userId) => _presence[serverId]?[userId] ?? 'offline';
 

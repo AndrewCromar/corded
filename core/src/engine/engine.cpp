@@ -574,13 +574,28 @@ void Engine::run_command(uint64_t req, const std::string& text) {
         }
         if (name == "get_profile") {
             // Someone's profile as this device knows it; without user_id, our own.
-            if (!cmd.contains("user_id")) {
-                ok(req, {{"profile", own_profile()}});
+            if (!cmd.contains("user_id") && !cmd.contains("username")) {
+                ok(req, {{"profile", own_profile()}, {"username", vault_.username()}});
                 return;
             }
-            Bytes user_id = need_b64(cmd, "user_id", 32);
+            Bytes user_id;
+            if (cmd.contains("user_id")) {
+                user_id = need_b64(cmd, "user_id", 32);
+            } else {
+                // By username: anyone this device shares a chat with.
+                std::string wanted = cmd.at("username").get<std::string>();
+                for (const auto& room : vault_.rooms())
+                    for (const auto& m : room.members)
+                        if (m.username == wanted) user_id = m.user_id;
+                if (user_id.empty()) {
+                    fail(req, "not_found", "you do not share a chat with anyone called " + wanted);
+                    return;
+                }
+            }
             json profile = json::parse(vault_.profile(user_id).value_or("{}"), nullptr, false);
-            ok(req, {{"user_id", b64(user_id)}, {"profile", profile.is_object() ? profile : json::object()}});
+            json answer = {{"user_id", b64(user_id)}, {"profile", profile.is_object() ? profile : json::object()}};
+            if (cmd.contains("username")) answer["username"] = cmd.at("username");
+            ok(req, std::move(answer));
             return;
         }
         if (name == "set_presence") {
@@ -1023,10 +1038,15 @@ void Session::community_command(uint64_t req, const std::string& name, const jso
                 return;
             }
             json members = json::array();
-            for (const auto& m : list->members)
-                if (m)
-                    members.push_back(
-                        member_json({m->user_id, m->username, m->is_admin, m->is_owner, m->roles, m->nickname}));
+            for (const auto& m : list->members) {
+                if (!m) continue;
+                MemberRow row{m->user_id, m->username, m->is_admin, m->is_owner, m->roles, m->nickname, {}};
+                // Their own choice of name, if they have told us one.
+                json profile = json::parse(vault_.profile(m->user_id).value_or("{}"), nullptr, false);
+                if (profile.is_object() && profile.value("display_name", json()).is_string())
+                    row.profile_name = profile["display_name"].get<std::string>();
+                members.push_back(member_json(row));
+            }
             ok(req, {{"members", std::move(members)}});
         });
     } else if (name == "create_role") {

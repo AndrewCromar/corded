@@ -264,8 +264,14 @@ def main():
         alice.expect("(bob)")
         alice.expect("/remove-account <user>")
         alice.type("\t")                 # back to typing
+        # A person's own name wins; the owner's choice shows once they have none.
+        bob.type("/profile bio likes tables\r")
+        bob.type("/nick\r")
         alice.type("/setnick bob Robert\r")
         alice.expect("Robert")
+        alice.type("/profile bob\r")
+        alice.expect("likes tables")
+        alice.type("\r")
         alice.type("/setnick bob\r")
         alice.type("/open dev\r")
         alice.expect("first post in dev")

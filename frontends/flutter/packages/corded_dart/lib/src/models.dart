@@ -49,11 +49,12 @@ class Message {
         roomId = j['room_id'] as String? ?? '',
         type = j['type'] as String? ?? '',
         sender = j['sender_name'] as String? ?? '?',
+        senderId = j['sender_user'] as String? ?? '',
         mine = j['mine'] == true,
         timestamp = (j['origin_ts'] as num?)?.toInt() ?? 0 {
     apply(j);
   }
-  final String id, roomId, type, sender;
+  final String id, roomId, type, sender, senderId;
   final bool mine;
   final int timestamp;
   String body = '';
@@ -143,4 +144,19 @@ class ServerInfo {
       ];
     }
   }
+}
+
+/// What a person says about themselves. Every field is optional. It reaches
+/// the people they share a chat with, encrypted; no server sees it.
+class Profile {
+  Profile.fromJson(Map<String, dynamic> j)
+      : displayName = j['display_name'] as String? ?? '',
+        fullName = j['full_name'] as String? ?? '',
+        birthday = j['birthday'] as String? ?? '',
+        bio = j['bio'] as String? ?? '',
+        links = ((j['links'] as List?) ?? const []).map((e) => '$e').toList();
+  final String displayName, fullName, birthday, bio;
+  final List<String> links;
+
+  bool get isEmpty => displayName.isEmpty && fullName.isEmpty && birthday.isEmpty && bio.isEmpty && links.isEmpty;
 }

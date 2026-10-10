@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import 'common.dart';
+import 'profile.dart';
 import 'scan.dart';
 import 'server.dart';
 
@@ -33,32 +34,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _set(Map<String, dynamic> cmd) async {
     await attempt(context, () => widget.state.engine.command(cmd));
     await _load();
-  }
-
-  Future<void> _displayName() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Display name on this server'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Leave empty to use your username'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Save')),
-        ],
-      ),
-    );
-    if (name == null) return;
-    await _set({
-      'cmd': 'set_nickname',
-      'nickname': name,
-      if (widget.state.server != null) 'server_id': widget.state.server!.id,
-    });
   }
 
   static const _statuses = {
@@ -283,9 +258,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         ListTile(
           leading: const Icon(Icons.badge_outlined),
-          title: const Text('Display name'),
-          subtitle: Text(server == null ? 'Join a server first' : 'How you appear on ${server.name}'),
-          onTap: server == null ? null : _displayName,
+          title: const Text('Your profile'),
+          subtitle: const Text('Display name, birthday, links and more. Only people you chat with see it'),
+          onTap: () => Navigator.push(
+              context, MaterialPageRoute(builder: (_) => EditProfileScreen(state: widget.state))),
         ),
         SwitchListTile(
           secondary: const Icon(Icons.done_all),

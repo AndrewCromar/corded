@@ -472,6 +472,24 @@ private:
             show_info_ = true;
             return;
         }
+        if (ok && ev["data"].contains("profile")) {
+            const json& p = ev["data"]["profile"];
+            std::string who = ev["data"].value("username", "");
+            Elements rows = {text("Profile" + (who.empty() ? std::string() : " of " + who)) | bold};
+            auto line = [&](const char* label, const std::string& value) {
+                if (!value.empty()) rows.push_back(hbox({text(std::string(label) + ": ") | dim, text(value)}));
+            };
+            line("display name", p.value("display_name", ""));
+            line("full name", p.value("full_name", ""));
+            line("birthday", p.value("birthday", ""));
+            line("about", p.value("bio", ""));
+            for (const auto& link : p.value("links", json::array())) line("link", link.get<std::string>());
+            if (rows.size() == 1) rows.push_back(text("Nothing here yet.") | dim);
+            rows.push_back(text("Sent only to people who share a chat with its owner; no server sees it.") | dim);
+            info_box_ = vbox(std::move(rows)) | border;
+            show_info_ = true;
+            return;
+        }
         if (ok && ev["data"].contains("receipts")) {
             Room& room = room_for(ev["data"].value("room_id", ""));
             for (const auto& r : ev["data"]["receipts"])
@@ -1008,9 +1026,24 @@ private:
                 if (!arg.empty()) c["max_uses"] = std::atoi(arg.c_str());
                 command(c);
             } else if (cmd == "/nick") {
-                // Your own display name on this server; no name clears it.
-                command({{"cmd", "set_nickname"}, {"nickname", arg}});
+                // Your display name. It lives in your profile, which only the
+                // people you chat with receive; any name the server held is cleared.
+                command({{"cmd", "set_profile"}, {"display_name", arg}});
+                command({{"cmd", "set_nickname"}, {"nickname", ""}});
+                notice_ = arg.empty() ? "display name cleared" : "you now appear as " + arg;
                 if (members_selected()) command({{"cmd", "member_list"}});
+            } else if (cmd == "/profile") {
+                // /profile            yours        /profile <user>      theirs
+                // /profile fullname|birthday|bio|link <text>   change yours ("" clears)
+                auto sp = arg.find(' ');
+                std::string field = arg.substr(0, sp), value = sp == std::string::npos ? "" : arg.substr(sp + 1);
+                static const std::map<std::string, std::string> fields = {
+                    {"fullname", "full_name"}, {"birthday", "birthday"}, {"bio", "bio"}, {"name", "display_name"}};
+                if (arg.empty()) command({{"cmd", "get_profile"}});
+                else if (fields.count(field)) command({{"cmd", "set_profile"}, {fields.at(field), value}});
+                else if (field == "link")
+                    command({{"cmd", "set_profile"}, {"links", value.empty() ? json::array() : json::array({value})}});
+                else command({{"cmd", "get_profile"}, {"username", arg}});
             } else if (cmd == "/setnick" && !arg.empty()) {
                 auto sp = arg.find(' ');
                 command({{"cmd", "set_nickname"}, {"username", arg.substr(0, sp)},
@@ -1216,7 +1249,8 @@ private:
                               text("/once 30s <text>   a message that disappears        /disappear 1h|off  for the whole chat"),
                               text("/connect host:port connect to a server"),
                               text("/exit (or /quit)   leave        Tab: switch between chats and typing"),
-                              text("/nick <name>       set your display name on this server"),
+                              text("/nick <name>       set your display name (in your profile; servers do not see it)"),
+                              text("/profile [user]    view a profile     /profile fullname|birthday|bio|link <text>  edit yours"),
                               text("/username <name>   pick another name if yours was taken (before you have joined)"),
                               text("/recovery-key      show the key for setting up another device as you"),
                               text("/receipts on|off   whether others see what you have read"),
@@ -1282,7 +1316,7 @@ private:
         Elements rows;
         rows.push_back(text("You") | bold | color(Color::Green));
         rows.push_back(line("username", client_settings_.value("username", username_), "fixed once a server knows you"));
-        rows.push_back(line("display name", "set per server", "/nick <name>"));
+        rows.push_back(line("display name", "in your profile", "/nick <name>   /profile"));
         rows.push_back(line("share earlier messages with newcomers", onoff(client_settings_.value("share_history", true)),
                             "/share-history on|off"));
         rows.push_back(line("tell others what you have read", onoff(client_settings_.value("send_read_receipts", true)),

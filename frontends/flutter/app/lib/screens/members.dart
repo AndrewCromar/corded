@@ -5,6 +5,7 @@ import '../app_state.dart';
 import 'chat.dart';
 import 'common.dart';
 import 'presence.dart';
+import 'profile.dart';
 
 /// Everyone on the server. Those with the permission can manage them here.
 class MembersScreen extends StatefulWidget {
@@ -172,6 +173,13 @@ class _MembersScreenState extends State<MembersScreen> {
                 ...m.roles,
               ].join(' · ')),
             ),
+            item(Icons.account_circle_outlined, 'View profile', () async {
+              await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          ProfileScreen(state: widget.state, userId: m.userId, username: m.username)));
+            }),
             if (!m.me) item(Icons.chat_outlined, 'Message', () => _message(m)),
             if (m.me || _server.can('manage_nicknames'))
               item(Icons.badge_outlined, 'Change display name', () => _rename(m)),

@@ -8,6 +8,7 @@ import '../app_state.dart';
 import 'common.dart';
 import 'group.dart';
 import 'linked_text.dart';
+import 'profile.dart';
 import 'swipe_to_reply.dart';
 
 /// One conversation: its messages and the box for writing a new one. With
@@ -263,6 +264,17 @@ class _ChatScreenState extends State<ChatScreen> {
     if (roomId == _room && _thread == null) return;
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => ChatScreen(state: widget.state, roomId: roomId)));
+  }
+
+  void _showProfile(Message m) {
+    final room = _store.rooms[_room];
+    final member = room?.members.where((x) => x.userId == m.senderId).firstOrNull;
+    if (member == null) return;
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) =>
+                ProfileScreen(state: widget.state, userId: member.userId, username: member.username)));
   }
 
   final _keys = <String, GlobalKey>{};
@@ -560,9 +572,11 @@ class _ChatScreenState extends State<ChatScreen> {
                       ]),
                     ),
                   if (!m.mine)
-                    Text(m.sender,
-                        style: theme.textTheme.labelMedium
-                            ?.copyWith(color: scheme.primary, fontWeight: FontWeight.bold)),
+                    GestureDetector(
+                        onTap: () => _showProfile(m),
+                        child: Text(m.sender,
+                            style: theme.textTheme.labelMedium
+                                ?.copyWith(color: scheme.primary, fontWeight: FontWeight.bold))),
                   if (m.replyTo != null)
                     // Tap the quoted line to go to the message it quotes.
                     GestureDetector(
