@@ -340,7 +340,7 @@ def personalities_text():
         "People change this by simply telling you (\"switch to X\", \"here is a new one: ...\", \"from now on "
         "be ...\", \"remember that ...\", \"make yourself a new profile picture of ...\"); it is then done for you "
         "and you are told. There are commands too: `!persona` "
-        "lists them, `!persona use <name>` switches, `!persona new <name>: <who it is>` makes one, "
+        "lists them, `!persona use <name>` switches, `!persona new <name>: <who it is>` makes one and switches to it, "
         "`!persona show` shows the character and memories of the one you are, `!persona delete <name>` removes "
         "one, `!persona forget` empties the memories of the one you are. Switching, making and changing them is "
         + ("open to everyone here." if bot.store.get("personas_open") else
@@ -687,6 +687,9 @@ def reshape(change, message):
     character = str(change.get("character") or "").strip()
     if do == "switch":
         which = find_persona(name)
+        others = [w for w in personas() if w != worn()]
+        if not which and not name and len(others) == 1:
+            which = others[0]   # "switch", with only one other to switch to
         if not which:
             return False, f"(I have no personality called {name or 'that'}. I have: {', '.join(personas().values())}.)"
         if which == worn():
@@ -702,7 +705,8 @@ def reshape(change, message):
         write_file(persona_file(which, "soul.md"), character[:4000])
         write_file(persona_file(which, "name.txt"), name[:40])
         note(f"{message.sender}: made the personality {which}")
-        return True, f"(Made: {name}. Say the word and I switch to it.)"
+        wear(which)   # whoever describes a new one wants to meet it
+        return True, f"(Made: {name}, and that is who I am now.)"
     if do == "change" and character:
         path = persona_file(worn(), "soul.md")
         soul = read_file(path)
@@ -728,8 +732,11 @@ def persona(message, words):
         kept = read_file(persona_file(which, "memory.md")) or "Nothing yet."
         return f"## {known[which]}\n{read_file(persona_file(which, 'soul.md'))}\n\n**Remembers**\n{kept}"[:3500]
     if what not in ("use", "new", "delete", "forget", "open"):
-        return "Say `!persona`, `!persona use NAME`, `!persona new NAME: who it is`, `!persona show`, " \
-               "`!persona delete NAME`, `!persona forget` or `!persona open on`."
+        if find_persona(" ".join(words)):   # `!persona NAME` is taken as `!persona use NAME`
+            what, rest = "use", " ".join(words)
+        else:
+            return "Say `!persona`, `!persona use NAME`, `!persona new NAME: who it is`, `!persona show`, " \
+                   "`!persona delete NAME`, `!persona forget` or `!persona open on`."
     if what == "open":
         if not bot.may(message.sender_id):
             return "Only the owner, or someone whose role has Manage bots, can change that."
@@ -742,8 +749,17 @@ def persona(message, words):
     if what == "use":
         return reshape({"do": "switch", "name": rest}, message)[1].strip("()")
     if what == "new":
-        name, _, character = rest.partition(":")
-        return reshape({"do": "create", "name": name.strip(), "character": character.strip()}, message)[1].strip("()")
+        # `NAME: who it is`, or `NAME who it is`, or only a name, from which the rest is written.
+        name, colon, character = rest.partition(":")
+        if not colon:
+            name, _, character = rest.partition(" ")
+        name, character = name.strip(), character.strip()
+        if name and not character:
+            made = invent(name, rest)
+            if not made:
+                return f"Say who {name} is, like `!persona new {name}: a grumpy old sailor`."
+            character = made[1]
+        return reshape({"do": "create", "name": name, "character": character}, message)[1].strip("()")
     if what == "forget":
         write_file(persona_file(now, "memory.md"), "")
         return f"{known[now]} remembers nothing now."

@@ -281,13 +281,11 @@ def main():
         assert "was not done" in system() and "can switch or change my personalities" in system()
         alice.say("#general", "@sage here is a new personality for you: a sailor called Captain")
         time.sleep(3)
-        assert "Made: Captain" in system()
+        assert "Made: Captain, and that is who I am now" in system() and "You are Captain, an old sailor" in system(), \
+            "a new one is put on at once and confirms itself"
         alice.say("#general", "@sage which personalities do you have")
         time.sleep(3)
-        assert "exactly these and no others: Captain, sage (the one you are now)" in system(), system().split("# Just now")[-1][:300]
-        alice.say("#general", "@sage switch to the captain")
-        time.sleep(3)
-        assert "Now: Captain" in system() and "You are Captain, an old sailor" in system(), "it confirms the switch as the new one"
+        assert "exactly these and no others: Captain (the one you are now), sage" in system()
         for _ in range(50):
             if shown_name() == "Captain":
                 break
@@ -314,8 +312,8 @@ def main():
         wait_for("the list", alice_heard, lambda m: "**Captain** (now)" in m.body and "**sage**" in m.body)
         alice.say("#general", "!persona new Owl: You are Owl. You speak rarely and wisely.")
         wait_for("one made by command", alice_heard, lambda m: m.body.startswith("Made: Owl"))
-        alice.say("#general", "!persona use sage")
-        wait_for("switching back", alice_heard, lambda m: m.body == "Now: sage.")
+        alice.say("#general", "!persona sage")
+        wait_for("switching back, by its name alone", alice_heard, lambda m: m.body == "Now: sage.")
         alice.say("#general", "!persona delete owl")
         wait_for("one removed", alice_heard, lambda m: m.body == "Removed: Owl.")
         alice.say("#general", "@sage back to you")

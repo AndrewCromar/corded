@@ -91,6 +91,7 @@ class Unit:
         self.state = "stopped"                         # stopped, starting, running, crashed, outside
         self.started = 0.0
         self.restarts = 0
+        self.quick = 0                                 # stops in a row soon after starting
         self.last_exit = None
         self.outside_pid = None
         self.tail = []
@@ -303,8 +304,10 @@ class Host:
                 elif proc and unit.wanted and unit.state in ("running", "starting"):
                     unit.last_exit = f"stopped by itself (code {proc.returncode}) at {stamp()}"
                     unit.state = "crashed"
+                    # One that ran a good while before stopping starts the count of quick failures afresh.
+                    unit.quick = 0 if time.time() - unit.started > 60 else unit.quick + 1
                     unit.restarts += 1
-                    wait = min(60, 2 * 2 ** min(unit.restarts - 1, 5))
+                    wait = min(60, 2 * 2 ** min(unit.quick, 5))
                     backoff[unit.name] = time.time() + wait
                     say(f"{unit.name}: {unit.last_exit}; starting it again in {wait}s")
                 elif unit.state == "crashed" and unit.wanted and time.time() >= backoff.get(unit.name, 0):
