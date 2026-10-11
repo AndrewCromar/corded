@@ -1,0 +1,28 @@
+# Starts the Corded host (the server and everything around it) when the
+# machine starts, and starts it again if it stops.
+#
+#   1. Change the two paths below.
+#   2. cp corded-host.service.example ~/.config/systemd/user/corded-host.service
+#   3. systemctl --user daemon-reload
+#   4. systemctl --user enable --now corded-host
+#   5. loginctl enable-linger "$USER"      (so it runs while you are logged out)
+#
+# The dashboard's address, with its key, is in what it prints:
+#   journalctl --user -u corded-host -n 20
+
+[Unit]
+Description=Corded host: server, model programs and bots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/you/corded/host
+ExecStart=/usr/bin/python3 -u corded_host.py --config /home/you/corded/host/host.json
+Restart=always
+RestartSec=10
+# The host stops what it started, bots first; give it time to.
+TimeoutStopSec=60
+KillMode=mixed
+
+[Install]
+WantedBy=default.target

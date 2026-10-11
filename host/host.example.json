@@ -1,0 +1,63 @@
+{
+  "port": 7460,
+  "logs": "~/corded-host/logs",
+  "server_data": "~/corded/server-data",
+  "units": [
+    {
+      "name": "server",
+      "kind": "server",
+      "about": "The Corded server",
+      "port": 7443,
+      "cmd": ["~/corded/cordedd", "--port", "7443", "--data", "~/corded/server-data"]
+    },
+    {
+      "name": "ollama",
+      "kind": "model",
+      "about": "Runs the chat model for the AI bot",
+      "port": 11434,
+      "cmd": ["ollama", "serve"],
+      "env": {"OLLAMA_HOST": "127.0.0.1:11434"}
+    },
+    {
+      "name": "picture-program",
+      "kind": "model",
+      "about": "Draws for the image bot (Stable Diffusion)",
+      "port": 7860,
+      "memory_max": "6G",
+      "cwd": "~/corded/bots",
+      "cmd": ["~/corded/sd-env/bin/python", "-u", "image_server.py"],
+      "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    },
+    {
+      "name": "sage",
+      "kind": "bot",
+      "about": "The AI bot: answers direct chats, mentions and its channels",
+      "after": ["server", "ollama"],
+      "vault": "~/corded-bots/sage",
+      "cwd": "~/corded/bots",
+      "env": {"CORDED_CLI": "~/corded/corded-cli"},
+      "cmd": ["python3", "-u", "ai_bot.py", "127.0.0.1:7443", "--soul", "soul.example.txt", "--username", "sage",
+              "--display-name", "Sage", "--vault", "~/corded-bots/sage"]
+    },
+    {
+      "name": "pictures",
+      "kind": "bot",
+      "about": "The image bot: !imagine a description",
+      "after": ["server", "picture-program"],
+      "vault": "~/corded-bots/pictures",
+      "cwd": "~/corded/bots",
+      "env": {"CORDED_CLI": "~/corded/corded-cli"},
+      "cmd": ["python3", "-u", "image_bot.py", "127.0.0.1:7443", "--vault", "~/corded-bots/pictures"]
+    },
+    {
+      "name": "birthdays",
+      "kind": "bot",
+      "about": "The birthday bot",
+      "after": ["server"],
+      "vault": "~/corded-bots/birthdays",
+      "cwd": "~/corded/bots",
+      "env": {"CORDED_CLI": "~/corded/corded-cli"},
+      "cmd": ["python3", "-u", "birthday_bot.py", "127.0.0.1:7443", "--vault", "~/corded-bots/birthdays"]
+    }
+  ]
+}
