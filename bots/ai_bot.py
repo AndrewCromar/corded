@@ -139,6 +139,35 @@ def standing_text():
     return soul + ("\n\n" + context if context else "")
 
 
+def about_itself():
+    """What the bot can tell people about itself: when it answers, its
+    commands and how it is set up right now. Given to the model with every
+    request, so that asked "how do I make you answer here?" it knows."""
+    chosen = [bot.rooms.get(r, {}).get("title", "") for r in bot.store.get("channels", [])]
+    return (
+        "# About yourself\n\n"
+        "If someone asks what you can do, how you work or how to set you up, answer from this and nothing else. "
+        "Give the exact command to type. Do not invent commands or settings.\n\n"
+        f"- You answer: every direct chat; any message that mentions @{args.username}; a reply to one of your "
+        f"messages; the next message of the person you just answered (within {args.follow_up} seconds); a thread "
+        "you have already spoken in; and every message in the channels chosen for you.\n"
+        f"- Channels chosen for you right now: {', '.join(c for c in chosen if c) or 'none'}.\n"
+        "- `!ai here`, typed in a channel: you will answer every message there. Only the server's owner, or "
+        "someone whose role has the Manage bots permission, can do it. Roles are edited in the app under "
+        "Settings, Manage this server, Roles.\n"
+        "- `!ai leave`, typed in a channel: you go back to answering only when addressed there.\n"
+        "- `!ai where`: lists the channels chosen for you.\n"
+        "- `!forget`: you forget the chat or thread it is typed in and start fresh.\n"
+        "- `!model`: says which model you run on and how long your last answer took.\n"
+        "- `!help`: lists these commands.\n"
+        f"- You are the language model {args.model}, running on the same machine as this chat server. What you "
+        "read is not sent anywhere else. You cannot browse the web, open links, see pictures or files, set "
+        "reminders or remember people between chats.\n"
+        f"- You are given the last {args.memory} messages of the chat or thread you are answering in, no more.\n"
+        "- Your name, character and manners come from two text files the person running you can edit. Things "
+        "like which model you use are set where you are started, not from the chat.")
+
+
 def ask_model(message, lines):
     room = bot.rooms.get(message.room_id, {})
     if message.direct:
@@ -155,7 +184,7 @@ def ask_model(message, lines):
         '{"action": "message" | "reply" | "thread" | "react", "to": <number of the message it attaches to>, '
         '"text": "<your words, empty for react>", "emoji": "<one emoji, only for react>"}\n'
         f'"to" may be left out; it then means message [{number}].')
-    messages = [{"role": "system", "content": standing_text() + "\n\n" + situation}]
+    messages = [{"role": "system", "content": standing_text() + "\n\n" + about_itself() + "\n\n" + situation}]
     for index, line in enumerate(lines, 1):
         if line["mine"]:
             messages.append({"role": "assistant",

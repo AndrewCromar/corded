@@ -112,6 +112,7 @@ def main():
         assert len(asked) == 1, "it answered something it was not asked"
         system = asked[0]["messages"][0]["content"]
         assert "a bot in a Corded chat" in system and '"action"' in system and "the channel #general" in system
+        assert "`!ai here`" in system and "Channels chosen for you right now: none" in system, "it is not told about itself"
         assert asked[0]["messages"][-1]["content"].endswith("alice: @sage hello there")
         print("ok  mention: answered, with the chat's rules and the form to answer in sent along")
 
@@ -172,6 +173,7 @@ def main():
         picked = wait_for("a reply", alice_heard, lambda m: m.body == "The first.")
         assert picked.reply_to, "the model asked for a reply to a message"
         assert len(asked) == requests + 2
+        assert "Channels chosen for you right now: #general" in asked[-1]["messages"][0]["content"]
         alice.say("#general", "!ai where")
         wait_for("the list", alice_heard, lambda m: "#general" in m.body and "every message in" in m.body)
         print("ok  channels: only a manager can choose one; there every message is answered, a reply attached to its message")
