@@ -57,3 +57,4 @@ leak-*
 vault.hdr
 __pycache__/
 *.pyc
+/host/host.json
