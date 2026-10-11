@@ -394,7 +394,11 @@ def hear(message):
                    and time.time() - talking[1] < args.follow_up)
     # Called by name, written to directly or answered: it must answer. In a
     # channel chosen for it, or carrying on, it may, and decides for itself.
-    alone = len(bot.rooms.get(message.room_id, {}).get("members", [])) <= 2
+    # Alone with someone: the only other member, or nobody else has said
+    # anything in the last few messages. Then what they say is for the bot.
+    lately = [line for line in before[-6:] if not line["mine"]]
+    alone = (len(bot.rooms.get(message.room_id, {}).get("members", [])) <= 2
+             or all(line["who"] == message.sender_name for line in lately))
     must = message.direct or message.mentions_me or answering or ((chosen or following) and alone)
     if not (must or chosen or following or carrying_on):
         return
