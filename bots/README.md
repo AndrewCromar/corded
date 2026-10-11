@@ -32,7 +32,7 @@ address.
 |---|---|---|
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
-| `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Its character comes from a "soul" text file; see `soul.example.txt`. Answers when mentioned or in a direct chat. | By the test suite with a stand-in model; not yet with a real one |
+| `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Answers direct chats, mentions and the channels chosen for it; picks between a message, a reply, a thread and a reaction. | By its own test with a stand-in model, with three real models on a test server, and tried on a real server |
 | `video_bot.py` | Mention it with a link to a video and it posts the file in a thread under the link. Fetched by the machine it runs on. | By the test suite with a stand-in for the downloader, with real links on a test server, and tried on a real server |
 | `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite, and tried on a real server |
 
@@ -40,7 +40,7 @@ address.
 python3 webhook_bot.py 127.0.0.1:7443 '#development' --secret some-long-word
 curl -X POST localhost:8765/say -H 'X-Corded-Secret: some-long-word' -d '{"text":"the build passed"}'
 
-python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --model llama3.2
+python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --model qwen2.5:7b
 
 python3 birthday_bot.py 127.0.0.1:7443
 
@@ -96,6 +96,63 @@ the machine it runs on, and are sent nowhere.
 
 It shows as "Birthday Bot" with a cake for a picture (`birthday_bot.png`,
 drawn in `birthday_bot.svg`); `--display-name` and `--picture` change them.
+
+### The AI bot
+
+A member that a language model speaks through. The model runs on the same
+machine as the bot, behind the chat API that Ollama, llama.cpp's server and LM
+Studio all offer; nothing is sent anywhere else unless `--api` says so, and
+the bot prints a warning at start if it does.
+
+```sh
+ollama serve &                 # or any other local model server
+ollama pull qwen2.5:7b
+python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --username sage
+```
+
+**When it answers.** Always in a direct chat with it. Always when it is
+mentioned (`@sage`). In a thread it has already spoken in, without a new
+mention. And in every message of the channels chosen for it: the owner, or
+anyone whose role has **Manage bots**, says `!ai here` in a channel to choose
+it and `!ai leave` to undo that; `!ai where` lists them. One person gets at
+most `--per-minute` answers a minute outside a direct chat (8 unless changed).
+
+**How it answers.** The model decides each time, and the bot does what it
+decided: a plain message, a reply attached to one message, a thread under
+one, or only an emoji under it. Answers are short by instruction; a long one
+goes into a thread and is cut at paragraph ends if it would not fit one
+message. It shows as typing while the model works, and questions are answered
+one at a time, so two people asking at once do not load the graphics card
+twice.
+
+**Two files shape it**, both read again before every answer, so an edit shows
+in the next one:
+
+- `--soul FILE`: who it is. Its name, how it talks, what it will not do.
+  `soul.example.txt` is a start. Without one it is a plain, friendly member.
+- `--context FILE`: where it is and how the place works. `chat.md` beside the
+  bot is used unless you give another: that this is a group chat, that
+  answers are short, and when a reply, a thread or a reaction is the right
+  form. Change the bot's manners there.
+
+**What it keeps in mind.** The last `--memory` messages (30) of each chat, and
+of each thread apart from its channel. Nothing extra is stored: after a
+restart it reads them back from its own vault. `!forget` makes it start fresh
+in the chat or thread it is said in. `!model` says which model it thinks with
+and how long the last answer took.
+
+**Which model.** Tried on one machine (RTX 4060, 8 GB) with the same scripted
+chat, 2026-10-10:
+
+| Model | Size on the card | An answer takes | How it did |
+|---|---|---|---|
+| `qwen2.5:7b` | about 5.4 GB | 0.3 to 1.5 s (the first after loading: 10 to 60 s) | Right answers, short, and the right form nearly every time: a reaction for thanks and good night, a reply to the older question it was asked about, a thread for the long one. The default |
+| `llama3.2:3b` | about 3 GB | 0.2 to 1.4 s | Forms mostly right, but said it did not know the capital of Australia |
+| `gemma3:4b` | about 4 GB | 0.3 to 1 s | Forms right (and a sleepy face for good night), but refused or fumbled easy questions |
+
+A model this size gets facts wrong with a straight face now and then; the
+context file tells it to say when it does not know, which helps and does not
+cure it.
 
 ### The video bot
 
