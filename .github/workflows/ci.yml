@@ -40,6 +40,14 @@ jobs:
       - name: Test
         run: ctest --preset dev
 
+      # The bots live in repositories of their own and are written against
+      # corded-cli. Their kit's test is run here against this build, so that a
+      # change to the core that breaks every bot is seen before it is released.
+      - name: The bot kit still works with this build
+        run: |
+          git clone --depth 1 https://github.com/opencorded/bot-kit ../bot-kit
+          python3 -u ../bot-kit/tests/kit_smoke.py "$PWD/build/dev/bin"
+
       - name: Check that libcorded exports only its C interface
         run: |
           extra=$(nm -D --defined-only build/dev/lib/libcorded.so | grep -v -E ' T corded_| A CORDED_0' || true)

@@ -64,7 +64,6 @@ jobs:
           cmake --install build/dev --prefix "dist/${name}" --strip
           cp packaging/README.txt "dist/${name}/README.txt"
           cp packaging/install-server.sh "dist/${name}/install-server.sh"
-          mkdir -p "dist/${name}/bots" && cp bots/*.py bots/*.txt bots/README.md "dist/${name}/bots/"
           cp docs/operator/hosting-at-home.md "dist/${name}/HOSTING-AT-HOME.md"
           # Nothing beyond the system C library may be needed at run time.
           for program in cordedd corded-tui corded-cli; do
@@ -290,8 +289,6 @@ jobs:
           Copy-Item build\windows\bin\cordedd.exe, build\windows\bin\corded-tui.exe, build\windows\bin\corded-cli.exe, build\windows\bin\corded.dll "dist\$name\"
           Copy-Item packaging\README-windows.txt "dist\$name\README.txt"
           Copy-Item LICENSE "dist\$name\"
-          New-Item -ItemType Directory -Force "dist\$name\bots" | Out-Null
-          Copy-Item bots\*.py, bots\*.txt, bots\README.md "dist\$name\bots\"
           Compress-Archive -Path "dist\$name" -DestinationPath "$name.zip"
           "name=$name" >> $env:GITHUB_OUTPUT
 
