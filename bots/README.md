@@ -33,6 +33,7 @@ address.
 | `command_bot.py` | Answers `!` commands. The place to start your own. | By the test suite |
 | `webhook_bot.py` | Posts what other programs send it: any text to `/say`, GitHub events to `/github`. Listens on this machine only. | By the test suite |
 | `ai_bot.py` | A member run by a language model on your own machine (Ollama, llama.cpp, LM Studio). Answers direct chats, mentions and the channels chosen for it; picks between a message, a reply, a thread and a reaction. | By its own test with a stand-in model, with three real models on a test server, and tried on a real server |
+| `image_bot.py` | Makes a picture from a description with Stable Diffusion on your own machine (`image_server.py` beside it draws). | By its own test with a stand-in picture program, with real pictures on one machine, and running on a real server |
 | `video_bot.py` | Mention it with a link to a video and it posts the file in a thread under the link. Fetched by the machine it runs on. | By the test suite with a stand-in for the downloader, with real links on a test server, and tried on a real server |
 | `birthday_bot.py` | Asks each new member for their birthday in a direct chat, and on the day wishes them there and in a channel. | By the test suite, and tried on a real server |
 
@@ -158,6 +159,65 @@ chat, 2026-10-10:
 A model this size gets facts wrong with a straight face now and then; the
 context file tells it to say when it does not know, which helps and does not
 cure it.
+
+### The image bot
+
+`!imagine a lighthouse in a storm, oil painting` and it replies with the
+picture. So does a mention with a description after it, and anything written
+to it in a direct chat. The caption gives the words and the seed, so the same
+picture can be asked for again.
+
+```sh
+# once: a Python environment for the picture program (about 13 GB with the model)
+uv venv --python 3.12 sd-env
+uv pip install --python sd-env/bin/python torch --index-url https://download.pytorch.org/whl/cu124
+uv pip install --python sd-env/bin/python diffusers transformers accelerate safetensors
+
+sd-env/bin/python image_server.py &      # draws; downloads the model the first time
+python3 image_bot.py 127.0.0.1:7443
+```
+
+- Options, at the end of a description: `--wide`, `--tall`, `--square`;
+  `--seed 1234`; `--steps 30`; `--no things to keep out`.
+- `!again` makes the last description of the chat once more with a new seed.
+  `!queue` shows the line; `!cancel` takes your own request out of it. One
+  picture is made at a time; each person gets five in ten minutes.
+- `!images here` (or `!images here #name`), from the owner or anyone with
+  **Manage bots**, chooses a channel; once one is chosen it works only in
+  chosen channels and direct chats. `!images leave` and `!images where` go
+  with it.
+- Adult pictures are refused everywhere until `!images adult nsfw`, which
+  allows them in channels marked NSFW only; `!images adult off` goes back.
+  The refusal goes by the words asked for. A picture model can still produce
+  what nobody asked for, which is one more reason to choose its channels.
+
+**The picture program.** `image_server.py` is the one file here that needs
+more than the standard library: PyTorch and `diffusers`. It listens on this
+machine only and answers the request the AUTOMATIC1111 web UI made common
+(`/sdapi/v1/txt2img`), so `image_bot.py --api` can as well point at Forge or
+SD.Next. The default model is Stable Diffusion XL.
+
+**One graphics card, two models.** On an 8 GB card the picture model and the
+chatbot's model do not fit together. The picture program asks Ollama to set
+its model down before it loads, and unloads itself 45 seconds after the last
+picture (`--idle`). So the chatbot's first answer right after pictures is
+slow, and the first picture after a pause takes about ten seconds longer.
+
+Measured on an RTX 4060 with 8 GB, 2026-10-10: about 16 seconds a picture at
+1024 pixels and 25 steps; 7.5 GB of the card while drawing; about 4 GB of
+ordinary memory. A first way of loading the model, which kept it in ordinary
+memory between pictures, ran a 16 GB machine out of memory on the second
+picture; the program now keeps the large part on the graphics card only.
+
+### Turning a bot off and on
+
+Every bot made with the kit answers `!name off` and `!name on`, where name is
+its username (`!sage off`, `!pictures on`), from the owner or anyone with
+Manage bots. Off, it stays connected but shows as offline, hears nothing
+except the command that wakes it, and its timers rest; the AI bot also has
+its model unloaded from the graphics card. `!name status` says which it is.
+The choice is kept across restarts. In your own bot, `@bot.on_power` is
+called with True or False when it is switched.
 
 ### The video bot
 
