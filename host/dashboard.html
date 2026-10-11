@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corded host</title>
+<style>
+  :root {
+    --page: #f4f2ee; --panel: #ffffff; --line: #e2ded6; --ink: #1d1c1a; --soft: #6b675f;
+    --accent: #3a5bd9; --good: #1f9d6b; --warn: #c98a12; --bad: #c8473a; --idle: #a09b92;
+    --track: #ebe7df; --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #131417; --panel: #1b1d22; --line: #2a2d34; --ink: #ecebe8; --soft: #9a9ca3;
+      --accent: #8fa6ff; --good: #4ecb97; --warn: #e3b04b; --bad: #f0796c; --idle: #5e616a; --track: #262930;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 6px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  header .when { color: var(--soft); font-size: 13px; }
+  header .lost { color: var(--bad); font-weight: 600; }
+  main { padding: 10px 24px 40px; max-width: 1180px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--soft);
+       margin: 22px 0 8px; font-weight: 600; }
+  .meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .meter, .unit { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .meter .label { display: flex; justify-content: space-between; font-size: 13px; color: var(--soft); }
+  .meter .value { font-size: 20px; font-weight: 600; margin: 2px 0 8px; font-variant-numeric: tabular-nums; }
+  .meter .value small { font-size: 13px; font-weight: 400; color: var(--soft); }
+  .bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+  .bar i.high { background: var(--warn); } .bar i.full { background: var(--bad); }
+  .meter .note { font-size: 12px; color: var(--soft); margin-top: 7px; min-height: 17px; }
+  .units { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; }
+  .unit .top { display: flex; align-items: center; gap: 10px; }
+  .light { width: 10px; height: 10px; border-radius: 50%; background: var(--idle); flex: none; }
+  .light.running { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+  .light.starting { background: var(--warn); } .light.crashed { background: var(--bad); }
+  .light.outside { background: var(--accent); } .light.off { background: var(--idle); outline: 2px solid var(--good); outline-offset: 1px; }
+  .unit .name { font-weight: 600; font-size: 16px; }
+  .unit .state { margin-left: auto; font-size: 13px; color: var(--soft); text-align: right; }
+  .unit .about { color: var(--soft); font-size: 13px; margin: 4px 0 0 20px; }
+  .facts { display: flex; gap: 16px; margin: 10px 0 0 20px; font-size: 13px; color: var(--soft);
+           font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .facts b { color: var(--ink); font-weight: 600; }
+  .tail { margin: 10px 0 0; padding: 8px 10px; background: var(--page); border-radius: 8px; font: 12px/1.5 var(--mono);
+          color: var(--soft); white-space: pre-wrap; word-break: break-word; max-height: 92px; overflow: hidden; cursor: pointer; }
+  .tail:empty::before { content: "Nothing printed yet."; }
+  .buttons { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.stop:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+  button.soft { margin-left: auto; }
+  footer { color: var(--soft); font-size: 12px; margin-top: 26px; }
+  footer code { font-family: var(--mono); }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
+           width: min(960px, 94vw); padding: 0; }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog .bar2 { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); gap: 10px; }
+  dialog .bar2 b { flex: 1; }
+  dialog pre { margin: 0; padding: 14px 16px; font: 12px/1.55 var(--mono); max-height: 70vh; overflow: auto;
+               white-space: pre-wrap; word-break: break-word; }
+  #said { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--page);
+          padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #said.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Corded host</h1>
+  <span class="when" id="when">connecting…</span>
+</header>
+<main>
+  <h2>This machine</h2>
+  <div class="meters" id="meters"></div>
+  <div id="groups"></div>
+  <footer>What runs here is listed in <code id="config"></code>; it is read when the host starts, so after changing it,
+    stop the host (Ctrl+C) and start it again. Turned <b>off</b>, a bot stays connected but shows offline and does
+    nothing, the same as <code>!name off</code> in the chat; <b>Stop</b> ends its program.</footer>
+</main>
+<dialog id="log"><div class="bar2"><b id="logname"></b><button onclick="showLog(logOf)">Refresh</button>
+  <button onclick="document.getElementById('log').close()">Close</button></div><pre id="logtext"></pre></dialog>
+<div id="said"></div>
+<script>
+const key = new URLSearchParams(location.search).get('key') || '';
+const kinds = [['server', 'Server'], ['model', 'Model programs'], ['bot', 'Bots'], ['other', 'Other']];
+const words = { running: 'running', starting: 'starting', stopped: 'stopped', crashed: 'stopped by itself', outside: 'running, started outside the host' };
+let logOf = null;
+
+const size = b => b >= 2 ** 30 ? (b / 2 ** 30).toFixed(1) + ' GB' : Math.round(b / 2 ** 20) + ' MB';
+const lasted = s => s >= 86400 ? Math.floor(s / 86400) + ' d ' + Math.floor(s % 86400 / 3600) + ' h'
+  : s >= 3600 ? Math.floor(s / 3600) + ' h ' + Math.floor(s % 3600 / 60) + ' min'
+  : s >= 60 ? Math.floor(s / 60) + ' min' : s + ' s';
+const safe = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function meter(label, value, small, share, note) {
+  const level = share > 0.92 ? 'full' : share > 0.78 ? 'high' : '';
+  return `<div class="meter"><div class="label"><span>${label}</span></div>
+    <div class="value">${value} <small>${small}</small></div>
+    <div class="bar"><i class="${level}" style="width:${Math.min(100, share * 100).toFixed(1)}%"></i></div>
+    <div class="note">${note || ''}</div></div>`;
+}
+
+function draw(state) {
+  const m = state.machine || {};
+  let meters = '';
+  if (m.card) meters += meter('Graphics card', size(m.card.used), 'of ' + size(m.card.total), m.card.used / m.card.total,
+    (m.card.holders.length ? m.card.holders.map(h => safe(h.who) + ' ' + size(h.bytes)).join(' · ') : 'nothing loaded')
+    + ' · ' + m.card.busy + '% busy · ' + m.card.heat + '°C');
+  if (m.memory) meters += meter('Memory', size(m.memory.used), 'of ' + size(m.memory.total), m.memory.used / m.memory.total,
+    'held by these programs: ' + size(state.units.reduce((sum, u) => sum + u.rss, 0)));
+  if (m.load !== undefined) meters += meter('Processor', m.load.toFixed(2), 'load on ' + m.cores + ' cores', m.load / m.cores, '');
+  if (m.storage) meters += meter('Disk', size(m.storage.disk_total - m.storage.disk_free), 'of ' + size(m.storage.disk_total),
+    1 - m.storage.disk_free / m.storage.disk_total, "the server's own data: " + size(m.storage.server));
+  document.getElementById('meters').innerHTML = meters;
+
+  let html = '';
+  for (const [kind, title] of kinds) {
+    const units = state.units.filter(u => u.kind === kind);
+    if (!units.length) continue;
+    html += `<h2>${title}</h2><div class="units">`;
+    for (const u of units) {
+      const alive = u.state === 'running' || u.state === 'starting';
+      const off = alive && u.enabled === false;
+      const said = off ? 'running, turned off' : words[u.state] + (u.state === 'crashed' && u.last_exit ? '' : '');
+      html += `<div class="unit"><div class="top"><span class="light ${off ? 'off' : u.state}"></span>
+        <span class="name">${safe(u.name)}</span><span class="state">${said}${u.port ? ' · port ' + u.port : ''}</span></div>
+        ${u.about ? `<div class="about">${safe(u.about)}</div>` : ''}
+        <div class="facts"><span>up <b>${alive ? lasted(u.up) : '–'}</b></span><span>memory <b>${alive ? size(u.rss) : '–'}</b></span>
+          <span>processor <b>${alive ? u.cpu.toFixed(0) + '%' : '–'}</b></span>
+          <span>restarts <b>${u.restarts}</b></span></div>
+        <div class="tail" title="Click for more" onclick="showLog('${safe(u.name)}')">${safe(u.tail.join('\n'))}</div>
+        <div class="buttons">
+          <button onclick="act('${safe(u.name)}','start')" ${alive || u.state === 'outside' ? 'disabled' : ''}>Start</button>
+          <button class="stop" onclick="act('${safe(u.name)}','stop')" ${alive ? '' : 'disabled'}>Stop</button>
+          <button onclick="act('${safe(u.name)}','restart')" ${u.state === 'outside' ? 'disabled' : ''}>Restart</button>
+          ${u.enabled === null ? '' : `<button class="soft" onclick="act('${safe(u.name)}','${u.enabled ? 'off' : 'on'}')" ${alive ? '' : 'disabled'}>Turn ${u.enabled ? 'off' : 'on'}</button>`}
+        </div></div>`;
+    }
+    html += '</div>';
+  }
+  document.getElementById('groups').innerHTML = html;
+  document.getElementById('config').textContent = state.config;
+  document.getElementById('when').className = 'when';
+  document.getElementById('when').textContent = 'as of ' + (m.time || 'now');
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/state', { headers: { 'X-Key': key } });
+    if (!r.ok) throw new Error(r.status);
+    draw(await r.json());
+  } catch (e) {
+    const when = document.getElementById('when');
+    when.className = 'when lost';
+    when.textContent = 'the host is not answering: is corded_host.py still running?';
+  }
+}
+
+function tell(text) {
+  const said = document.getElementById('said');
+  said.textContent = text; said.classList.add('show');
+  clearTimeout(tell.timer); tell.timer = setTimeout(() => said.classList.remove('show'), 3500);
+}
+
+async function act(name, action) {
+  tell(name + ': ' + action + '…');
+  try {
+    const r = await fetch(`/api/unit/${encodeURIComponent(name)}/${action}`, { method: 'POST', headers: { 'X-Key': key } });
+    tell(name + ': ' + ((await r.json()).said || 'done'));
+  } catch (e) { tell('That did not reach the host.'); }
+  refresh();
+}
+
+async function showLog(name) {
+  logOf = name;
+  const r = await fetch('/api/log/' + encodeURIComponent(name), { headers: { 'X-Key': key } });
+  document.getElementById('logname').textContent = name + ': what it printed lately';
+  const text = document.getElementById('logtext');
+  text.textContent = await r.text();
+  const box = document.getElementById('log');
+  if (!box.open) box.showModal();
+  text.scrollTop = text.scrollHeight;
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

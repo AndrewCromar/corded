@@ -399,6 +399,7 @@ class Bot:
         try:
             while self._proc.poll() is None:
                 now = time.time()
+                self._power_file()
                 for timer in self._timers:
                     if now >= timer[1]:
                         timer[1] = now + timer[0]
@@ -586,6 +587,23 @@ class Bot:
             pass
         for handler in self._power_handlers:
             self._guard(handler, bool(on))
+
+    def _power_file(self):
+        """The same switch for a program on this machine (the host's
+        dashboard): a file called `power` in the bot's folder, holding "on"
+        or "off", is obeyed and removed."""
+        path = os.path.join(self.vault, "power")
+        if not os.path.exists(path) or not self._ready.is_set():
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                wanted = f.read().strip().lower()
+            os.remove(path)
+        except OSError:
+            return
+        if wanted in ("on", "off") and (wanted == "on") != self.enabled:
+            self.set_enabled(wanted == "on")
+            print(f"[{self.username}] turned {wanted} from this machine", flush=True)
 
     def _power(self, message):
         """`!name off`, `!name on` and `!name status`, where name is this
