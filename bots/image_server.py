@@ -199,6 +199,15 @@ class Handler(BaseHTTPRequestHandler):
             self.answer(200, {"model": args.model, "loaded": state["pipe"] is not None, "busy": state["busy"]})
 
     def do_POST(self):
+        if self.path.startswith("/unload"):
+            # Another program on this machine wants the graphics card: given, unless a picture is being made.
+            if state["busy"]:
+                self.answer(200, {"unloaded": False, "busy": True})
+            else:
+                state["used"] = 0.0
+                unload()
+                self.answer(200, {"unloaded": True})
+            return
         if not self.path.startswith("/sdapi/v1/txt2img"):
             self.answer(404, {"error": "only /sdapi/v1/txt2img is served here"})
             return

@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -348,6 +349,37 @@ def personalities_text():
         + " Anyone can ask you to remember something.")
 
 
+def ready_the_card():
+    """Before thinking: if the picture program on this machine is holding the
+    graphics card and not drawing, it is asked to let go; and if the chat
+    model was pushed off the card meanwhile, it is set down so that it loads
+    onto the card again. Only does anything with image_server.py and Ollama."""
+    base = args.api.rstrip("/")
+    base = base[:-3] if base.endswith("/v1") else base
+
+    def get(url, body=None):
+        request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=15) as answer:
+            return json.load(answer)
+    try:
+        if args.pictures:
+            state = get(args.pictures.rstrip("/") + "/")
+            if state.get("loaded") and not state.get("busy"):
+                get(args.pictures.rstrip("/") + "/unload", {})
+                note("asked the picture program to let go of the graphics card")
+    except Exception:  # noqa: BLE001  (no picture program here)
+        pass
+    try:
+        for held in get(base + "/api/ps").get("models", []):
+            if held.get("name") == args.model and held.get("size") and held.get("size_vram", 0) < held["size"] * 0.9:
+                get(base + "/api/generate", {"model": args.model, "keep_alive": 0})
+                note("the model was mostly off the graphics card; set it down to load again")
+                time.sleep(1)
+    except Exception:  # noqa: BLE001  (not Ollama)
+        pass
+
+
 def ask_model(message, lines, done=""):
     room = bot.rooms.get(message.room_id, {})
     if message.direct:
@@ -617,6 +649,7 @@ def answer(message, optional=False):
             bot.typing(message.room_id)
             thinking.wait(4)
     began = time.time()
+    ready_the_card()
     if optional:
         # Whether to speak at all is decided first, and without "typing" showing.
         try:
@@ -633,7 +666,13 @@ def answer(message, optional=False):
         earlier = lines[-2] if len(lines) > 1 and not lines[-2]["mine"] and lines[-2]["who"] == message.sender_name else None
         before = earlier["text"] if earlier else ""
         done = grant(wish(message, before), message, (before + "\n" if before else "") + message.body)
-        words = ask_model(message, lines, done)
+        try:
+            words = ask_model(message, lines, done)
+        except urllib.error.HTTPError:
+            # The model program stumbled (often: the card was taken from under it). Once more, from a clean start.
+            time.sleep(2)
+            ready_the_card()
+            words = ask_model(message, lines, done)
     except Exception as error:  # noqa: BLE001
         thinking.set()
         note(f"the model did not answer: {error}")
