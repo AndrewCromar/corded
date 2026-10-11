@@ -30,6 +30,7 @@ def free_port():
 
 
 asked = []   # every request the "model" got
+gates = []   # every time it was asked whether a message was meant for the bot
 unloads = [] # every time it was told to let go of the graphics card
 
 
@@ -44,9 +45,15 @@ class Model(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"{}")
             return
-        asked.append(body)
         last = [m for m in body["messages"] if m["role"] == "user"][-1]["content"].lower()
-        if "thanks" in last:
+        if "for_bot" not in body["messages"][0]["content"]:
+            asked.append(body)
+        if "for_bot" in body["messages"][0]["content"]:
+            # The question asked first when nobody called the bot: is this for it?
+            last = last.split("last message:")[-1]
+            gates.append(last)
+            words = json.dumps({"for_bot": "between us" not in last})
+        elif "thanks" in last:
             words = json.dumps({"action": "react", "emoji": "👍", "text": ""})
         elif "explain" in last:
             words = json.dumps({"action": "thread", "text": "It works like this."})
@@ -54,6 +61,8 @@ class Model(BaseHTTPRequestHandler):
             words = json.dumps({"action": "reply", "to": 1, "text": "The first."})
         elif "long" in last:
             words = json.dumps({"action": "message", "text": "\n\n".join(["A paragraph of words. " * 60] * 6)})
+        elif "empty" in last:
+            words = "{}"
         elif "plain" in last:
             words = "Just words, no form. @everyone"
         else:
@@ -99,7 +108,7 @@ def main():
 
         def start_bot():
             p = subprocess.Popen([sys.executable, "ai_bot.py", address, "--api", f"http://127.0.0.1:{model_port}/v1",
-                                  "--username", "sage", "--vault", os.path.join(tmp, "sage")],
+                                  "--username", "sage", "--vault", os.path.join(tmp, "sage"), "--per-minute", "100"],
                                  cwd=bots, stdout=subprocess.PIPE, text=True)
             started.append(p)
             line = p.stdout.readline()
@@ -173,7 +182,7 @@ def main():
         bob.say("#general", "!ai here")
         wait_for("a refusal", alice_heard, lambda m: "Only the owner" in m.body)
         alice.say("#general", "!ai here")
-        wait_for("the channel being taken", alice_heard, lambda m: "every message in this channel" in m.body)
+        wait_for("the channel being taken", alice_heard, lambda m: "I am part of this channel" in m.body)
         requests = len(asked)
         bob.say("#general", "tea or coffee")
         bob.say("#general", "which one would you pick")
@@ -186,15 +195,37 @@ def main():
         alice.say("#general", "!ai here #nowhere")
         wait_for("an unknown channel", alice_heard, lambda m: "no channel called #nowhere" in m.body)
         alice.say("#general", "!ai here #general")
-        wait_for("choosing by name", alice_heard, lambda m: "every message in #general" in m.body)
+        wait_for("choosing by name", alice_heard, lambda m: "I am part of #general" in m.body)
         alice.say("#general", "!ai where")
-        wait_for("the list", alice_heard, lambda m: "#general" in m.body and "every message in" in m.body)
-        print("ok  channels: only a manager can choose one; there every message is answered, a reply attached to its message")
+        wait_for("the list", alice_heard, lambda m: "I take part without a mention in: #general" in m.body)
+        # In its channel it reads everything and may stay out of it; called by name it may not.
+        requests, judged, heard = len(asked), len(gates), len(alice_heard)
+        bob.say("#general", "alice, between us, did you see the match")
+        for _ in range(60):
+            if len(gates) > judged:
+                break
+            time.sleep(0.2)
+        time.sleep(2)
+        assert len(gates) == judged + 1 and "did you see the match" in gates[-1]
+        spoke = [m.body for m in alice_heard[heard:] if m.sender == "sage"]
+        assert len(asked) == requests and not spoke, f"it spoke where it judged it was not meant: {spoke}"
+        bob.say("#general", "@sage between us, what do you think")
+        for _ in range(60):
+            if len(asked) > requests:
+                break
+            time.sleep(0.2)
+        assert len(asked) == requests + 1 and len(gates) == judged + 1, "called by name, it does not ask itself first"
+        print("ok  channels: only a manager can choose one; there it reads everything, may stay out, and must answer its name")
 
         # A model that ignores the form is taken at its word; no @everyone gets out.
         alice.say("#general", "say it plain")
         plain = wait_for("plain words", alice_heard, lambda m: m.body.startswith("Just words"))
         assert "@everyone" not in plain.body and plain.reply_to
+        # A model that returns the form with nothing in it is not quoted: a nod instead.
+        heard = len(alice_heard)
+        alice.say("#general", "@sage an empty one")
+        time.sleep(4)
+        assert not [m.body for m in alice_heard[heard:] if m.sender == "sage"], "it sent an empty form as its words"
         # A long answer goes out in pieces.
         before = len(alice_heard)
         alice.say("#general", "a long one please")
@@ -225,7 +256,7 @@ def main():
             if len(asked) > requests:
                 break
             time.sleep(0.2)
-        assert len(asked) == requests + 1
+        assert len(asked) == requests + 1, [m["messages"][-1]["content"][:60] for m in asked[requests:]]
         print("ok  off and on: only a manager can; turned off it answers nothing but the command that wakes it")
 
         # After a restart it still knows what was said, and where it answers.

@@ -12,9 +12,11 @@ reaction. Both are read again before every answer, so an edit shows at once.
 
 When it answers:
   - always in a direct chat with it;
-  - always in the channels chosen for it (`!ai here` in a channel, or
+  - in the channels chosen for it (`!ai here` in a channel, or
     `!ai here #name` from anywhere, by the owner or someone whose role has
-    Manage bots; `!ai leave` undoes it);
+    Manage bots; `!ai leave` undoes it) it reads every message and decides
+    for itself whether it is meant: it joins in when asked, talked about or
+    alone with someone, and stays out when people are talking to each other;
   - anywhere, when it is mentioned (@name);
   - in a thread it has already spoken in, without a new mention.
   - when someone replies to one of its messages, or says the next thing
@@ -161,7 +163,7 @@ def about_itself():
         f"- Channels chosen for you right now: {', '.join(c for c in chosen if c) or 'none'}.\n"
         "- `!ai here #channel-name`, typed anywhere, does the same for the named channel, and "
         "`!ai leave #channel-name` undoes it.\n"
-        "- `!ai here`, typed in a channel: you will answer every message there. Only the server's owner, or "
+        "- `!ai here`, typed in a channel: you take part there without being called by name. Only the server's owner, or "
         "someone whose role has the Manage bots permission, can do it. Roles are edited in the app under "
         "Settings, Manage this server, Roles.\n"
         "- `!ai leave`, typed in a channel: you go back to answering only when addressed there.\n"
@@ -211,6 +213,45 @@ def ask_model(message, lines):
         return json.load(answer)["choices"][0]["message"]["content"].strip()
 
 
+def meant_for_me(message, lines):
+    """Asked before the bot answers something nobody called it for: is this
+    message for it at all? A question of its own, with nothing else to think
+    about, because a model asked to answer and to judge at once always answers."""
+    name = args.display_name or args.username
+    names = f"{name} (@{args.username})" if name.lower() != args.username.lower() else f"@{args.username}"
+    system = (
+        f"You watch a group chat and decide one thing: is the LAST message meant for the bot {names}?\n"
+        "People in a group chat mostly talk to each other. Answer with one JSON object, "
+        '{"for_bot": true} or {"for_bot": false}, and nothing else.\n\n'
+        "true when the last message:\n"
+        f"- says the bot's name, asks it something, or wonders what it thinks or would say;\n"
+        "- answers or carries on something the bot itself just said;\n"
+        "- asks the whole room a question of fact or for help (\"anyone know ...?\", \"how do I ...?\").\n\n"
+        "false when the last message:\n"
+        "- is addressed to another person, by name or plainly in answer to them;\n"
+        "- is small talk, a joke, a greeting or a goodbye between people;\n"
+        "- is a short reaction like \"lol\", \"ok\", \"nice\", \"true\";\n"
+        "- is people making plans with each other.\n"
+        "When unsure, false.")
+    shown = lines[-10:]
+    talk = "\n".join(f"{name if line['mine'] else line['who']}: {line['text'] or '(a reaction)'}" for line in shown[:-1])
+    last = shown[-1]
+    request = urllib.request.Request(
+        args.api.rstrip("/") + "/chat/completions",
+        data=json.dumps({"model": args.model, "stream": False, "max_tokens": 20, "temperature": 0,
+                         "response_format": {"type": "json_object"},
+                         "messages": [{"role": "system", "content": system},
+                                      {"role": "user", "content": (f"Earlier:\n{talk}\n\n" if talk else "") +
+                                       f"LAST message:\n{last['who']}: {last['text']}"}]}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=120) as answer:
+        said = json.load(answer)["choices"][0]["message"]["content"]
+    try:
+        return bool(json.loads(said[said.find("{"):said.rfind("}") + 1]).get("for_bot"))
+    except ValueError:
+        return False
+
+
 def understand(words, direct):
     """What the model decided. A model that answered in plain words instead
     of the form it was asked for is taken at its word: that is its message."""
@@ -221,7 +262,10 @@ def understand(words, direct):
             decided = json.loads(words[start:end + 1])
         except ValueError:
             decided = None
-    if not isinstance(decided, dict) or not ("text" in decided or "emoji" in decided or "action" in decided):
+    if isinstance(decided, dict) and not ("text" in decided or "emoji" in decided or "action" in decided):
+        # The form with nothing in it: there are no words to send. A nod instead.
+        return {"action": "react", "to": None, "text": "", "emoji": "👍"}
+    if not isinstance(decided, dict):
         return {"action": "message" if direct else "reply", "to": None, "text": words, "emoji": ""}
     action = str(decided.get("action", "")).lower()
     text = decided.get("text")
@@ -261,7 +305,7 @@ def spoken_threads():
     return bot.store.setdefault("threads", [])
 
 
-def answer(message):
+def answer(message, optional=False):
     lines = list(history(message.room_id, message.thread))
     # Others may have written while this waited its turn: answer the message that asked.
     for index, line in enumerate(lines):
@@ -273,23 +317,34 @@ def answer(message):
         while not thinking.is_set():
             bot.typing(message.room_id)
             thinking.wait(4)
-    threading.Thread(target=show_typing, daemon=True).start()
     began = time.time()
+    if optional:
+        # Whether to speak at all is decided first, and without "typing" showing.
+        try:
+            wanted = meant_for_me(message, lines)
+        except Exception as error:  # noqa: BLE001
+            note(f"the model did not answer: {error}")
+            return
+        if not wanted:
+            note(f"{message.sender}: not for me ({time.time() - began:.1f}s)")
+            return
+    threading.Thread(target=show_typing, daemon=True).start()
     try:
         words = ask_model(message, lines)
     except Exception as error:  # noqa: BLE001
         thinking.set()
         note(f"the model did not answer: {error}")
-        bot.reply(message, "I could not think just now; the model on my machine did not answer.")
+        if not optional:
+            bot.reply(message, "I could not think just now; the model on my machine did not answer.")
         return
     finally:
         thinking.set()
     last_answer["seconds"] = time.time() - began
-    talking_to[(message.room_id, message.thread or "")] = (message.sender_id, time.time())
     decided = understand(words, message.direct)
     target = message.event_id
     if decided["to"] and 1 <= decided["to"] <= len(lines) and lines[decided["to"] - 1]["id"]:
         target = lines[decided["to"] - 1]["id"]
+    talking_to[(message.room_id, message.thread or "")] = (message.sender_id, time.time())
     action = decided["action"]
     note(f"{message.sender}: {action}" + (f" {decided['emoji']}" if action == "react" else ""),
          f"in {last_answer['seconds']:.1f}s")
@@ -337,15 +392,19 @@ def hear(message):
     talking = talking_to.get((message.room_id, message.thread or "")) or ("", 0)
     carrying_on = (bool(before) and before[-1]["mine"] and talking[0] == message.sender_id
                    and time.time() - talking[1] < args.follow_up)
-    if not (message.direct or message.mentions_me or chosen or following or answering or carrying_on):
+    # Called by name, written to directly or answered: it must answer. In a
+    # channel chosen for it, or carrying on, it may, and decides for itself.
+    alone = len(bot.rooms.get(message.room_id, {}).get("members", [])) <= 2
+    must = message.direct or message.mentions_me or answering or ((chosen or following) and alone)
+    if not (must or chosen or following or carrying_on):
         return
-    if not message.direct:
+    if must and not message.direct:   # asking itself whether to join in does not count
         now = time.time()
         times = [t for t in asked_lately.get(message.sender_id, []) if now - t < 60]
         if len(times) >= args.per_minute:
             return
         asked_lately[message.sender_id] = times + [now]
-    bot.work(answer, message)
+    bot.work(answer, message, not must)
 
 
 @bot.on_power
@@ -371,8 +430,8 @@ def channels(message, words):
     what = words[0].lower() if words else "where"
     if what == "where":
         titles = [bot.rooms.get(r, {}).get("title", "a channel I can no longer see") for r in chosen]
-        return ("I answer every message in: " + ", ".join(titles) + "." if titles else
-                "I answer in no channel by myself yet.") + " I always answer direct chats and mentions."
+        return ("I take part without a mention in: " + ", ".join(titles) + "." if titles else
+                "I take part in no channel by myself yet.") + " I always answer direct chats and mentions."
     if what not in ("here", "leave"):
         return "Say `!ai here`, `!ai leave` or `!ai where`."
     # The channel it is said in, or one named after it: `!ai here #plans`.
@@ -392,7 +451,8 @@ def channels(message, words):
     if what == "leave" and room_id in chosen:
         chosen.remove(room_id)
     bot.store.save()
-    return (f"I will answer every message in {named} from now on." if what == "here" else
+    return (f"I am part of {named} from now on: I will join in when it is meant for me, without a mention."
+            if what == "here" else
             f"In {named} I will only answer when I am addressed.")
 
 
