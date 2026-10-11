@@ -12,8 +12,9 @@ reaction. Both are read again before every answer, so an edit shows at once.
 
 When it answers:
   - always in a direct chat with it;
-  - always in the channels chosen for it (`!ai here` in a channel, by the
-    owner or someone whose role has Manage bots; `!ai leave` undoes it);
+  - always in the channels chosen for it (`!ai here` in a channel, or
+    `!ai here #name` from anywhere, by the owner or someone whose role has
+    Manage bots; `!ai leave` undoes it);
   - anywhere, when it is mentioned (@name);
   - in a thread it has already spoken in, without a new mention.
   - when someone replies to one of its messages, or says the next thing
@@ -154,6 +155,8 @@ def about_itself():
         f"messages; the next message of the person you just answered (within {args.follow_up} seconds); a thread "
         "you have already spoken in; and every message in the channels chosen for you.\n"
         f"- Channels chosen for you right now: {', '.join(c for c in chosen if c) or 'none'}.\n"
+        "- `!ai here #channel-name`, typed anywhere, does the same for the named channel, and "
+        "`!ai leave #channel-name` undoes it.\n"
         "- `!ai here`, typed in a channel: you will answer every message there. Only the server's owner, or "
         "someone whose role has the Manage bots permission, can do it. Roles are edited in the app under "
         "Settings, Manage this server, Roles.\n"
@@ -339,7 +342,7 @@ def hear(message):
     bot.work(answer, message)
 
 
-@bot.command("ai", help="here | leave | where: the channels I answer every message in (for those who manage bots)")
+@bot.command("ai", help="here | leave | where: the channels I answer every message in; `!ai here #name` for another channel (for those who manage bots)")
 def channels(message, words):
     chosen = bot.store.setdefault("channels", [])
     what = words[0].lower() if words else "where"
@@ -349,17 +352,25 @@ def channels(message, words):
                 "I answer in no channel by myself yet.") + " I always answer direct chats and mentions."
     if what not in ("here", "leave"):
         return "Say `!ai here`, `!ai leave` or `!ai where`."
-    if message.direct:
-        return "I always answer here. That command is for channels."
+    # The channel it is said in, or one named after it: `!ai here #plans`.
+    room_id, named = message.room_id, "this channel"
+    if len(words) > 1:
+        wanted = "#" + words[1].lstrip("#").lower()
+        found = [r for r, info in bot.rooms.items() if info.get("kind") == "channel" and info.get("title", "").lower() == wanted]
+        if not found:
+            return f"I am in no channel called {wanted}."
+        room_id, named = found[0], wanted
+    elif message.direct:
+        return "I always answer here. Name a channel, like `!ai here #general`."
     if not bot.may(message.sender_id):
         return "Only the owner, or someone whose role has Manage bots, can choose my channels."
-    if what == "here" and message.room_id not in chosen:
-        chosen.append(message.room_id)
-    if what == "leave" and message.room_id in chosen:
-        chosen.remove(message.room_id)
+    if what == "here" and room_id not in chosen:
+        chosen.append(room_id)
+    if what == "leave" and room_id in chosen:
+        chosen.remove(room_id)
     bot.store.save()
-    return ("I will answer every message in this channel from now on." if what == "here" else
-            "I will only answer here when I am mentioned.")
+    return (f"I will answer every message in {named} from now on." if what == "here" else
+            f"In {named} I will only answer when I am addressed.")
 
 
 @bot.command("forget", help="I forget what was said in this chat (or this thread)")

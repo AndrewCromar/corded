@@ -174,6 +174,12 @@ def main():
         assert picked.reply_to, "the model asked for a reply to a message"
         assert len(asked) == requests + 2
         assert "Channels chosen for you right now: #general" in asked[-1]["messages"][0]["content"]
+        alice.say("#general", "!ai leave #general")
+        wait_for("leaving by name", alice_heard, lambda m: "In #general I will only answer when I am addressed" in m.body)
+        alice.say("#general", "!ai here #nowhere")
+        wait_for("an unknown channel", alice_heard, lambda m: "no channel called #nowhere" in m.body)
+        alice.say("#general", "!ai here #general")
+        wait_for("choosing by name", alice_heard, lambda m: "every message in #general" in m.body)
         alice.say("#general", "!ai where")
         wait_for("the list", alice_heard, lambda m: "#general" in m.body and "every message in" in m.body)
         print("ok  channels: only a manager can choose one; there every message is answered, a reply attached to its message")
