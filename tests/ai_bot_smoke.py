@@ -30,6 +30,7 @@ def free_port():
 
 
 asked = []   # every request the "model" got
+unloads = [] # every time it was told to let go of the graphics card
 
 
 class Model(BaseHTTPRequestHandler):
@@ -37,6 +38,12 @@ class Model(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "messages" not in body:   # Ollama's "unload this model", sent when the bot is turned off
+            unloads.append(body)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         asked.append(body)
         last = [m for m in body["messages"] if m["role"] == "user"][-1]["content"].lower()
         if "thanks" in last:
@@ -197,6 +204,30 @@ def main():
         assert len(parts) >= 2 and all(len(m.body) <= 3500 for m in parts), [len(m.body) for m in parts]
         print("ok  plain words are sent as they are, without @everyone; a long answer is cut at paragraph ends")
 
+        # Off and on, by those who manage bots; off, it answers nothing.
+        bob.say("#general", "!sage off")
+        wait_for("a refusal to be turned off", alice_heard, lambda m: "can turn me off" in m.body)
+        alice.say("#general", "!sage off")
+        wait_for("going quiet", alice_heard, lambda m: "Going quiet" in m.body)
+        time.sleep(1)
+        requests = len(asked)
+        alice.say("#general", "@sage are you there")
+        bob.say("#general", "!sage on")
+        time.sleep(4)
+        assert len(asked) == requests, "it answered while turned off"
+        assert unloads and unloads[-1].get("keep_alive") == 0, "turned off, it did not ask for its model to be unloaded"
+        alice.say("#general", "!sage status")
+        wait_for("its state", alice_heard, lambda m: "I am off" in m.body)
+        alice.say("#general", "!sage on")
+        wait_for("coming back", alice_heard, lambda m: m.body == "I am back.")
+        alice.say("#general", "@sage and now")
+        for _ in range(60):
+            if len(asked) > requests:
+                break
+            time.sleep(0.2)
+        assert len(asked) == requests + 1
+        print("ok  off and on: only a manager can; turned off it answers nothing but the command that wakes it")
+
         # After a restart it still knows what was said, and where it answers.
         sage.terminate()
         sage.wait(timeout=10)
@@ -210,7 +241,7 @@ def main():
                 break
             time.sleep(0.2)
         earlier = [m["content"] for m in asked[-1]["messages"][1:]]
-        assert any("tea or coffee" in c for c in earlier), "the chat before the restart was forgotten"
+        assert any("@sage and now" in c for c in earlier), "the chat before the restart was forgotten"
         assert any(m["role"] == "assistant" for m in asked[-1]["messages"]), "its own earlier words were forgotten"
         alice.say("#general", "!forget")
         wait_for("forgetting", alice_heard, lambda m: "Forgotten" in m.body)

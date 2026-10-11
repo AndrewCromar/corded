@@ -23,6 +23,10 @@ When it answers:
 How it answers is the model's choice, each time: a plain message, a reply to
 one message, a thread under one, or just a reaction.
 
+`!sage off` (its own name after the !) turns it off: it shows as offline,
+answers nothing and has the model unloaded from the graphics card, until
+`!sage on`. For the owner and those who manage bots.
+
 Other commands: `!ai where` lists its channels, `!forget` makes it forget the
 chat it is said in, `!model` says what it thinks with and how long the last
 answer took.
@@ -165,6 +169,8 @@ def about_itself():
         "- `!forget`: you forget the chat or thread it is typed in and start fresh.\n"
         "- `!model`: says which model you run on and how long your last answer took.\n"
         "- `!help`: lists these commands.\n"
+        f"- `!{args.username} off` turns you off: you show as offline, answer nothing and unload from the "
+        f"graphics card, until `!{args.username} on`. Owner or Manage bots only.\n"
         f"- You are the language model {args.model}, running on the same machine as this chat server. What you "
         "read is not sent anywhere else. You cannot browse the web, open links, see pictures or files, set "
         "reminders or remember people between chats.\n"
@@ -340,6 +346,23 @@ def hear(message):
             return
         asked_lately[message.sender_id] = times + [now]
     bot.work(answer, message)
+
+
+@bot.on_power
+def switched(on):
+    """Turned off, it lets go of the graphics card: the model is asked to unload."""
+    if on:
+        return
+    base = args.api.rstrip("/")
+    base = base[:-3] if base.endswith("/v1") else base
+    try:   # Ollama's own way of saying "unload now"; other model servers ignore or refuse it
+        request = urllib.request.Request(base + "/api/generate",
+                                         data=json.dumps({"model": args.model, "keep_alive": 0}).encode(),
+                                         headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(request, timeout=30).read()
+        note(f"turned off; asked the model server to unload {args.model}")
+    except Exception:  # noqa: BLE001
+        note("turned off")
 
 
 @bot.command("ai", help="here | leave | where: the channels I answer every message in; `!ai here #name` for another channel (for those who manage bots)")

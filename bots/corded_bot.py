@@ -139,6 +139,7 @@ class Bot:
         self._joiners = []
         self._profile_handlers = []
         self._timers = []
+        self._power_handlers = []
         self._lock = threading.Lock()
         self._proc = None
         self._waiting = []                          # commands whose answer has not come yet
@@ -401,7 +402,8 @@ class Bot:
                 for timer in self._timers:
                     if now >= timer[1]:
                         timer[1] = now + timer[0]
-                        self._guard(timer[2])
+                        if self.enabled:   # turned off, its timers rest
+                            self._guard(timer[2])
                 time.sleep(0.2)
         except KeyboardInterrupt:
             pass
@@ -549,7 +551,7 @@ class Bot:
         self._ready.wait()
         time.sleep(self.join_delay)   # a bot says it is one a moment after it joins
         member = self.members().get(user_id)
-        if member and not member.get("bot"):
+        if member and not member.get("bot") and self.enabled:
             for fn in self._joiners:
                 self._guard(fn, member)
 
@@ -560,7 +562,65 @@ class Bot:
             with self._lock:
                 self._jobs_ahead -= 1
 
+    # ---- on and off ----
+
+    @property
+    def enabled(self):
+        return self.store.get("enabled", True)
+
+    def on_power(self, fn):
+        """@bot.on_power def switched(on): ...   Called when the bot is turned
+        off or on from the chat, to let go of what it holds or take it up again."""
+        self._power_handlers.append(fn)
+        return fn
+
+    def set_enabled(self, on):
+        """Turns the bot off or on. Off, it stays connected and shows as
+        offline; it hears nothing but the command that turns it on again, and
+        its timers rest. Kept between runs."""
+        self.store["enabled"] = bool(on)
+        self.store.save()
+        try:
+            self.request({"cmd": "set_presence", "status": "auto" if on else "invisible"})
+        except RuntimeError:
+            pass
+        for handler in self._power_handlers:
+            self._guard(handler, bool(on))
+
+    def _power(self, message):
+        """`!name off`, `!name on` and `!name status`, where name is this
+        bot's username: from the owner or anyone with Manage bots. Returns
+        whether the message was such a command."""
+        words = message.body.strip().lower().split()
+        if len(words) != 2 or words[0] != self.prefix + self.username.lower() or words[1] not in ("on", "off", "status"):
+            return False
+        if words[1] == "status":
+            if self.enabled:
+                self._guard(self.reply, message, "I am on.")
+            elif self.may(message.sender_id):
+                self._guard(self.reply, message, f"I am off. `{self.prefix}{self.username} on` wakes me.")
+            return True
+        if not self.may(message.sender_id):
+            if self.enabled:
+                self._guard(self.reply, message, "Only the owner, or someone whose role has Manage bots, can turn me off or on.")
+            return True
+        on = words[1] == "on"
+        if on == self.enabled:
+            self._guard(self.reply, message, "I am already on." if on else "I am already off.")
+            return True
+        if on:
+            self.set_enabled(True)
+            self._guard(self.reply, message, "I am back.")
+        else:
+            self._guard(self.reply, message, f"Going quiet. `{self.prefix}{self.username} on` wakes me.")
+            self.set_enabled(False)
+        return True
+
     def _handle(self, message):
+        if message.type != "m.file" and self._power(message):
+            return
+        if not self.enabled:
+            return
         if message.type == "m.file":
             for handler in self._file_handlers:
                 self._guard(handler, message)

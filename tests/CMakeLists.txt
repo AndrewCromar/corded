@@ -35,5 +35,9 @@ if(CORDED_BUILD_TUI)
     add_test(NAME ai_bot_smoke
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ai_bot_smoke.py ${CMAKE_BINARY_DIR}/bin)
     set_tests_properties(ai_bot_smoke PROPERTIES TIMEOUT 180)
+    # The image bot, with a stand-in for the picture program.
+    add_test(NAME image_bot_smoke
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/image_bot_smoke.py ${CMAKE_BINARY_DIR}/bin)
+    set_tests_properties(image_bot_smoke PROPERTIES TIMEOUT 180)
   endif()
 endif()
