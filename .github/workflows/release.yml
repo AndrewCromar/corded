@@ -194,6 +194,27 @@ jobs:
           mkdir -p frontends/flutter/app/android/app/src/main/jniLibs/arm64-v8a
           cp build/android-arm64/lib/libcorded.so frontends/flutter/app/android/app/src/main/jniLibs/arm64-v8a/
 
+      # The core on its own, for programs built elsewhere on top of it (the
+      # app has a repository of its own and fetches this). The Linux and
+      # Windows libraries are in the archives of those platforms.
+      - name: Package the core for phones
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          version=$(git describe --tags --match 'v*' --always --dirty)
+          name="corded-core-${version}-android-arm64"
+          mkdir -p "dist/${name}/jniLibs/arm64-v8a" "dist/${name}/include/corded"
+          cp build/android-arm64/lib/libcorded.so "dist/${name}/jniLibs/arm64-v8a/"
+          cp include/corded/corded.h "dist/${name}/include/corded/"
+          tar -C dist -czf "${name}.tar.gz" "${name}"
+          if [ -n "$RELEASE_SIGNING_KEY" ] && [ "${GITHUB_REF#refs/tags/v}" != "$GITHUB_REF" ]; then
+            key="$(mktemp)"; chmod 600 "$key"; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+            openssl pkeyutl -sign -rawin -inkey "$key" -in "${name}.tar.gz" -out "${name}.tar.gz.sig"
+            rm -f "$key"
+            openssl pkeyutl -verify -rawin -pubin -inkey packaging/release-signing.pub -in "${name}.tar.gz" -sigfile "${name}.tar.gz.sig"
+          fi
+          echo "CORE_ARCHIVE=${name}.tar.gz" >> "$GITHUB_ENV"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -247,6 +268,8 @@ jobs:
             || gh release view "$tag" >/dev/null  # another job made it in the same moment
           gh release upload "$tag" corded-android-arm64.apk --clobber
           if [ -f corded-android-arm64.apk.sig ]; then gh release upload "$tag" corded-android-arm64.apk.sig --clobber; fi
+          gh release upload "$tag" "$CORE_ARCHIVE" --clobber
+          if [ -f "$CORE_ARCHIVE.sig" ]; then gh release upload "$tag" "$CORE_ARCHIVE.sig" --clobber; fi
 
   windows:
     name: Windows x64
