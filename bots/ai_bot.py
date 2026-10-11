@@ -385,41 +385,51 @@ def ask_model(message, lines, done=""):
 WISHES = re.compile(
     r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\b|"
     r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b|"
-    r"pfp|avatar|profile pic|(your|new) (picture|photo|image|look)", re.IGNORECASE)
+    r"pfp|avatar|profile (pic|photo|image)|(your|yourself|new) (a )?(picture|photo|image|look)|play (the|a) |"
+    r"you (be|play|become|act)\b|act (like|as)|pretend", re.IGNORECASE)
 
 
-def wish(message):
+def wish(message, before=""):
     """What, if anything, the message asks the bot to do to itself: remember
     something, list, switch, make or change a personality. Asked of the model
     as a question of its own, and then done by the bot: a model asked to
     answer and to act at once only says that it acted."""
-    if not WISHES.search(message.body):
+    # `before` is what the same person said just before, when this message
+    # only points at it ("@sage ^", "do that").
+    if not WISHES.search(message.body) and not (before and WISHES.search(before)):
         return {"do": "none"}
     known = ", ".join(personas().values())
+    now_is = personas().get(worn(), "") + ". " + " ".join(read_file(persona_file(worn(), "soul.md")).split())[:300]
     system = (
         "You read one chat message sent to a bot and decide whether it asks the bot to do one of a few things to "
-        "itself. Answer with one JSON object and nothing else.\n\n"
+        "itself. Answer with one JSON object and nothing else. If two lines are given, the last is the message and "
+        "the one before is what the same person said just before: when the message only points at it (\"^\", "
+        "\"this\", \"do that\"), judge the earlier line.\n\n"
         '{"do": "none"}: anything else. Ordinary questions and chat, and questions about what it already remembers.\n'
         '{"do": "remember", "text": "<the fact>"}: it tells the bot to remember, keep or note something. Write the '
         f"fact so it stands on its own and names who it is about (the sender is {message.sender_name}), like "
         f"\"{message.sender_name}'s favourite band is Radiohead\".\n"
         '{"do": "list"}: it asks which personalities, characters or modes the bot has.\n'
-        '{"do": "switch", "name": "<name>"}: it asks the bot to switch to, become, be again or go back to one of '
-        f"its personalities (\"be X again\", \"back to X\"). The bot has: {known}.\n"
+        '{"do": "switch", "name": "<name>"}: it asks the bot to switch to, become, be, act like or play someone '
+        f"(\"be X\", \"can you be X\", \"act like X\", \"back to X\"). The bot has: {known}; for anyone "
+        "else give the name of the character meant, as short as it can be. A mood or manner is not a character: "
+        "\"be quiet\", \"be nice\", \"be serious\" are none, or change if meant from now on.\n"
         '{"do": "create", "name": "<a short name>", "text": "<who it is>"}: it describes a new personality for the '
-        "bot to have. For text, write two to four sentences beginning \"You are <name>,\" that say who this one is "
+        "bot to have, saying what it is like. For text, write two to four sentences beginning \"You are <name>,\" that say who this one is "
         "and how it talks, using what the message says.\n"
         '{"do": "change", "text": "<how to be>"}: it asks the bot to change how it itself talks or behaves from now '
         "on, not just once. For text, one sentence beginning \"You\".\n"
         '{"do": "picture", "text": "<what the picture shows>"}: it asks the bot to change, make or get a new '
         "profile picture, avatar or pfp for itself. For text, describe the picture in one sentence a painter could "
-        "work from; if the message does not say what it should show, describe one that fits the bot's name.")
+        "work from; if the message does not say what it should show, describe a portrait of the character the bot "
+        f"is right now, which is: {now_is}")
     request = urllib.request.Request(
         args.api.rstrip("/") + "/chat/completions",
         data=json.dumps({"model": args.model, "stream": False, "max_tokens": 200, "temperature": 0,
                          "response_format": {"type": "json_object"},
                          "messages": [{"role": "system", "content": system},
-                                      {"role": "user", "content": f"{message.sender_name}: {message.body}"}]}).encode(),
+                                      {"role": "user", "content": (f"{message.sender_name}: {before}\n" if before else "")
+                                       + f"{message.sender_name}: {message.body}"}]}).encode(),
         headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=120) as answer:
@@ -427,14 +437,37 @@ def wish(message):
         found = json.loads(said[said.find("{"):said.rfind("}") + 1])
         if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change", "picture"):
             return {"do": "none"}
-        if found["do"] == "remember" and "?" in message.body:
+        if found["do"] == "remember" and "?" in message.body and not before:
             return {"do": "none"}   # a question about what it remembers is not something new to keep
         return found
     except Exception:  # noqa: BLE001
         return {"do": "none"}
 
 
-def grant(asked, message):
+def invent(wanted, said):
+    """A character to become, written out from a few words about it: (a short name, who it is)."""
+    system = ("Someone wants a chat bot to become a character. From their words, write that character. Answer with "
+              'one JSON object and nothing else: {"name": "<the character\'s name, one to three words>", "text": '
+              '"<three or four sentences beginning \'You are <name>,\' saying who this is, what they are like and '
+              'how they talk>"}. If it is a known character from a film, book, show or game, be true to it.')
+    request = urllib.request.Request(
+        args.api.rstrip("/") + "/chat/completions",
+        data=json.dumps({"model": args.model, "stream": False, "max_tokens": 300, "temperature": 0.3,
+                         "response_format": {"type": "json_object"},
+                         "messages": [{"role": "system", "content": system},
+                                      {"role": "user", "content": f"They said: {said}\nThe character: {wanted}"}]}).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as answer:
+            said_back = json.load(answer)["choices"][0]["message"]["content"]
+        made = json.loads(said_back[said_back.find("{"):said_back.rfind("}") + 1])
+        name, text = str(made.get("name") or "").strip(), str(made.get("text") or "").strip()
+        return (name[:40], text) if name and text else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def grant(asked, message, said=""):
     """Carries out a wish, and returns what the model is to be told about it
     so that it can say so in its own voice."""
     do, text = asked.get("do"), str(asked.get("text") or "").strip()
@@ -462,7 +495,14 @@ def grant(asked, message):
             return f"They asked you for a new profile picture. It was not made: {problem}. Tell them so."
         return (f"At their request you have just made yourself a new profile picture and put it on: \"{text}\". "
                 "It is done. Say so briefly in your own voice.")
-    done, outcome = reshape({"do": do, "name": asked.get("name"), "character": text}, message)
+    name = str(asked.get("name") or "").strip()
+    if do == "switch" and name and not find_persona(name) and may_reshape(message.sender_id):
+        # Asked to be someone it is not yet: that someone is made first.
+        made = invent(name, said or message.body)
+        if made:
+            reshape({"do": "create", "name": made[0], "character": made[1]}, message)
+            name = made[0]
+    done, outcome = reshape({"do": do, "name": name, "character": text}, message)
     outcome = outcome.strip("()")
     if done:
         return (f"At their request this has just been done, by you, and it is finished: {outcome} Confirm it briefly "
@@ -587,7 +627,10 @@ def answer(message, optional=False):
             return
     threading.Thread(target=show_typing, daemon=True).start()
     try:
-        done = grant(wish(message), message)
+        # What the same person said just before, if that was the last thing said.
+        earlier = lines[-2] if len(lines) > 1 and not lines[-2]["mine"] and lines[-2]["who"] == message.sender_name else None
+        before = earlier["text"] if earlier else ""
+        done = grant(wish(message, before), message, (before + "\n" if before else "") + message.body)
         words = ask_model(message, lines, done)
     except Exception as error:  # noqa: BLE001
         thinking.set()
