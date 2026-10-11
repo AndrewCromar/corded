@@ -105,20 +105,47 @@ machine as the bot, behind the chat API that Ollama, llama.cpp's server and LM
 Studio all offer; nothing is sent anywhere else unless `--api` says so, and
 the bot prints a warning at start if it does.
 
+**Setting it up.** The model program is not part of this repository. With
+Ollama (https://ollama.com), on the machine the bot will run on:
+
 ```sh
-ollama serve &                 # or any other local model server
-ollama pull qwen2.5:7b
+# 1. Ollama itself. Either the system install from their site, or, with no
+#    install at all, their Linux archive unpacked into a folder of your own:
+mkdir -p ~/ollama && cd ~/ollama
+curl -fL https://ollama.com/download/ollama-linux-amd64.tar.zst | tar --zstd -x
+#    (older releases are .tgz: curl -fL …/ollama-linux-amd64.tgz | tar -xz)
+
+# 2. Run it, on this machine only, and fetch a model (about 4.7 GB):
+OLLAMA_HOST=127.0.0.1:11434 ~/ollama/bin/ollama serve &
+~/ollama/bin/ollama pull qwen2.5:7b
+
+# 3. The bot:
 python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --username sage
 ```
 
-**When it answers.** Always in a direct chat with it. Always when it is
-mentioned (`@sage`). In a thread it has already spoken in, without a new
-mention. When someone replies to one of its messages, or carries on right
-after it answered them (the next message, within `--follow-up` seconds, 120). And in every message of the channels chosen for it: the owner, or
-anyone whose role has **Manage bots**, says `!ai here` in a channel to choose
-it (or `!ai here #name` from anywhere) and `!ai leave` to undo that;
-`!ai where` lists them. One person gets at
-most `--per-minute` answers a minute outside a direct chat (8 unless changed).
+`OLLAMA_MODELS=/some/folder` puts the models somewhere other than
+`~/.ollama`. Any other program that offers the same chat API (llama.cpp's
+server, LM Studio) works with `--api`. The host (`../host`) can start Ollama
+and the bot together.
+
+**What it will and will not say** is decided by two things: the soul file,
+which is yours to write, and the model, which was trained with habits of its
+own that no file fully overrides. `--model` takes any model your Ollama has;
+people who want a model without those habits pick one made that way.
+
+**When it answers.** It must answer a direct chat, a mention (`@sage`) and a
+reply to one of its messages. It may answer, and decides for itself, in a
+thread it has already spoken in, right after it answered someone (their next
+message, within `--follow-up` seconds, 120), and in the channels chosen for
+it. There the model is first asked one plain question, is this message meant
+for the bot, and only a yes lets it speak: it joins in when it is asked or
+talked about, and stays out when people are talking to each other. Alone with
+one person in a channel, it takes everything as meant for it.
+
+The owner, or anyone whose role has **Manage bots**, chooses a channel with
+`!ai here` in it (or `!ai here #name` from anywhere); `!ai leave` undoes
+that and `!ai where` lists them. One person gets at most `--per-minute`
+answers a minute to mentions outside a direct chat (8 unless changed).
 
 **How it answers.** The model decides each time, and the bot does what it
 decided: a plain message, a reply attached to one message, a thread under
@@ -167,29 +194,48 @@ picture. So does a mention with a description after it, and anything written
 to it in a direct chat. The caption gives the words and the seed, so the same
 picture can be asked for again.
 
+**Setting it up.** The picture program needs an NVIDIA graphics card with
+8 GB or more, its driver, and a Python environment of its own; none of that
+is part of this repository. With `uv` (https://docs.astral.sh/uv), which
+fetches the right Python by itself:
+
 ```sh
-# once: a Python environment for the picture program (about 13 GB with the model)
+# 1. Once: the environment and the libraries (about 6 GB).
 uv venv --python 3.12 sd-env
 uv pip install --python sd-env/bin/python torch --index-url https://download.pytorch.org/whl/cu124
 uv pip install --python sd-env/bin/python diffusers transformers accelerate safetensors
 
-sd-env/bin/python image_server.py &      # draws; downloads the model the first time
+# 2. The picture program. The first picture downloads the model (about 7 GB)
+#    into ~/.cache/huggingface, or into the folder HF_HOME names.
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True sd-env/bin/python image_server.py &
+
+# 3. The bot. With ffmpeg installed, pictures show in the chat itself;
+#    without it they arrive as files to open.
 python3 image_bot.py 127.0.0.1:7443
 ```
+
+Once the model is there, `HF_HUB_OFFLINE=1` in front of step 2 keeps the
+program from asking the internet anything at start. `--model` takes another
+SDXL model by its Hugging Face name or a folder. Nothing a picture is made
+from or into is kept: the program holds it in memory only long enough to
+hand it over, and the bot's one temporary file is deleted once it is sent.
 
 - Options, at the end of a description: `--wide`, `--tall`, `--square`;
   `--seed 1234`; `--steps 30`; `--no things to keep out`.
 - `!again` makes the last description of the chat once more with a new seed.
   `!queue` shows the line; `!cancel` takes your own request out of it. One
-  picture is made at a time; each person gets five in ten minutes.
+  picture is made at a time; each person gets five in ten minutes, which
+  those who manage bots change with `!images limit 20` (`0` for no limit).
 - `!images here` (or `!images here #name`), from the owner or anyone with
   **Manage bots**, chooses a channel; once one is chosen it works only in
   chosen channels and direct chats. `!images leave` and `!images where` go
   with it.
 - Adult pictures are refused everywhere until `!images adult nsfw`, which
   allows them in channels marked NSFW only; `!images adult off` goes back.
-  The refusal goes by the words asked for. A picture model can still produce
-  what nobody asked for, which is one more reason to choose its channels.
+  Nothing looks at the pictures: the refusal is a check of the words asked
+  for, and with adult off a few words are added to what is kept out. The
+  model itself has no filter. It can still produce what nobody asked for,
+  which is one more reason to choose its channels.
 
 **The picture program.** `image_server.py` is the one file here that needs
 more than the standard library: PyTorch and `diffusers`. It listens on this
