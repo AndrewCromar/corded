@@ -119,37 +119,6 @@ jobs:
           name: libcorded-${{ matrix.preset }}
           path: out/
 
-  dart:
-    name: Dart binding
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config python3 git curl zip unzip tar perl
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', '.gitmodules') }}
-          restore-keys: vcpkg-${{ runner.os }}-
-      - name: Build
-        run: ./build.sh
-      - uses: dart-lang/setup-dart@v1
-      # Two clients driven from Dart talk through a real server.
-      - name: Test the binding
-        working-directory: frontends/flutter/packages/corded_dart
-        env:
-          CORDED_BIN: ${{ github.workspace }}/build/dev/bin
-          CORDED_LIB: ${{ github.workspace }}/build/dev/lib/libcorded.so
-        run: |
-          dart pub get
-          dart analyze --fatal-infos
-          dart test
-
   windows:
     name: Windows build
     runs-on: windows-2022
@@ -202,38 +171,6 @@ jobs:
       # a program that is running (so its file is locked) is replaced once it
       # ends, by the same script the app starts, under the Windows PowerShell
       # that every Windows has.
-      - uses: dart-lang/setup-dart@v1
-
-      - name: Check the app's update script
-        shell: pwsh
-        run: |
-          $work = Join-Path $env:RUNNER_TEMP 'update-check'
-          $target = Join-Path $work 'app folder'      # a space, as in real paths
-          $source = Join-Path $work 'new'
-          New-Item -ItemType Directory -Force $target, $source, (Join-Path $source 'data') | Out-Null
-          Copy-Item C:\Windows\System32\ping.exe (Join-Path $target 'corded_app.exe')
-          Set-Content (Join-Path $target 'old.txt') 'old'
-          Copy-Item C:\Windows\System32\whoami.exe (Join-Path $source 'corded_app.exe')
-          Set-Content (Join-Path $source 'data\new.txt') 'new'
-          $running = Start-Process -FilePath (Join-Path $target 'corded_app.exe') -ArgumentList '-n','6','127.0.0.1' -PassThru -WindowStyle Hidden
-          $log = Join-Path $work 'update.log'
-          # Started exactly as the app starts it: by a program that ends at once.
-          dart frontends\flutter\app\tool\launch_update.dart (Resolve-Path frontends\flutter\app\assets\apply-update.ps1) `
-            $running.Id $source $target (Join-Path $target 'corded_app.exe') $log
-          $global:LASTEXITCODE = 0
-          $ok = $false
-          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
-            Start-Sleep -Seconds 1
-            if ((Test-Path $log) -and (Select-String -Path $log -Pattern '  OK$' -Quiet)) { $ok = $true }
-          }
-          if (Test-Path $log) { Get-Content $log } else { 'no log was written: the script never ran' }
-          if (-not $ok) { throw 'the update did not happen' }
-          $new = (Get-FileHash (Join-Path $source 'corded_app.exe')).Hash
-          $now = (Get-FileHash (Join-Path $target 'corded_app.exe')).Hash
-          if ($new -ne $now) { throw 'the program was not replaced' }
-          if (-not (Test-Path (Join-Path $target 'data\new.txt'))) { throw 'a new file in a folder did not arrive' }
-          if (-not (Test-Path (Join-Path $target 'old.txt'))) { throw 'a file the update does not carry was removed' }
-
       - name: Package
         shell: pwsh
         run: |

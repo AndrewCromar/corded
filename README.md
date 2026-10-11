@@ -31,8 +31,8 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 | Design blueprint | Done ([PDF](master_plan/Modular%20E2EE%20Messaging%20Platform%20-%20Technical%20Architecture%20Blueprint.pdf)) |
 | Implementation plan | Done ([master_plan/](master_plan/00-overview.md)) |
 | Prototype | Working: server, core library and terminal client on Linux, Raspberry Pi and Windows. Channels, direct and group chats, all end-to-end encrypted |
-| Android app | Working test builds (Flutter, on the same core). See below |
-| Desktop app | Early builds for Linux and Windows: the same app as on Android, in a window. See below |
+| Android app | Working test builds (Flutter, on the same core), from its own repository, [opencorded/app](https://github.com/opencorded/app). See below |
+| Desktop app | Early builds for Linux and Windows: the same app as on Android, in a window; same repository. See below |
 | Bots | A small Python kit and four bots, each in a repository of its own, and a host that runs a server and its bots with one command: [github.com/opencorded](https://github.com/opencorded) |
 | iOS, macOS, a browser client | Not started |
 
@@ -384,7 +384,6 @@ Code layout:
 | `core/` | `libcorded`: crypto, vault, engine and the C ABI shim |
 | `include/corded/corded.h` | The public C interface |
 | `frontends/tui/` | `corded-tui`, the terminal client |
-| `frontends/flutter/` | The app (`app/`) and the Dart binding to the core it is built on (`packages/corded_dart/`) |
 | `tools/corded-cli.cpp` | A headless client that speaks JSON lines, for scripts and debugging |
 | `tests/` | Crypto unit tests, end-to-end tests, a smoke test for the terminal client |
 
