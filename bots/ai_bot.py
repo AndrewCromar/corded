@@ -56,6 +56,8 @@ parser.add_argument("--model", default="qwen2.5:7b")
 parser.add_argument("--api", default="http://127.0.0.1:11434/v1")
 parser.add_argument("--username", default="sage")
 parser.add_argument("--display-name", default=None)
+parser.add_argument("--picture", default=os.path.join(HERE, "ai_bot.png"),
+                    help="its profile picture, a small square image ('' for none)")
 parser.add_argument("--vault", default=None)
 parser.add_argument("--memory", type=int, default=30, help="how many recent messages of a chat it keeps in mind")
 parser.add_argument("--max-tokens", type=int, default=400, help="the longest answer the model may write")
@@ -66,7 +68,9 @@ parser.add_argument("--per-minute", type=int, default=8,
 args = parser.parse_args()
 
 bot = Bot(vault=args.vault or f"./{args.username}-vault", username=args.username, display_name=args.display_name,
-          about="I am a language model running on my owner's machine. Mention me or write to me directly.")
+          picture=args.picture or None,
+          about=f"A language model running on this server's own machine; nothing I read leaves it. Mention me "
+                f"(@{args.username}) or write to me directly. I keep it short. !forget makes me start fresh.")
 ACTIONS = ("message", "reply", "thread", "react")
 recent = {}        # (room id, thread root or "") -> the last few messages there, oldest first
 talking_to = {}    # (room id, thread root or "") -> (the person last answered there, when)

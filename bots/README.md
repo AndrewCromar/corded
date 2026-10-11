@@ -126,6 +126,9 @@ message. It shows as typing while the model works, and questions are answered
 one at a time, so two people asking at once do not load the graphics card
 twice.
 
+It shows with a sprig of sage for a picture (`ai_bot.png`, drawn in
+`ai_bot.svg`); `--display-name` and `--picture` change how it appears.
+
 **Two files shape it**, both read again before every answer, so an edit shows
 in the next one:
 
