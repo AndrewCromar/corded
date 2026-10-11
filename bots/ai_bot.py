@@ -312,6 +312,8 @@ def about_itself():
         "- `!ai here`, typed in a channel: you take part there without being called by name. Only the server's owner, or "
         "someone whose role has the Manage bots permission, can do it. Roles are edited in the app under "
         "Settings, Manage this server, Roles.\n"
+        "- `!ai here always`, typed in a channel: you answer every single message there, with no judging. For a "
+        "channel that is just for talking to you.\n"
         "- `!ai leave`, typed in a channel: you go back to answering only when addressed there.\n"
         "- `!ai where`: lists the channels chosen for you.\n"
         "- `!forget`: you forget the chat or thread it is typed in and start fresh.\n"
@@ -840,7 +842,8 @@ def hear(message):
     lately = [line for line in before[-6:] if not line["mine"]]
     alone = (len(bot.rooms.get(message.room_id, {}).get("members", [])) <= 2
              or all(line["who"] == message.sender_name for line in lately))
-    must = message.direct or message.mentions_me or answering or ((chosen or following) and alone)
+    always = message.room_id in bot.store.get("always", [])   # a channel that is its own: `!ai here always`
+    must = message.direct or message.mentions_me or answering or always or ((chosen or following) and alone)
     if not (must or chosen or following or carrying_on):
         return
     if must and not message.direct:   # asking itself whether to join in does not count
@@ -869,7 +872,7 @@ def switched(on):
         note("turned off")
 
 
-@bot.command("ai", help="here | leave | where: the channels I answer every message in; `!ai here #name` for another channel (for those who manage bots)")
+@bot.command("ai", help="here | here always | leave | where: the channels I take part in; `here always` answers everything; `!ai here #name` for another channel (for those who manage bots)")
 def channels(message, words):
     chosen = bot.store.setdefault("channels", [])
     what = words[0].lower() if words else "where"
@@ -881,8 +884,9 @@ def channels(message, words):
         return "Say `!ai here`, `!ai leave` or `!ai where`."
     # The channel it is said in, or one named after it: `!ai here #plans`.
     room_id, named = message.room_id, "this channel"
-    if len(words) > 1:
-        wanted = "#" + words[1].lstrip("#").lower()
+    named_one = [w for w in words[1:] if w.lower() != "always"]
+    if named_one:
+        wanted = "#" + named_one[0].lstrip("#").lower()
         found = [r for r, info in bot.rooms.items() if info.get("kind") == "channel" and info.get("title", "").lower() == wanted]
         if not found:
             return f"I am in no channel called {wanted}."
@@ -891,11 +895,19 @@ def channels(message, words):
         return "I always answer here. Name a channel, like `!ai here #general`."
     if not bot.may(message.sender_id):
         return "Only the owner, or someone whose role has Manage bots, can choose my channels."
+    always = bot.store.setdefault("always", [])
+    wants_always = what == "here" and words[-1].lower() == "always"
     if what == "here" and room_id not in chosen:
         chosen.append(room_id)
     if what == "leave" and room_id in chosen:
         chosen.remove(room_id)
+    if room_id in always and not wants_always:
+        always.remove(room_id)
+    if wants_always and room_id not in always:
+        always.append(room_id)
     bot.store.save()
+    if wants_always:
+        return f"I will answer every message in {named} from now on, whoever it is for."
     return (f"I am part of {named} from now on: I will join in when it is meant for me, without a mention."
             if what == "here" else
             f"In {named} I will only answer when I am addressed.")

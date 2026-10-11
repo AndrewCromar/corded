@@ -224,6 +224,18 @@ def main():
         wait_for("an unknown channel", alice_heard, lambda m: "no channel called #nowhere" in m.body)
         alice.say("#general", "!ai here #general")
         wait_for("choosing by name", alice_heard, lambda m: "I am part of #general" in m.body)
+        alice.say("#general", "!ai here always")
+        wait_for("answering everything", alice_heard, lambda m: "answer every message in this channel" in m.body)
+        requests, judged = len(asked), len(gates)
+        bob.say("#general", "alice, between us, one more thing")
+        for _ in range(60):
+            if len(asked) > requests:
+                break
+            time.sleep(0.2)
+        assert len(asked) == requests + 1 and len(gates) == judged, "in a channel that is its own it answers without judging"
+        alice.say("#general", "!ai here")
+        wait_for("judging again", alice_heard[-1:] + alice_heard, lambda m: "I am part of this channel" in m.body)
+        time.sleep(1)
         alice.say("#general", "!ai where")
         wait_for("the list", alice_heard, lambda m: "I take part without a mention in: #general" in m.body)
         # In its channel it reads everything and may stay out of it; called by name it may not.
