@@ -7,6 +7,7 @@ program, and checks what it asks for and what it sends back.
 import base64
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -94,7 +95,10 @@ def main():
         asking = alice.say("#general", "!imagine a red fox in the snow --wide --seed 7 --no fog, people")
         got = wait_for("the picture", alice_files, lambda m: True)
         assert got.file["mime"] == "image/png" and got.reply_to == asking["event_id"], got.raw
-        caption = (got.raw.get("content") or {}).get("caption", "") or got.body
+        content = got.raw.get("content") or {}
+        if shutil.which("ffmpeg"):   # with it, the apps show the picture in the chat itself
+            assert content.get("thumbnail") and content.get("width") == 1 and content.get("height") == 1, content.keys()
+        caption = content.get("caption", "") or got.body
         assert "a red fox in the snow" in caption and "--seed 7" in caption and "--wide" in caption, caption
         sent = asked[-1]
         assert sent["prompt"] == "a red fox in the snow" and (sent["width"], sent["height"]) == (1216, 832)
@@ -152,7 +156,16 @@ def main():
         alice.say("#general", "!imagine one more")     # alice's fifth
         alice.say("#general", "!imagine one too many")
         wait_for("the limit", alice_texts, lambda m: "5 pictures in ten minutes" in m.body)
-        print("ok  the sixth request in ten minutes is refused")
+        alice.say("#general", "!images limit 0")
+        wait_for("the limit lifted", alice_texts, lambda m: m.body == "No limit on pictures now.")
+        requests = len(asked)
+        alice.say("#general", "!imagine one too many after all")
+        for _ in range(100):
+            if len(asked) > requests:
+                break
+            time.sleep(0.2)
+        assert asked[-1]["prompt"] == "one too many after all"
+        print("ok  the sixth request in ten minutes is refused; a manager can change the limit, and 0 lifts it")
 
         # Channels chosen by those who manage bots; off and on.
         bob.say("#general", "!images here")

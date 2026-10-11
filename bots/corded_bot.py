@@ -102,6 +102,26 @@ def find_cli():
     return shutil.which("corded-cli") or shutil.which("corded-cli.exe")
 
 
+def _preview(path, mime):
+    """What lets the apps show a picture in the chat itself instead of as a
+    file to open: a small copy of it and its size. Made with ffmpeg when
+    that is installed; without it the picture is still sent, as a file."""
+    if not mime.startswith("image/") or not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        return {}
+    try:
+        size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                               "-of", "csv=p=0", path], capture_output=True, text=True, timeout=20).stdout.strip()
+        width, height = [int(n) for n in size.split(",")[:2]]
+        scale = "240:-2" if width >= height else "-2:240"
+        small = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf", f"scale={scale}", "-frames:v", "1",
+                                "-q:v", "6", "-f", "mjpeg", "pipe:1"], capture_output=True, timeout=30).stdout
+        if not small:
+            return {}
+        return {"thumbnail": base64.b64encode(small).decode(), "width": width, "height": height}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
 # Commands that put a message in a room, and what a few others answer with.
 _SENDS = {"send_text": "m.text", "send_file": "m.file", "add_task": "m.task", "send_event": None}
 _ANSWERS = {"start_chat": "room", "get_profile": "profile", "member_list": "members", "fetch_timeline": "events",
@@ -239,6 +259,7 @@ class Bot:
         cmd = {"cmd": "send_file", "room_id": self.room_id(room), "path": os.path.abspath(path), "caption": caption,
                # What kind of file it is, so that the apps show a picture or play a video.
                "mime": mimetypes.guess_type(path)[0] or "application/octet-stream"}
+        cmd.update(_preview(cmd["path"], cmd["mime"]))
         if reply_to:
             cmd["reply_to"] = reply_to
         if thread:

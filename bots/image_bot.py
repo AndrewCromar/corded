@@ -17,7 +17,9 @@ Options, at the end of a description: `--wide`, `--tall` or `--square`;
 
 `!again` makes the last description of the chat once more with a new seed.
 `!queue` shows who is waiting; `!cancel` takes your own request out of the
-line. One picture is made at a time. Each person gets five in ten minutes.
+line. One picture is made at a time. Each person gets five in ten minutes,
+unless those who manage bots say otherwise: `!images limit 20`, or
+`!images limit 0` for no limit.
 
 Where it works: everywhere it is, until channels are chosen for it. The
 owner, or anyone whose role has Manage bots, says `!images here` in a channel
@@ -183,6 +185,9 @@ def job(entry):
         caption = f"**{prompt}**\n`--seed {seed}{extras}` · {took:.0f} s"
         bot.send_file(message.room_id, path, caption, reply_to=message.event_id, thread=message.thread)
         last_words[message.room_id] = (prompt, settings)
+        # Nothing of a picture stays behind: the file is removed below, the
+        # picture program keeps none, and the bot's vault holds only the
+        # message that carried it.
         note(f"{message.sender}: a picture in {took:.0f}s: {prompt[:80]}")
     except Exception as error:  # noqa: BLE001
         note(f"no picture: {error}")
@@ -211,9 +216,10 @@ def ask(message, text, again=False):
         return "I do not make adult pictures here."
     now = time.time()
     times = [t for t in asked.get(message.sender_id, []) if now - t < WITHIN]
-    if len(times) >= PER_PERSON:
+    limit = bot.store.get("limit", PER_PERSON)
+    if limit and len(times) >= limit:
         wait = int((WITHIN - (now - times[0])) // 60) + 1
-        return f"That is {PER_PERSON} pictures in ten minutes; ask again in about {wait} minute{'s' if wait != 1 else ''}."
+        return f"That is {limit} pictures in ten minutes; ask again in about {wait} minute{'s' if wait != 1 else ''}."
     with lock:
         if len(line) >= LINE:
             return "The line is full; try again in a few minutes."
@@ -264,7 +270,7 @@ def cancel(message, words):
     return "You have nothing waiting. A picture that is already being made cannot be stopped."
 
 
-@bot.command("images", help="here | leave | where | adult off | adult nsfw (for those who manage bots)")
+@bot.command("images", help="here | leave | where | adult off | adult nsfw | limit N, 0 for none (for those who manage bots)")
 def images(message, words):
     chosen = bot.store.setdefault("channels", [])
     what = words[0].lower() if words else "where"
@@ -273,11 +279,21 @@ def images(message, words):
         where = "I make pictures in: " + ", ".join(titles) + ", and in direct chats." if titles else \
                 "I make pictures wherever I am; no channels have been chosen."
         adult = {"off": "Adult pictures: nowhere.", "nsfw": "Adult pictures: only in channels marked NSFW."}
-        return where + " " + adult[bot.store.get("adult", "off")]
-    if what not in ("here", "leave", "adult"):
-        return "Say `!images here`, `!images leave`, `!images where`, `!images adult off` or `!images adult nsfw`."
+        limit = bot.store.get("limit", PER_PERSON)
+        return (where + " " + adult[bot.store.get("adult", "off")] + " " +
+                (f"Each person: {limit} in ten minutes." if limit else "No limit on how many."))
+    if what not in ("here", "leave", "adult", "limit"):
+        return ("Say `!images here`, `!images leave`, `!images where`, `!images adult off`, `!images adult nsfw` "
+                "or `!images limit 5`.")
     if not bot.may(message.sender_id):
         return "Only the owner, or someone whose role has Manage bots, can change that."
+    if what == "limit":
+        if len(words) < 2 or not words[1].isdigit():
+            return "Say `!images limit 5`: pictures for each person in ten minutes. `!images limit 0` is no limit."
+        bot.store["limit"] = int(words[1])
+        bot.store.save()
+        return ("No limit on pictures now." if bot.store["limit"] == 0 else
+                f"Each person gets {bot.store['limit']} pictures in ten minutes.")
     if what == "adult":
         if len(words) < 2 or words[1].lower() not in ("off", "nsfw"):
             return "Say `!images adult off` or `!images adult nsfw`."
