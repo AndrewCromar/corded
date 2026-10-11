@@ -158,6 +158,16 @@ class Unit:
                 continue
             if (self.vault and self.vault in command.split(" ")) or (not self.vault and command.endswith(whole)):
                 return pid
+        # Or whatever of this user's answers on its port, started with other words.
+        if self.port and not mine and shutil.which("ss"):
+            try:
+                listening = subprocess.run(["ss", "-H", "-ltnp", f"sport = :{int(self.port)}"],
+                                           capture_output=True, text=True, timeout=5).stdout
+                found = listening.split("pid=")[1].split(",")[0] if "pid=" in listening else ""
+                if found.isdigit() and int(found) in running:
+                    return int(found)
+            except (OSError, subprocess.TimeoutExpired, IndexError):
+                pass
         return None
 
     def measure(self, running):
