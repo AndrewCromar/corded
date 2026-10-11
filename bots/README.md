@@ -112,7 +112,8 @@ python3 ai_bot.py 127.0.0.1:7443 --soul soul.example.txt --username sage
 
 **When it answers.** Always in a direct chat with it. Always when it is
 mentioned (`@sage`). In a thread it has already spoken in, without a new
-mention. And in every message of the channels chosen for it: the owner, or
+mention. When someone replies to one of its messages, or carries on right
+after it answered them (the next message, within `--follow-up` seconds, 120). And in every message of the channels chosen for it: the owner, or
 anyone whose role has **Manage bots**, says `!ai here` in a channel to choose
 it and `!ai leave` to undo that; `!ai where` lists them. One person gets at
 most `--per-minute` answers a minute outside a direct chat (8 unless changed).

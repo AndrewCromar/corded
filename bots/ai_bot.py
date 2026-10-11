@@ -16,6 +16,8 @@ When it answers:
     owner or someone whose role has Manage bots; `!ai leave` undoes it);
   - anywhere, when it is mentioned (@name);
   - in a thread it has already spoken in, without a new mention.
+  - when someone replies to one of its messages, or says the next thing
+    right after it answered them (within two minutes, nobody in between).
 
 How it answers is the model's choice, each time: a plain message, a reply to
 one message, a thread under one, or just a reaction.
@@ -57,6 +59,8 @@ parser.add_argument("--display-name", default=None)
 parser.add_argument("--vault", default=None)
 parser.add_argument("--memory", type=int, default=30, help="how many recent messages of a chat it keeps in mind")
 parser.add_argument("--max-tokens", type=int, default=400, help="the longest answer the model may write")
+parser.add_argument("--follow-up", type=int, default=120,
+                    help="seconds in which the next message of the person just answered counts as said to the bot")
 parser.add_argument("--per-minute", type=int, default=8,
                     help="answers one person can get in a minute outside a direct chat")
 args = parser.parse_args()
@@ -65,6 +69,7 @@ bot = Bot(vault=args.vault or f"./{args.username}-vault", username=args.username
           about="I am a language model running on my owner's machine. Mention me or write to me directly.")
 ACTIONS = ("message", "reply", "thread", "react")
 recent = {}        # (room id, thread root or "") -> the last few messages there, oldest first
+talking_to = {}    # (room id, thread root or "") -> (the person last answered there, when)
 asked_lately = {}  # user id -> when they were last answered, for the per-minute limit
 last_answer = {"seconds": None}
 lock = threading.Lock()
@@ -236,6 +241,7 @@ def answer(message):
     finally:
         thinking.set()
     last_answer["seconds"] = time.time() - began
+    talking_to[(message.room_id, message.thread or "")] = (message.sender_id, time.time())
     decided = understand(words, message.direct)
     target = message.event_id
     if decided["to"] and 1 <= decided["to"] <= len(lines) and lines[decided["to"] - 1]["id"]:
@@ -275,12 +281,19 @@ def answer(message):
 def hear(message):
     if message.type != "m.text" or not message.body.strip():
         return
+    before = list(history(message.room_id, message.thread))
     remember(message.room_id, message.thread, entry(message.event_id, message.sender_name, message.body))
     if message.body.strip().startswith(bot.prefix):
         return   # a command, for this bot or another
     chosen = message.room_id in bot.store.get("channels", [])
     following = bool(message.thread) and message.thread in spoken_threads()
-    if not (message.direct or message.mentions_me or chosen or following):
+    # Answering the bot is talking to it: a reply to one of its messages, or
+    # the next thing said by the person it has just answered, soon after.
+    answering = any(line["mine"] and line["id"] and line["id"] == message.reply_to for line in before)
+    talking = talking_to.get((message.room_id, message.thread or "")) or ("", 0)
+    carrying_on = (bool(before) and before[-1]["mine"] and talking[0] == message.sender_id
+                   and time.time() - talking[1] < args.follow_up)
+    if not (message.direct or message.mentions_me or chosen or following or answering or carrying_on):
         return
     if not message.direct:
         now = time.time()

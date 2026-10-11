@@ -115,6 +115,20 @@ def main():
         assert asked[0]["messages"][-1]["content"].endswith("alice: @sage hello there")
         print("ok  mention: answered, with the chat's rules and the form to answer in sent along")
 
+        # Carrying on needs no second mention; someone else cutting in does.
+        requests = len(asked)
+        alice.say("#general", "and one more thing")
+        for _ in range(60):
+            if len(asked) > requests:
+                break
+            time.sleep(0.2)
+        assert len(asked) == requests + 1, "the next message of the person just answered was not taken as said to it"
+        time.sleep(2)
+        bob.say("#general", "unrelated chatter from someone else")
+        time.sleep(3)
+        assert len(asked) == requests + 1, "it answered someone who was not talking to it"
+        print("ok  follow-up: the person just answered can carry on without a mention; others are not answered")
+
         # A direct chat is always answered, with a plain message.
         direct = bob.dm("sage", "hi, anyone home?")
         said = wait_for("an answer in the direct chat", bob_heard, lambda m: m.room_id == direct and m.body == "Noted.")
