@@ -33,7 +33,7 @@ Corded separates mechanism from policy, the way an operating system kernel does.
 | Prototype | Working: server, core library and terminal client on Linux, Raspberry Pi and Windows. Channels, direct and group chats, all end-to-end encrypted |
 | Android app | Working test builds (Flutter, on the same core). See below |
 | Desktop app | Early builds for Linux and Windows: the same app as on Android, in a window. See below |
-| Bots | A small Python kit and four example bots: [bots/](bots/README.md) |
+| Bots | A small Python kit and four bots, each in a repository of its own, and a host that runs a server and its bots with one command: [github.com/opencorded](https://github.com/opencorded) |
 | iOS, macOS, a browser client | Not started |
 
 ## Get it without building
@@ -345,7 +345,7 @@ It does:
 - A message to many devices is encrypted and stored once, with only its key going through
   each device's ratchet.
 - Signed releases, and updating the server and the apps from inside them.
-- Bots: ordinary members driven by a small Python kit ([bots/](bots/README.md)).
+- Bots: ordinary members driven by a small Python kit ([opencorded/bot-kit](https://github.com/opencorded/bot-kit)).
 - A frontend that uses only the public header, [`corded.h`](include/corded/corded.h).
 
 It does not, yet:
@@ -386,8 +386,7 @@ Code layout:
 | `frontends/tui/` | `corded-tui`, the terminal client |
 | `frontends/flutter/` | The app (`app/`) and the Dart binding to the core it is built on (`packages/corded_dart/`) |
 | `tools/corded-cli.cpp` | A headless client that speaks JSON lines, for scripts and debugging |
-| `bots/` | A Python kit for writing bots, with command, webhook, AI and birthday bots |
-| `tests/` | Crypto unit tests, end-to-end tests, smoke tests for the terminal client and the bots |
+| `tests/` | Crypto unit tests, end-to-end tests, a smoke test for the terminal client |
 
 ## License
 
