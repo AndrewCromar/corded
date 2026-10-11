@@ -58,3 +58,6 @@ vault.hdr
 __pycache__/
 *.pyc
 /host/host.json
+
+# What is left on a machine where the app used to be built here; the app lives in opencorded/app.
+/frontends/flutter/

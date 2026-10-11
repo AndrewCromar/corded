@@ -71,10 +71,11 @@ same as described below, with `.\corded-tui.exe` in place of `./build/dev/bin/co
 
 ### Android
 
-The app is in testing. Each test build is a signed APK on the
-[releases page](https://github.com/AndrewCromar/corded/releases), named
-`android-test-N`; take the newest. It needs Android 9 or newer on a 64-bit ARM phone,
-and each build installs over the one before and keeps its data. Android will ask you to
+The app is in testing. It has a repository of its own,
+[opencorded/app](https://github.com/opencorded/app), and its builds are on that
+repository's [releases page](https://github.com/opencorded/app/releases):
+`corded-android-arm64.apk`, signed; take the newest. It needs Android 9 or newer on a
+64-bit ARM phone, and each build installs over the one before and keeps its data. Android will ask you to
 allow installing from your browser or file manager the first time.
 
 To join a server from the app, type its address, or scan an invite's QR code shown by
@@ -86,8 +87,8 @@ stay in step.
 
 The desktop app is the Android app in a window: the chats listed on the left, the open
 one on the right. Enter sends, Shift+Enter starts a new line, and a right-click on a
-message brings up reply, react, thread and the rest. From the release after v0.5.0, each
-[release](https://github.com/AndrewCromar/corded/releases) carries
+message brings up reply, react, thread and the rest. Each
+[release of the app](https://github.com/opencorded/app/releases) carries
 `corded-app-<version>-windows-x64.zip` and `corded-app-<version>-linux-x86_64.tar.gz`.
 Unpack one anywhere and run `corded_app` inside it; the folder is the whole app.
 
