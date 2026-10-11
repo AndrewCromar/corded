@@ -168,6 +168,27 @@ in the next one:
   answers are short, and when a reply, a thread or a reaction is the right
   form. Change the bot's manners there.
 
+**Personalities.** It can be several characters and wears one at a time.
+Each has its own display name, picture, character text and memories; what
+one was told to remember the others do not know. You change them by talking
+to it: "what personalities do you have", "here is a new one: a grumpy old
+pirate captain called Barnacle", "switch to Barnacle", "from now on be more
+sarcastic", "remember that I hate mornings", "make yourself a new profile
+picture, a parrot in a storm" (drawn by the picture program, `--pictures`).
+Or by command: `!persona` lists them, `!persona use NAME`,
+`!persona new NAME: who it is`, `!persona show`, `!persona delete NAME`,
+`!persona forget`. Switching and reshaping is for the owner and those with
+Manage bots, unless `!persona open on` lets everyone; anyone can ask it to
+remember. Each lives in the bot's folder as `personas/NAME/` with `soul.md`,
+`memory.md`, `name.txt` and a picture, all of which can be edited by hand.
+The first one is made from `--soul` on the first run.
+
+How this works, because it matters with a small model: each message that
+sounds like such a wish is first put to the model as a question of its own
+(what, if anything, is being asked of the bot itself?), the bot carries the
+answer out, and only then is the model asked to reply, told what was done.
+Asked to act and to answer in one go, the model only said it had acted.
+
 **What it keeps in mind.** The last `--memory` messages (30) of each chat, and
 of each thread apart from its channel. Nothing extra is stored: after a
 restart it reads them back from its own vault. `!forget` makes it start fresh

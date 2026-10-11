@@ -45,6 +45,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -68,6 +69,8 @@ parser.add_argument("--display-name", default=None)
 parser.add_argument("--picture", default=os.path.join(HERE, "ai_bot.png"),
                     help="its profile picture, a small square image ('' for none)")
 parser.add_argument("--vault", default=None)
+parser.add_argument("--pictures", default="http://127.0.0.1:7860",
+                    help="a picture program on this machine (image_server.py), for making its own profile pictures; '' for none")
 parser.add_argument("--memory", type=int, default=30, help="how many recent messages of a chat it keeps in mind")
 parser.add_argument("--max-tokens", type=int, default=400, help="the longest answer the model may write")
 parser.add_argument("--follow-up", type=int, default=120,
@@ -217,8 +220,9 @@ def wear(which, quietly=False):
     profile = {"cmd": "set_profile", "display_name": personas().get(which, which)}
     try:
         bot.request(profile)
-        picture = persona_file(which, "picture.png")
-        picture = picture if os.path.exists(picture) else (args.picture if args.picture and os.path.exists(args.picture) else None)
+        picture = next((persona_file(which, f) for f in ("picture.jpg", "picture.png")
+                        if os.path.exists(persona_file(which, f))), None)
+        picture = picture or (args.picture if args.picture and os.path.exists(args.picture) else None)
         if picture:
             with open(picture, "rb") as f:
                 bot.request({"cmd": "set_profile", "picture": base64.b64encode(f.read()).decode()})
@@ -234,6 +238,41 @@ def keep(fact, who):
     lines = [line for line in read_file(path).splitlines() if line.strip()]
     lines.append(f"- {fact.strip()[:300]} ({who}, {time.strftime('%Y-%m-%d')})")
     write_file(path, "\n".join(lines[-400:]))
+
+
+def paint_itself(description):
+    """A new profile picture for the worn personality, drawn by the picture
+    program on this machine from a description. Returns why not, or ""."""
+    if not args.pictures:
+        return "no picture program is set up for me"
+    if not shutil.which("ffmpeg"):
+        return "ffmpeg is not installed on my machine, and I need it to make the picture small"
+    which = worn()
+    try:
+        request = urllib.request.Request(
+            args.pictures.rstrip("/") + "/sdapi/v1/txt2img",
+            data=json.dumps({"prompt": description[:600] + ", portrait, centred, simple background, profile picture",
+                             "negative_prompt": "text, watermark, frame, blurry, deformed", "width": 1024, "height": 1024,
+                             "steps": 25, "seed": -1, "cfg_scale": 7}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=900) as answer:
+            drawn = base64.b64decode(json.load(answer)["images"][0])
+    except Exception as error:  # noqa: BLE001
+        note(f"no picture: {error}")
+        return "the picture program on my machine did not answer"
+    small = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-vf", "scale=256:256", "-frames:v", "1",
+                            "-q:v", "4", "-f", "mjpeg", "pipe:1"], input=drawn, capture_output=True, timeout=60).stdout
+    if not small:
+        return "the picture could not be made small enough for a profile"
+    for old_one in ("picture.jpg", "picture.png"):
+        if os.path.exists(persona_file(which, old_one)):
+            os.remove(persona_file(which, old_one))
+    os.makedirs(os.path.join(PERSONAS, which), exist_ok=True)
+    with open(persona_file(which, "picture.jpg"), "wb") as f:
+        f.write(small)
+    wear(which, quietly=True)
+    note(f"a new picture for {which}: {description[:80]}")
+    return ""
 
 
 def may_reshape(user_id):
@@ -299,7 +338,8 @@ def personalities_text():
         "memories; what one remembers the others do not. Asked which you have, name them all from this list:\n"
         f"{listed}\n\n"
         "People change this by simply telling you (\"switch to X\", \"here is a new one: ...\", \"from now on "
-        "be ...\", \"remember that ...\"); it is then done for you and you are told. There are commands too: `!persona` "
+        "be ...\", \"remember that ...\", \"make yourself a new profile picture of ...\"); it is then done for you "
+        "and you are told. There are commands too: `!persona` "
         "lists them, `!persona use <name>` switches, `!persona new <name>: <who it is>` makes one, "
         "`!persona show` shows the character and memories of the one you are, `!persona delete <name>` removes "
         "one, `!persona forget` empties the memories of the one you are. Switching, making and changing them is "
@@ -344,7 +384,8 @@ def ask_model(message, lines, done=""):
 
 WISHES = re.compile(
     r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\b|"
-    r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b", re.IGNORECASE)
+    r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b|"
+    r"pfp|avatar|profile pic|(your|new) (picture|photo|image|look)", re.IGNORECASE)
 
 
 def wish(message):
@@ -369,7 +410,10 @@ def wish(message):
         "bot to have. For text, write two to four sentences beginning \"You are <name>,\" that say who this one is "
         "and how it talks, using what the message says.\n"
         '{"do": "change", "text": "<how to be>"}: it asks the bot to change how it itself talks or behaves from now '
-        "on, not just once. For text, one sentence beginning \"You\".")
+        "on, not just once. For text, one sentence beginning \"You\".\n"
+        '{"do": "picture", "text": "<what the picture shows>"}: it asks the bot to change, make or get a new '
+        "profile picture, avatar or pfp for itself. For text, describe the picture in one sentence a painter could "
+        "work from; if the message does not say what it should show, describe one that fits the bot's name.")
     request = urllib.request.Request(
         args.api.rstrip("/") + "/chat/completions",
         data=json.dumps({"model": args.model, "stream": False, "max_tokens": 200, "temperature": 0,
@@ -381,7 +425,7 @@ def wish(message):
         with urllib.request.urlopen(request, timeout=120) as answer:
             said = json.load(answer)["choices"][0]["message"]["content"]
         found = json.loads(said[said.find("{"):said.rfind("}") + 1])
-        if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change"):
+        if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change", "picture"):
             return {"do": "none"}
         if found["do"] == "remember" and "?" in message.body:
             return {"do": "none"}   # a question about what it remembers is not something new to keep
@@ -407,6 +451,17 @@ def grant(asked, message):
         names = ", ".join(f"{name}{' (the one you are now)' if which == now else ''}" for which, name in personas().items())
         return (f"They asked which personalities you have. You have exactly these and no others: {names}. Name "
                 "exactly these. A new one can be described to you and you will have it.")
+    if do == "picture":
+        if not may_reshape(message.sender_id):
+            return ("They asked you to change your profile picture, which was not done: only the owner, or someone "
+                    "whose role has Manage bots, can change that. Tell them so.")
+        if not text:
+            return ""
+        problem = paint_itself(text)
+        if problem:
+            return f"They asked you for a new profile picture. It was not made: {problem}. Tell them so."
+        return (f"At their request you have just made yourself a new profile picture and put it on: \"{text}\". "
+                "It is done. Say so briefly in your own voice.")
     done, outcome = reshape({"do": do, "name": asked.get("name"), "character": text}, message)
     outcome = outcome.strip("()")
     if done:

@@ -6,6 +6,7 @@ checks where and how it answers.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -30,6 +31,8 @@ def free_port():
 
 
 asked = []   # every request the "model" got
+painted = [] # every picture it asked the picture program for
+PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJRU5ErkJggg=="
 gates = []   # every time it was asked whether a message was meant for the bot
 unloads = [] # every time it was told to let go of the graphics card
 
@@ -39,6 +42,14 @@ class Model(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "prompt" in body and "width" in body:   # the picture program, asked for a profile picture
+            painted.append(body)
+            raw = json.dumps({"images": [PNG], "info": "{}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if "messages" not in body:   # Ollama's "unload this model", sent when the bot is turned off
             unloads.append(body)
             self.send_response(200)
@@ -58,6 +69,8 @@ class Model(BaseHTTPRequestHandler):
                 words = json.dumps({"do": "switch", "name": "captain"})
             elif "from now on" in last:
                 words = json.dumps({"do": "change", "text": "You end every answer with arr."})
+            elif "profile picture" in last:
+                words = json.dumps({"do": "picture", "text": "an owl wearing a sailor's cap"})
             elif "which personalities" in last:
                 words = json.dumps({"do": "list"})
             else:
@@ -122,7 +135,8 @@ def main():
 
         def start_bot():
             p = subprocess.Popen([sys.executable, "ai_bot.py", address, "--api", f"http://127.0.0.1:{model_port}/v1",
-                                  "--username", "sage", "--vault", os.path.join(tmp, "sage"), "--per-minute", "100"],
+                                  "--username", "sage", "--vault", os.path.join(tmp, "sage"), "--per-minute", "100",
+                                  "--pictures", f"http://127.0.0.1:{model_port}"],
                                  cwd=bots, stdout=subprocess.PIPE, text=True)
             started.append(p)
             line = p.stdout.readline()
@@ -290,6 +304,12 @@ def main():
         alice.say("#general", "@sage and again")
         time.sleep(3)
         assert "You end every answer with arr." in system()
+        if shutil.which("ffmpeg"):
+            alice.say("#general", "@sage make yourself a new profile picture, an owl in a sailor's cap")
+            time.sleep(5)
+            assert painted and "an owl wearing a sailor's cap" in painted[-1]["prompt"], "it asks the picture program itself"
+            assert os.path.exists(os.path.join(tmp, "sage", "personas", "captain", "picture.jpg")), "kept with the personality"
+            assert "made yourself a new profile picture and put it on" in system()
         alice.say("#general", "!persona")
         wait_for("the list", alice_heard, lambda m: "**Captain** (now)" in m.body and "**sage**" in m.body)
         alice.say("#general", "!persona new Owl: You are Owl. You speak rarely and wisely.")
