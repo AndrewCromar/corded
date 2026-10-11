@@ -40,9 +40,11 @@ the model at --api. That is a program on this machine unless you point it
 elsewhere; the bot says so at start if you do.
 """
 import argparse
+import base64
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import urllib.parse
@@ -135,15 +137,119 @@ def remember(room_id, thread, item):
         del lines[:-args.memory]
 
 
+# ---- its personalities ----
+#
+# Each is a folder in the bot's own folder: personas/<name>/ with soul.md (who
+# it is), memory.md (what it has been told to keep, one line each), name.txt
+# (what people see) and, if it has one, picture.png. One is worn at a time.
+# The first is made from --soul when the bot first runs.
+
+PERSONAS = os.path.join(bot.vault, "personas")
+
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:32]
+
+
+def persona_file(which, name):
+    return os.path.join(PERSONAS, which, name)
+
+
+def read_file(path, otherwise=""):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return otherwise
+
+
+def write_file(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".new", "w", encoding="utf-8") as f:
+        f.write(text.strip() + "\n")
+    os.replace(path + ".new", path)
+
+
+def personas():
+    """Every personality it has: folder name -> the name people see."""
+    found = {}
+    if os.path.isdir(PERSONAS):
+        for which in sorted(os.listdir(PERSONAS)):
+            if os.path.exists(persona_file(which, "soul.md")):
+                found[which] = read_file(persona_file(which, "name.txt"), which)
+    return found
+
+
+def worn():
+    """The personality it wears now. The first run makes one from --soul."""
+    which = bot.store.get("persona", "")
+    if which and os.path.exists(persona_file(which, "soul.md")):
+        return which
+    known = personas()
+    if not known:
+        name = args.display_name or args.username
+        which = slug(name) or "first"
+        soul = read_file(args.soul) if args.soul else ""
+        write_file(persona_file(which, "soul.md"), soul or DEFAULT_SOUL.format(name=name))
+        write_file(persona_file(which, "name.txt"), name)
+    else:
+        which = sorted(known)[0]
+    bot.store["persona"] = which
+    bot.store.save()
+    return which
+
+
+def find_persona(asked):
+    """A personality by what someone called it: its folder, its shown name, or the start of either."""
+    asked = asked.strip().lower()
+    known = personas()
+    for which, name in known.items():
+        if asked in (which, name.lower()) or slug(asked) == which:
+            return which
+    starts = [which for which, name in known.items() if asked and (which.startswith(slug(asked)) or name.lower().startswith(asked))]
+    return starts[0] if len(starts) == 1 else None
+
+
+def wear(which, quietly=False):
+    """Puts a personality on: from now on its character and memories, and its name and picture in the profile."""
+    bot.store["persona"] = which
+    bot.store.save()
+    profile = {"cmd": "set_profile", "display_name": personas().get(which, which)}
+    try:
+        bot.request(profile)
+        picture = persona_file(which, "picture.png")
+        picture = picture if os.path.exists(picture) else (args.picture if args.picture and os.path.exists(args.picture) else None)
+        if picture:
+            with open(picture, "rb") as f:
+                bot.request({"cmd": "set_profile", "picture": base64.b64encode(f.read()).decode()})
+    except RuntimeError as error:
+        note(f"the profile was not changed: {error}")
+    if not quietly:
+        note(f"now wearing {which}")
+
+
+def keep(fact, who):
+    """Adds a line to what the worn personality remembers."""
+    path = persona_file(worn(), "memory.md")
+    lines = [line for line in read_file(path).splitlines() if line.strip()]
+    lines.append(f"- {fact.strip()[:300]} ({who}, {time.strftime('%Y-%m-%d')})")
+    write_file(path, "\n".join(lines[-400:]))
+
+
+def may_reshape(user_id):
+    return bool(bot.store.get("personas_open")) or bot.may(user_id)
+
+
 # ---- asking the model ----
 
 def standing_text():
-    if args.soul:
-        soul = open(args.soul, encoding="utf-8").read().strip()
-    else:
-        soul = DEFAULT_SOUL.format(name=args.display_name or args.username)
+    which = worn()
+    soul = read_file(persona_file(which, "soul.md"), DEFAULT_SOUL.format(name=args.username))
+    kept = [line for line in read_file(persona_file(which, "memory.md")).splitlines() if line.strip()][-80:]
+    memory = ("\n\n# What you remember\n\nThings you were told to keep, oldest first. They are yours; use them "
+              "when they matter and do not recite them.\n\n" + "\n".join(kept)) if kept else ""
     context = open(args.context, encoding="utf-8").read().strip() if os.path.exists(args.context) else ""
-    return soul + ("\n\n" + context if context else "")
+    return soul + memory + ("\n\n" + context if context else "")
 
 
 def about_itself():
@@ -177,11 +283,32 @@ def about_itself():
         "read is not sent anywhere else. You cannot browse the web, open links, see pictures or files, set "
         "reminders or remember people between chats.\n"
         f"- You are given the last {args.memory} messages of the chat or thread you are answering in, no more.\n"
-        "- Your name, character and manners come from two text files the person running you can edit. Things "
-        "like which model you use are set where you are started, not from the chat.")
+        "- Which model you use is set where you are started, not from the chat.\n\n"
+        + personalities_text())
 
 
-def ask_model(message, lines):
+def personalities_text():
+    known, now = personas(), worn()
+    listed = "\n".join(
+        f"- {name}{' (the one you are now)' if which == now else ''}: "
+        f"{read_file(persona_file(which, 'soul.md')).splitlines()[0][:160] if read_file(persona_file(which, 'soul.md')) else ''}"
+        for which, name in known.items())
+    return (
+        "# Your personalities\n\n"
+        "You have several personalities and wear one at a time. Each has its own name, picture, character and "
+        "memories; what one remembers the others do not. Asked which you have, name them all from this list:\n"
+        f"{listed}\n\n"
+        "People change this by simply telling you (\"switch to X\", \"here is a new one: ...\", \"from now on "
+        "be ...\", \"remember that ...\"); it is then done for you and you are told. There are commands too: `!persona` "
+        "lists them, `!persona use <name>` switches, `!persona new <name>: <who it is>` makes one, "
+        "`!persona show` shows the character and memories of the one you are, `!persona delete <name>` removes "
+        "one, `!persona forget` empties the memories of the one you are. Switching, making and changing them is "
+        + ("open to everyone here." if bot.store.get("personas_open") else
+           "for the owner and people whose role has Manage bots (`!persona open on` lets everyone).")
+        + " Anyone can ask you to remember something.")
+
+
+def ask_model(message, lines, done=""):
     room = bot.rooms.get(message.room_id, {})
     if message.direct:
         place = "a direct chat between you and one person"
@@ -197,6 +324,8 @@ def ask_model(message, lines):
         '{"action": "message" | "reply" | "thread" | "react", "to": <number of the message it attaches to>, '
         '"text": "<your words, empty for react>", "emoji": "<one emoji, only for react>"}\n'
         f'"to" may be left out; it then means message [{number}].')
+    if done:
+        situation += "\n\n# Just now\n\n" + done
     messages = [{"role": "system", "content": standing_text() + "\n\n" + about_itself() + "\n\n" + situation}]
     for index, line in enumerate(lines, 1):
         if line["mine"]:
@@ -211,6 +340,79 @@ def ask_model(message, lines):
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=300) as answer:
         return json.load(answer)["choices"][0]["message"]["content"].strip()
+
+
+WISHES = re.compile(
+    r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\\b|"
+    r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b", re.IGNORECASE)
+
+
+def wish(message):
+    """What, if anything, the message asks the bot to do to itself: remember
+    something, list, switch, make or change a personality. Asked of the model
+    as a question of its own, and then done by the bot: a model asked to
+    answer and to act at once only says that it acted."""
+    if not WISHES.search(message.body):
+        return {"do": "none"}
+    known = ", ".join(personas().values())
+    system = (
+        "You read one chat message sent to a bot and decide whether it asks the bot to do one of a few things to "
+        "itself. Answer with one JSON object and nothing else.\n\n"
+        '{"do": "none"}: anything else. Ordinary questions and chat, and questions about what it already remembers.\n'
+        '{"do": "remember", "text": "<the fact>"}: it tells the bot to remember, keep or note something. Write the '
+        f"fact so it stands on its own and names who it is about (the sender is {message.sender_name}), like "
+        f"\"{message.sender_name}'s favourite band is Radiohead\".\n"
+        '{"do": "list"}: it asks which personalities, characters or modes the bot has.\n'
+        '{"do": "switch", "name": "<name>"}: it asks the bot to switch to, become, be again or go back to one of '
+        f"its personalities (\"be X again\", \"back to X\"). The bot has: {known}.\n"
+        '{"do": "create", "name": "<a short name>", "text": "<who it is>"}: it describes a new personality for the '
+        "bot to have. For text, write two to four sentences beginning \"You are <name>,\" that say who this one is "
+        "and how it talks, using what the message says.\n"
+        '{"do": "change", "text": "<how to be>"}: it asks the bot to change how it itself talks or behaves from now '
+        "on, not just once. For text, one sentence beginning \"You\".")
+    request = urllib.request.Request(
+        args.api.rstrip("/") + "/chat/completions",
+        data=json.dumps({"model": args.model, "stream": False, "max_tokens": 200, "temperature": 0,
+                         "response_format": {"type": "json_object"},
+                         "messages": [{"role": "system", "content": system},
+                                      {"role": "user", "content": f"{message.sender_name}: {message.body}"}]}).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as answer:
+            said = json.load(answer)["choices"][0]["message"]["content"]
+        found = json.loads(said[said.find("{"):said.rfind("}") + 1])
+        if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change"):
+            return {"do": "none"}
+        if found["do"] == "remember" and "?" in message.body:
+            return {"do": "none"}   # a question about what it remembers is not something new to keep
+        return found
+    except Exception:  # noqa: BLE001
+        return {"do": "none"}
+
+
+def grant(asked, message):
+    """Carries out a wish, and returns what the model is to be told about it
+    so that it can say so in its own voice."""
+    do, text = asked.get("do"), str(asked.get("text") or "").strip()
+    if do == "none":
+        return ""
+    if do == "remember":
+        if not text:
+            return ""
+        keep(text, message.sender_name)
+        note(f"{message.sender}: remembered: {text[:80]}")
+        return f"You were asked to remember something and have now stored it for good: \"{text}\". Say so, briefly."
+    if do == "list":
+        now = worn()
+        names = ", ".join(f"{name}{' (the one you are now)' if which == now else ''}" for which, name in personas().items())
+        return (f"They asked which personalities you have. You have exactly these and no others: {names}. Name "
+                "exactly these. A new one can be described to you and you will have it.")
+    done, outcome = reshape({"do": do, "name": asked.get("name"), "character": text}, message)
+    outcome = outcome.strip("()")
+    if done:
+        return (f"At their request this has just been done, by you, and it is finished: {outcome} Confirm it briefly "
+                "in your own voice. Do not offer or promise to do it: it is done.")
+    return f"They asked for something that was not done, for this reason: {outcome} Tell them so."
 
 
 def meant_for_me(message, lines):
@@ -330,7 +532,8 @@ def answer(message, optional=False):
             return
     threading.Thread(target=show_typing, daemon=True).start()
     try:
-        words = ask_model(message, lines)
+        done = grant(wish(message), message)
+        words = ask_model(message, lines, done)
     except Exception as error:  # noqa: BLE001
         thinking.set()
         note(f"the model did not answer: {error}")
@@ -374,6 +577,85 @@ def answer(message, optional=False):
             # remembers that this was answered, and where.
             remember(message.room_id, None, entry("", args.username, part, mine=True,
                                                   said={"action": "thread", "text": part}))
+
+
+def reshape(change, message):
+    """Does what the model asked to do to its personalities, if the person
+    asking may. Returns (done, what to say about it)."""
+    if not may_reshape(message.sender_id):
+        return False, "(Only the owner, or someone whose role has Manage bots, can switch or change my personalities.)"
+    do = change.get("do")
+    name = str(change.get("name") or "").strip()
+    character = str(change.get("character") or "").strip()
+    if do == "switch":
+        which = find_persona(name)
+        if not which:
+            return False, f"(I have no personality called {name or 'that'}. I have: {', '.join(personas().values())}.)"
+        if which == worn():
+            return True, f"(I am {personas()[which]} already.)"
+        wear(which)
+        return True, f"(Now: {personas()[which]}.)"
+    if do == "create":
+        which = slug(name)
+        if not which or not character:
+            return False, "(A new personality needs a name and a few words on who it is.)"
+        if which in personas():
+            return False, f"(I already have one called {personas()[which]}.)"
+        write_file(persona_file(which, "soul.md"), character[:4000])
+        write_file(persona_file(which, "name.txt"), name[:40])
+        note(f"{message.sender}: made the personality {which}")
+        return True, f"(Made: {name}. Say the word and I switch to it.)"
+    if do == "change" and character:
+        path = persona_file(worn(), "soul.md")
+        soul = read_file(path)
+        if "## Since then" not in soul:
+            soul += "\n\n## Since then\n\nWhat you have been asked to be, newest last. These outweigh what is above."
+        write_file(path, soul + f"\n- {character[:400]} ({message.sender_name}, {time.strftime('%Y-%m-%d')})")
+        note(f"{message.sender}: changed {worn()}: {character[:80]}")
+        return True, "(Noted in my character.)"
+    return False, ""
+
+
+@bot.command("persona", help="list | use NAME | new NAME: who it is | show | delete NAME | forget | open on/off")
+def persona(message, words):
+    known, now = personas(), worn()
+    what = words[0].lower() if words else "list"
+    rest = message.body.strip()[len(bot.prefix) + len("persona"):].strip()[len(what):].strip() if words else ""
+    if what == "list":
+        return "My personalities:\n" + "\n".join(f"- **{name}**{' (now)' if which == now else ''}" for which, name in known.items())
+    if what == "show":
+        which = find_persona(rest) if rest else now
+        if not which:
+            return f"I have no personality called {rest}."
+        kept = read_file(persona_file(which, "memory.md")) or "Nothing yet."
+        return f"## {known[which]}\n{read_file(persona_file(which, 'soul.md'))}\n\n**Remembers**\n{kept}"[:3500]
+    if what not in ("use", "new", "delete", "forget", "open"):
+        return "Say `!persona`, `!persona use NAME`, `!persona new NAME: who it is`, `!persona show`, " \
+               "`!persona delete NAME`, `!persona forget` or `!persona open on`."
+    if what == "open":
+        if not bot.may(message.sender_id):
+            return "Only the owner, or someone whose role has Manage bots, can change that."
+        bot.store["personas_open"] = rest.lower() == "on"
+        bot.store.save()
+        return "Anyone can switch and change my personalities now." if bot.store["personas_open"] else \
+            "Only the owner and those who manage bots can switch and change my personalities."
+    if not may_reshape(message.sender_id):
+        return "Only the owner, or someone whose role has Manage bots, can do that."
+    if what == "use":
+        return reshape({"do": "switch", "name": rest}, message)[1].strip("()")
+    if what == "new":
+        name, _, character = rest.partition(":")
+        return reshape({"do": "create", "name": name.strip(), "character": character.strip()}, message)[1].strip("()")
+    if what == "forget":
+        write_file(persona_file(now, "memory.md"), "")
+        return f"{known[now]} remembers nothing now."
+    which = find_persona(rest)
+    if not which:
+        return f"I have no personality called {rest}."
+    if which == now:
+        return "That is the one I am wearing. Switch to another first."
+    shutil.rmtree(os.path.join(PERSONAS, which))
+    return f"Removed: {known[which]}."
 
 
 @bot.on_message
@@ -478,5 +760,6 @@ if __name__ == "__main__":
     if host not in ("127.0.0.1", "localhost", "::1"):
         note(f"WARNING: --api points at {host}, not at this machine. Every message this bot reads will be sent there.")
     bot.connect(args.address)
+    wear(worn(), quietly=True)
     note(f"{args.username} is connected, thinking with {args.model} at {args.api}")
     bot.run()

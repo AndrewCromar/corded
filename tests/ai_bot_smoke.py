@@ -46,9 +46,23 @@ class Model(BaseHTTPRequestHandler):
             self.wfile.write(b"{}")
             return
         last = [m for m in body["messages"] if m["role"] == "user"][-1]["content"].lower()
-        if "for_bot" not in body["messages"][0]["content"]:
+        if "for_bot" not in body["messages"][0]["content"] and "decide whether it asks" not in body["messages"][0]["content"]:
             asked.append(body)
-        if "for_bot" in body["messages"][0]["content"]:
+        if "decide whether it asks the bot to do one of a few things" in body["messages"][0]["content"]:
+            # The question asked first about a message that sounds like a wish.
+            if "remember that" in last:
+                words = json.dumps({"do": "remember", "text": "alice takes her tea without milk"})
+            elif "new personality" in last:
+                words = json.dumps({"do": "create", "name": "Captain", "text": "You are Captain, an old sailor. You talk like one."})
+            elif "switch to" in last:
+                words = json.dumps({"do": "switch", "name": "captain"})
+            elif "from now on" in last:
+                words = json.dumps({"do": "change", "text": "You end every answer with arr."})
+            elif "which personalities" in last:
+                words = json.dumps({"do": "list"})
+            else:
+                words = json.dumps({"do": "none"})
+        elif "for_bot" in body["messages"][0]["content"]:
             # The question asked first when nobody called the bot: is this for it?
             last = last.split("last message:")[-1]
             gates.append(last)
@@ -234,6 +248,60 @@ def main():
         parts = [m for m in alice_heard[before:] if m.sender == "sage" and m.body.startswith("A paragraph")]
         assert len(parts) >= 2 and all(len(m.body) <= 3500 for m in parts), [len(m.body) for m in parts]
         print("ok  plain words are sent as they are, without @everyone; a long answer is cut at paragraph ends")
+
+        # Personalities: remembering, making one by describing it, switching, changing; each with its own memories.
+        def shown_name():
+            for m in alice.request({"cmd": "member_list"})["members"]:
+                if m["username"] == "sage":
+                    return m["display_name"]
+        system = lambda: asked[-1]["messages"][0]["content"]   # noqa: E731
+        alice.say("#general", "@sage remember that I take my tea without milk")
+        time.sleep(3)
+        assert "have now stored it for good" in system(), "the model is told what was done, to say so itself"
+        alice.say("#general", "@sage what do you know about me")
+        wait_for("an answer", alice_heard[-1:] + alice_heard, lambda m: m.body == "Noted.")
+        time.sleep(1)
+        assert "alice takes her tea without milk" in system() and "# What you remember" in system()
+        bob.say("#general", "@sage here is a new personality for you: a sailor")
+        time.sleep(3)
+        assert "was not done" in system() and "can switch or change my personalities" in system()
+        alice.say("#general", "@sage here is a new personality for you: a sailor called Captain")
+        time.sleep(3)
+        assert "Made: Captain" in system()
+        alice.say("#general", "@sage which personalities do you have")
+        time.sleep(3)
+        assert "exactly these and no others: Captain, sage (the one you are now)" in system(), system().split("# Just now")[-1][:300]
+        alice.say("#general", "@sage switch to the captain")
+        time.sleep(3)
+        assert "Now: Captain" in system() and "You are Captain, an old sailor" in system(), "it confirms the switch as the new one"
+        for _ in range(50):
+            if shown_name() == "Captain":
+                break
+            time.sleep(0.2)
+        assert shown_name() == "Captain", shown_name()
+        alice.say("#general", "@sage who are you now")
+        time.sleep(3)
+        assert "You are Captain, an old sailor" in system() and "tea without milk" not in system(), \
+            "the new personality has its own character and none of the other's memories"
+        assert "- Captain (the one you are now)" in system() and "- sage:" in system()
+        alice.say("#general", "@sage from now on end every answer with arr")
+        time.sleep(3)
+        assert "Noted in my character" in system()
+        alice.say("#general", "@sage and again")
+        time.sleep(3)
+        assert "You end every answer with arr." in system()
+        alice.say("#general", "!persona")
+        wait_for("the list", alice_heard, lambda m: "**Captain** (now)" in m.body and "**sage**" in m.body)
+        alice.say("#general", "!persona new Owl: You are Owl. You speak rarely and wisely.")
+        wait_for("one made by command", alice_heard, lambda m: m.body.startswith("Made: Owl"))
+        alice.say("#general", "!persona use sage")
+        wait_for("switching back", alice_heard, lambda m: m.body == "Now: sage.")
+        alice.say("#general", "!persona delete owl")
+        wait_for("one removed", alice_heard, lambda m: m.body == "Removed: Owl.")
+        alice.say("#general", "@sage back to you")
+        time.sleep(3)
+        assert "tea without milk" in system() and "end every answer with arr" not in system(), "back as the first, with its memories and without the other's changes"
+        print("ok  personalities: remembers when told; made, switched and changed by talking or by command; each has its own memories; only a manager reshapes")
 
         # Off and on, by those who manage bots; off, it answers nothing.
         bob.say("#general", "!sage off")
