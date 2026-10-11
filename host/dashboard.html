@@ -116,8 +116,15 @@ function draw(state) {
   if (m.memory) meters += meter('Memory', size(m.memory.used), 'of ' + size(m.memory.total), m.memory.used / m.memory.total,
     'held by these programs: ' + size(state.units.reduce((sum, u) => sum + u.rss, 0)));
   if (m.load !== undefined) meters += meter('Processor', m.load.toFixed(2), 'load on ' + m.cores + ' cores', m.load / m.cores, '');
+  if (m.storage && m.storage.files !== undefined) {
+    const s = m.storage, limit = s.files_limit;
+    meters += meter("Members' files", size(s.files_bytes), limit ? 'of the ' + size(limit) + ' allowed' : 'no limit set',
+      limit ? s.files_bytes / limit : 0,
+      s.files + ' file' + (s.files === 1 ? '' : 's') + ' · ' + s.members + ' accounts'
+      + (limit ? '' : ' · set one with /set storage_limit_mb in the terminal client, or in Manage this server'));
+  }
   if (m.storage) meters += meter('Disk', size(m.storage.disk_total - m.storage.disk_free), 'of ' + size(m.storage.disk_total),
-    1 - m.storage.disk_free / m.storage.disk_total, "the server's own data: " + size(m.storage.server));
+    1 - m.storage.disk_free / m.storage.disk_total, "everything the server keeps: " + size(m.storage.server));
   document.getElementById('meters').innerHTML = meters;
 
   let html = '';

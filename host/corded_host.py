@@ -354,7 +354,28 @@ class Host:
                 self._data_size = (size, time.time())
             disk = shutil.disk_usage(self.server_data)
             out["storage"] = {"server": size, "disk_free": disk.free, "disk_total": disk.total}
+            out["storage"].update(self.server_files())
         return out
+
+    def server_files(self):
+        """What members have sent as files, against the allowance the owner
+        set in the server's settings (storage_limit_mb; 0 is none). Read from
+        the server's own database, without writing to it."""
+        import sqlite3
+        try:
+            db = sqlite3.connect(f"file:{os.path.join(self.server_data, 'cordedd.db')}?mode=ro", uri=True, timeout=2)
+            try:
+                count, held = db.execute("SELECT COUNT(*), COALESCE(SUM(total), 0) FROM blobs").fetchone()
+                row = db.execute("SELECT value FROM server_info WHERE key = 'set:storage_limit_mb'").fetchone()
+                members = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            finally:
+                db.close()
+            value = row[0] if row else b"0"
+            value = value.decode(errors="replace") if isinstance(value, bytes) else str(value)
+            limit = int(value) * 2 ** 20 if value.strip().isdigit() else 0
+            return {"files": count, "files_bytes": held, "files_limit": limit, "members": members}
+        except Exception:  # noqa: BLE001  (an older server, or one that is busy: the figure is left out)
+            return {}
 
     def shutdown(self):
         self.stopping = True
