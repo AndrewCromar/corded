@@ -130,13 +130,15 @@ _ANSWERS = {"start_chat": "room", "get_profile": "profile", "member_list": "memb
 
 class Bot:
     def __init__(self, vault, username, cli=None, prefix="!", about=None, is_bot=True, hear_bots=False,
-                 display_name=None, picture=None):
+                 display_name=None, picture=None, catch_up=False):
         """vault: a folder for this bot's keys and messages (made on first run).
         username: the bot's name on the server. prefix: what commands start with.
         about: a line for the bot's profile. is_bot: say so in the profile, so
         people see a BOT tag. hear_bots: also handle what other bots say.
         display_name: the name people see instead of the username. picture: a
-        small square image file (PNG or JPEG, about 128 pixels) for its profile."""
+        small square image file (PNG or JPEG, about 128 pixels) for its profile.
+        catch_up: also handle messages that were sent while the bot was not
+        running; left out, those are skipped when it comes back."""
         self.vault = os.path.abspath(vault)
         self.username = username
         self.prefix = prefix
@@ -145,6 +147,8 @@ class Bot:
         self.picture = picture
         self.is_bot = is_bot
         self.hear_bots = hear_bots
+        self.catch_up = catch_up   # True: also handle what was said while the bot was not running
+        self._began = time.time()
         self.rooms = {}          # room id -> {"title", "kind", "members", ...}
         self.me = ""             # this bot's user id, once known
         self.live = threading.Event()
@@ -506,6 +510,8 @@ class Bot:
                     continue
                 if not self.hear_bots and self.members().get(message.sender_id, {}).get("bot"):
                     continue   # two bots answering each other would never stop
+                if self._stale(data):
+                    continue
                 threading.Thread(target=self._handle, args=(message,), daemon=True).start()
 
     def _answer(self, result):
@@ -608,6 +614,17 @@ class Bot:
             pass
         for handler in self._power_handlers:
             self._guard(handler, bool(on))
+
+    def _stale(self, data):
+        """Whether a message is one of those said while the bot was not
+        running, handed over as it comes back. Those are not answered: a
+        request made to nobody a while ago is not wanted in a burst now.
+        Only what arrives in the first half minute and is over two minutes
+        old counts, so a sender whose clock is a little off loses nothing."""
+        if self.catch_up or time.time() - self._began > 30:
+            return False
+        sent = (data.get("origin_ts") or 0) / 1000
+        return bool(sent) and sent < self._began - 120
 
     def _power_file(self):
         """The same switch for a program on this machine (the host's
