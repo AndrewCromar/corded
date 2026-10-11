@@ -343,7 +343,7 @@ def ask_model(message, lines, done=""):
 
 
 WISHES = re.compile(
-    r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\\b|"
+    r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\b|"
     r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b", re.IGNORECASE)
 
 
