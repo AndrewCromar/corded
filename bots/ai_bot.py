@@ -330,6 +330,9 @@ def about_itself():
 
 
 def personalities_text():
+    if bot.store.get("personas_off"):
+        return ("# Personalities\n\nYou have one character, the one described above. You cannot switch, take on "
+                "new ones or store memories at the moment; if asked, say that this is switched off for now.")
     known, now = personas(), worn()
     listed = "\n".join(
         f"- {name}{' (the one you are now)' if which == now else ''}: "
@@ -428,6 +431,8 @@ def wish(message, before=""):
     something, list, switch, make or change a personality. Asked of the model
     as a question of its own, and then done by the bot: a model asked to
     answer and to act at once only says that it acted."""
+    if bot.store.get("personas_off"):
+        return {"do": "none"}   # plain: one character, no remembering or reshaping by talk
     # `before` is what the same person said just before, when this message
     # only points at it ("@sage ^", "do that").
     if not WISHES.search(message.body) and not (before and WISHES.search(before)):
@@ -776,6 +781,15 @@ def persona(message, words):
     known, now = personas(), worn()
     what = words[0].lower() if words else "list"
     rest = message.body.strip()[len(bot.prefix) + len("persona"):].strip()[len(what):].strip() if words else ""
+    if what in ("off", "on") and not rest:
+        # The whole thing, off or on: off, it is one plain character and nothing said to it reshapes it.
+        if not bot.may(message.sender_id):
+            return "Only the owner, or someone whose role has Manage bots, can change that."
+        bot.store["personas_off"] = what == "off"
+        bot.store.save()
+        return "Personalities are off: I am just myself until `!persona on`." if what == "off" else "Personalities are on again."
+    if bot.store.get("personas_off"):
+        return "Personalities are switched off for now. `!persona on` (owner or Manage bots) brings them back."
     if what == "list":
         return "My personalities:\n" + "\n".join(f"- **{name}**{' (now)' if which == now else ''}" for which, name in known.items())
     if what == "show":
