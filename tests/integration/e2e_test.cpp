@@ -2265,17 +2265,25 @@ TEST_CASE("files are encrypted on the device and fetched by the people in the ch
     // A kept copy that was cut short or altered is noticed, thrown away and fetched afresh.
     for (const auto& f : std::filesystem::directory_iterator(kept)) {
         std::fstream damage(f.path(), std::ios::binary | std::ios::in | std::ios::out);
+        damage.seekg(300000);
+        char was = 0;
+        damage.get(was);
         damage.seekp(300000);
-        damage.put('X');
+        damage.put(static_cast<char>(~was));   // turned over: a fixed letter is, now and then, what was there
     }
     REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["error"]["code"] == "bad_file");
     REQUIRE(bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]}})["data"]["cached"] == false);
 
     // Bytes tampered with on the server are noticed.
     {
+        // The byte is turned over, not set to a letter: the stored bytes are
+        // ciphertext, and once in a few hundred runs the letter was already there.
         std::fstream f(stored[0], std::ios::binary | std::ios::in | std::ios::out);
+        f.seekg(1000);
+        char was = 0;
+        f.get(was);
         f.seekp(1000);
-        f.put('X');
+        f.put(static_cast<char>(~was));
     }
     std::filesystem::remove_all(kept);  // so it has to come from the server again
     json bad = bob.cmd({{"cmd", "download_file"}, {"room_id", general}, {"event_id", got["event_id"]},
