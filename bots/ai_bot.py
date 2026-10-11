@@ -386,7 +386,7 @@ WISHES = re.compile(
     r"remember|don'?t forget|keep in mind|note that|personalit|persona|character|switch|become|back to|again\b|"
     r"be (more|less|a |an )|from now on|act like|talk like|you are now|change (your|how you)|stop being|mode\b|"
     r"pfp|avatar|profile (pic|photo|image)|(your|yourself|new) (a )?(picture|photo|image|look)|play (the|a) |"
-    r"you (be|play|become|act)\b|act (like|as)|pretend", re.IGNORECASE)
+    r"you (be|play|become|act)\b|act (like|as)|pretend|remove|delete|get rid of|drop the", re.IGNORECASE)
 
 
 def wish(message, before=""):
@@ -419,6 +419,8 @@ def wish(message, before=""):
         "and how it talks, using what the message says.\n"
         '{"do": "change", "text": "<how to be>"}: it asks the bot to change how it itself talks or behaves from now '
         "on, not just once. For text, one sentence beginning \"You\".\n"
+        '{"do": "delete", "name": "<name>"}: it asks the bot to remove, delete or get rid of one of its '
+        "personalities.\n"
         '{"do": "picture", "text": "<what the picture shows>"}: it asks the bot to change, make or get a new '
         "profile picture, avatar or pfp for itself. For text, describe the picture in one sentence a painter could "
         "work from; if the message does not say what it should show, describe a portrait of the character the bot "
@@ -435,7 +437,7 @@ def wish(message, before=""):
         with urllib.request.urlopen(request, timeout=120) as answer:
             said = json.load(answer)["choices"][0]["message"]["content"]
         found = json.loads(said[said.find("{"):said.rfind("}") + 1])
-        if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change", "picture"):
+        if not isinstance(found, dict) or found.get("do") not in ("remember", "list", "switch", "create", "change", "picture", "delete"):
             return {"do": "none"}
         if found["do"] == "remember" and "?" in message.body and not before:
             return {"do": "none"}   # a question about what it remembers is not something new to keep
@@ -707,6 +709,16 @@ def reshape(change, message):
         note(f"{message.sender}: made the personality {which}")
         wear(which)   # whoever describes a new one wants to meet it
         return True, f"(Made: {name}, and that is who I am now.)"
+    if do == "delete":
+        which = find_persona(name)
+        if not which:
+            return False, f"(I have no personality called {name or 'that'}. I have: {', '.join(personas().values())}.)"
+        if which == worn():
+            return False, "(That is the one I am right now. Switch me to another first, then I can drop it.)"
+        gone = personas()[which]
+        shutil.rmtree(os.path.join(PERSONAS, which))
+        note(f"{message.sender}: removed the personality {which}")
+        return True, f"(Removed: {gone}.)"
     if do == "change" and character:
         path = persona_file(worn(), "soul.md")
         soul = read_file(path)
@@ -763,13 +775,7 @@ def persona(message, words):
     if what == "forget":
         write_file(persona_file(now, "memory.md"), "")
         return f"{known[now]} remembers nothing now."
-    which = find_persona(rest)
-    if not which:
-        return f"I have no personality called {rest}."
-    if which == now:
-        return "That is the one I am wearing. Switch to another first."
-    shutil.rmtree(os.path.join(PERSONAS, which))
-    return f"Removed: {known[which]}."
+    return reshape({"do": "delete", "name": rest}, message)[1].strip("()")
 
 
 @bot.on_message
