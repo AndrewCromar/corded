@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../platform.dart';
 import '../app_state.dart';
+import 'manage_bot.dart';
 import 'chat.dart';
 import 'common.dart';
 import 'presence.dart';
@@ -199,6 +200,12 @@ class _MembersScreenState extends State<MembersScreen> {
                           ProfileScreen(state: widget.state, userId: m.userId, username: m.username)));
             }),
             if (!m.me) item(Icons.chat_outlined, 'Message', () => _message(m)),
+            // A bot has a page of its own, which it describes itself.
+            if (m.bot && !m.me)
+              item(Icons.tune, 'Manage', () async {
+                await Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => ManageBotScreen(state: widget.state, member: m)));
+              }),
             if (m.me || _server.can('manage_nicknames'))
               item(Icons.badge_outlined, 'Change display name', () => _rename(m)),
             if (_server.can('manage_roles')) item(Icons.shield_outlined, 'Roles', () => _roles(m)),

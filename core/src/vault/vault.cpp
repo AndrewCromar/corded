@@ -705,7 +705,7 @@ Bytes Vault::first_unread(ByteView room_id, ByteView user_id) {
         "SELECT event_id FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
         "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
-        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND type NOT LIKE 'm.room.%' AND type NOT LIKE 'm.bot.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq LIMIT 1");
     st.bind(1, room_id).bind(2, user_id);
     return st.step() ? st.blob(0) : Bytes{};
@@ -757,7 +757,7 @@ std::optional<uint64_t> Vault::last_from_others(ByteView room_id, ByteView user_
     auto st = db_.prepare(
         "SELECT seq FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
-        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND type NOT LIKE 'm.room.%' AND type NOT LIKE 'm.bot.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0) ORDER BY seq DESC LIMIT 1");
     st.bind(1, room_id).bind(2, user_id);
     if (!st.step()) return std::nullopt;
@@ -771,7 +771,7 @@ uint32_t Vault::unread(ByteView room_id, ByteView user_id) {
         "SELECT COUNT(*) FROM events WHERE room_id = ?1 AND seq IS NOT NULL AND sender_user != ?2 "
         "AND seq > COALESCE((SELECT seq FROM receipts WHERE room_id = ?1 AND user_id = ?2), 0) "
         "AND type NOT IN ('m.receipt', 'm.history.share', 'm.reaction', 'm.edit', 'm.redaction', 'm.profile', 'm.poll.vote', 'm.task.done') "
-        "AND type NOT LIKE 'm.room.%' AND status != 'redacted' "
+        "AND type NOT LIKE 'm.room.%' AND type NOT LIKE 'm.bot.%' AND status != 'redacted' "
         "AND (shared_by IS NULL OR length(shared_by) = 0)");
     st.bind(1, room_id).bind(2, user_id);
     return st.step() ? static_cast<uint32_t>(st.u64(0)) : 0;

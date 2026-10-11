@@ -198,31 +198,38 @@ class AppState extends ChangeNotifier {
         }
       }
       // CORDED_DEV_CLICKS="2:700,300;1:120,200": mouse clicks (1 left, 2 right)
-      // at those points of the window, two seconds apart.
+      // at those points of the window, two seconds apart. CORDED_DEV_THEN is
+      // the same, done after CORDED_DEV_SCREEN has opened its page.
       var pointer = 900;
-      for (final click in (env['CORDED_DEV_CLICKS'] ?? '').split(';').where((c) => c.contains(':'))) {
-        await Future<void>.delayed(const Duration(seconds: 2));
-        final xy = click.split(':')[1].split(',');
-        final at = Offset(double.parse(xy[0]), double.parse(xy[1]));
-        final gestures = GestureBinding.instance;
-        pointer++;
-        gestures
-            .handlePointerEvent(PointerAddedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
-        gestures.handlePointerEvent(PointerDownEvent(
-            position: at,
-            kind: PointerDeviceKind.mouse,
-            device: 9,
-            pointer: pointer,
-            buttons: int.parse(click.split(':')[0])));
-        gestures.handlePointerEvent(
-            PointerUpEvent(position: at, kind: PointerDeviceKind.mouse, device: 9, pointer: pointer));
-        gestures
-            .handlePointerEvent(PointerRemovedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
+      Future<void> clicks(String? spec) async {
+        for (final click in (spec ?? '').split(';').where((c) => c.contains(':'))) {
+          await Future<void>.delayed(const Duration(seconds: 2));
+          final xy = click.split(':')[1].split(',');
+          final at = Offset(double.parse(xy[0]), double.parse(xy[1]));
+          final gestures = GestureBinding.instance;
+          pointer++;
+          gestures
+              .handlePointerEvent(PointerAddedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
+          gestures.handlePointerEvent(PointerDownEvent(
+              position: at,
+              kind: PointerDeviceKind.mouse,
+              device: 9,
+              pointer: pointer,
+              buttons: int.parse(click.split(':')[0])));
+          gestures.handlePointerEvent(
+              PointerUpEvent(position: at, kind: PointerDeviceKind.mouse, device: 9, pointer: pointer));
+          gestures.handlePointerEvent(
+              PointerRemovedEvent(position: at, kind: PointerDeviceKind.mouse, device: 9));
+        }
       }
+
+      await clicks(env['CORDED_DEV_CLICKS']);
       // CORDED_DEV_SCREEN=settings: show that screen, for a picture of it.
       if (env['CORDED_DEV_SCREEN'] != null) {
         await Future<void>.delayed(Duration(seconds: int.tryParse(env['CORDED_DEV_WAIT'] ?? '') ?? 3));
         onDevScreen?.call(env['CORDED_DEV_SCREEN']!);
+        await Future<void>.delayed(const Duration(seconds: 4));
+        await clicks(env['CORDED_DEV_THEN']);
       }
     } catch (e) {
       startError = 'dev drive: $e';

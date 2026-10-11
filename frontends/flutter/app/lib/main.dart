@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:corded_dart/corded_dart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,7 @@ import 'screens/add_server.dart';
 import 'screens/catch_up.dart';
 import 'screens/chat.dart';
 import 'screens/home.dart';
+import 'screens/manage_bot.dart';
 import 'screens/members.dart';
 import 'screens/quick_switch.dart';
 import 'screens/settings.dart';
@@ -96,6 +98,17 @@ class _CordedAppState extends State<CordedApp> with WidgetsBindingObserver {
       if (screen == 'catchup') state.openPage(context, (_) => CatchUpScreen(state: state));
       if (screen == 'switch') showQuickSwitch(context, state);
       if (screen == 'members') state.openPage(context, (_) => MembersScreen(state: state));
+      // manage:NAME: the page of the bot with that username.
+      if (screen.startsWith('manage:')) {
+        state.engine.command({'cmd': 'member_list', 'server_id': state.server?.id}).then((r) {
+          for (final m in (r['members'] as List? ?? const [])) {
+            final member = Member.fromJson((m as Map).cast<String, dynamic>());
+            if (member.username == screen.substring(7) && context.mounted) {
+              state.openPage(context, (_) => ManageBotScreen(state: state, member: member));
+            }
+          }
+        });
+      }
     };
     final shot = Platform.environment['CORDED_SCREENSHOT'];
     if (shot != null && shot.isNotEmpty) {
