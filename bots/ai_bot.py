@@ -147,7 +147,9 @@ def about_itself():
     return (
         "# About yourself\n\n"
         "If someone asks what you can do, how you work or how to set you up, answer from this and nothing else. "
-        "Give the exact command to type. Do not invent commands or settings.\n\n"
+        "Say in a sentence what to do and what it does, with the exact command in it, and who is allowed to. "
+        "A bare command is not an answer. For a broad question like \"how do I configure you\", name the few "
+        "things that can be set from the chat, each with its command. Do not invent commands or settings.\n\n"
         f"- You answer: every direct chat; any message that mentions @{args.username}; a reply to one of your "
         f"messages; the next message of the person you just answered (within {args.follow_up} seconds); a thread "
         "you have already spoken in; and every message in the channels chosen for you.\n"
