@@ -55,6 +55,7 @@ class _ChatScreenState extends State<ChatScreen> {
   // is drawn above it.
   String _newFrom = '';
   bool _sendingFile = false;
+  final _composerKey = GlobalKey();
   // With a keyboard, Enter sends and Shift+Enter starts a new line; Up in an
   // empty box edits your last message; Ctrl+V also takes pictures and files.
   late final _inputFocus = FocusNode(onKeyEvent: (node, event) {
@@ -1734,6 +1735,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 )
               else
                 Padding(
+                  // Kept as the same box when lines above it come and go (someone
+                  // typing, a reply bar): without this it was made anew each
+                  // time and the cursor fell out of it.
+                  key: _composerKey,
                   padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     IconButton(
